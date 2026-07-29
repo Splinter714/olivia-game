@@ -2,42 +2,67 @@
 // (not in the scene) so later phases can attach cages, tanks, and playpens to
 // the same rects. All coordinates are logical world px.
 
-export const WALL = 20;    // outer wall thickness
-export const PEN_T = 10;   // low pen-wall thickness
-export const PEN_GAP = 80; // walk-in opening in each pen wall
+export const WALL = 24;    // outer wall thickness
+export const PEN_T = 12;   // low pen-wall thickness
+export const PEN_GAP = 90; // walk-in opening in each pen wall
 
-export const ROOM = { w: 1280, h: 960 };      // the kennel building interior
-export const OUTSIDE = { x: ROOM.w, w: 380 }; // grass strip east of the building
+// Issue #17 ("zoom" / bigger world): the animal-art rewrite already made
+// animals render ~2x bigger on screen via supersampling + display-scale, so
+// the camera itself stays untouched (see KennelScene — no zoom beyond DPR).
+// This is the other half: the building grows enough for individual cages
+// (issue #18) plus a little walking room, WITHOUT the large empty floor areas
+// the original 1280x960 layout had — each section is sized to snugly fit its
+// 6-cage grid (data/props.js), and sections are packed with just enough gap
+// between them for a walkway/door, not open lawn. Revised after an owner note
+// mid-build: prioritize a tight, walkable layout over generous open space —
+// less trekking between chores, for a kid player.
+export const ROOM = { w: 1440, h: 1000 };     // the kennel building interior
+export const OUTSIDE = { x: ROOM.w, w: 700 }; // grass strip east of the building
 export const WORLD = { w: ROOM.w + OUTSIDE.w, h: ROOM.h };
 
-// Gap in the east wall — the door to the outside grass (future dog potty trips).
-export const BACK_DOOR = { y0: 660, y1: 740 };
+// Fixed capacity of individual cages/tank-slots per section (issue #18) —
+// once a section holds 6 settled stays, that species quietly stops arriving
+// (data/roster.js's spawnArrival) until a cage frees up at checkout.
+export const CAGES_PER_SECTION = 6;
+
+// Gap in the east wall — the door to the outside grass (dog potty walks, issue #19).
+// Centered on the dog section's y-range (see SECTIONS below).
+export const BACK_DOOR = { y0: 415, y1: 575 };
 
 // Front door on the south wall — visual only for now (the player can't leave
-// through it); owners will arrive here in Phase B.
-export const FRONT_DOOR = { x0: 555, x1: 725 };
+// through it); owners will arrive here in Phase B. Centered under the
+// reception mat.
+export const FRONT_DOOR = { x0: 575, x1: 715 };
 
-// Reception / front-desk area, just inside the front door. The computer for
-// baby announcements (Phase C+) will sit on this desk.
+// Reception / front-desk area, just inside the front door, in the open
+// central hallway between the west (turtle/bunny/cat) and east
+// (hamster/dog) section columns. The computer for baby announcements
+// (Phase C+) sits on this desk.
 export const RECEPTION = {
-  desk: { x: 560, y: 690, w: 140, h: 56 },
-  rug:  { x: 550, y: 770, w: 180, h: 84 },
-  mat:  { x: 605, y: 908, w: 70,  h: 26 },
+  desk: { x: 555, y: 750, w: 170, h: 64 },
+  rug:  { x: 520, y: 830, w: 240, h: 110 },
+  mat:  { x: 600, y: 936, w: 90,  h: 36 },
 };
 
-// Six species sections. `opening` names the pen-wall side with the walk-in gap;
-// sides flush against an outer wall get no pen wall (the room wall serves).
-// floor/floorDark are the section's floor-tile colours (worldArt reads them).
+// Six species sections, packed tightly (32px walkway gaps) instead of spread
+// across a big open floor — turtle/guineaPig/hamster along the top, bunny/cat
+// stacked in the west column below turtle, dog on the east column below
+// hamster (flush against the back-door wall for potty trips). `opening` names
+// the pen-wall side with the walk-in gap; sides flush against an outer wall
+// get no pen wall (the room wall serves). floor/floorDark are the section's
+// floor-tile colours (worldArt reads them). guineaPig/hamster/bunny/turtle
+// are all sized to snugly fit a 3x2 cage grid (data/props.js); cat/dog are
+// taller to also fit their shared playpen above their cage row.
 export const SECTIONS = [
   // Will hold the water tank (glass cover + sand island) in a later phase.
-  { key: 'turtle',    label: '🐢 Turtles',     floor: 0x9fd4c6, floorDark: 0x93c8ba, rect: { x: 20,  y: 20,  w: 300, h: 240 }, opening: 'south' },
-  { key: 'guineaPig', label: '🐹 Guinea Pigs', floor: 0xeec08a, floorDark: 0xe2b47e, rect: { x: 380, y: 20,  w: 300, h: 240 }, opening: 'south' },
-  { key: 'hamster',   label: '🐹 Hamsters',    floor: 0xeedc9e, floorDark: 0xe2d092, rect: { x: 740, y: 20,  w: 300, h: 240 }, opening: 'south' },
-  { key: 'bunny',     label: '🐰 Bunnies',     floor: 0xf0c2cc, floorDark: 0xe4b6c0, rect: { x: 20,  y: 360, w: 280, h: 260 }, opening: 'east' },
+  { key: 'turtle',    label: '🐢 Turtles',     floor: 0x9fd4c6, floorDark: 0x93c8ba, rect: { x: 24,   y: 24,  w: 304, h: 228 }, opening: 'south' },
+  { key: 'guineaPig', label: '🐹 Guinea Pigs', floor: 0xeec08a, floorDark: 0xe2b47e, rect: { x: 360,  y: 24,  w: 304, h: 228 }, opening: 'south' },
+  { key: 'hamster',   label: '🐹 Hamsters',    floor: 0xeedc9e, floorDark: 0xe2d092, rect: { x: 696,  y: 24,  w: 304, h: 228 }, opening: 'south' },
+  { key: 'bunny',     label: '🐰 Bunnies',     floor: 0xf0c2cc, floorDark: 0xe4b6c0, rect: { x: 24,   y: 284, w: 304, h: 228 }, opening: 'east' },
   // Cat playpen attaches here in a later phase.
-  { key: 'cat',       label: '🐱 Cats',        floor: 0xcfc0e8, floorDark: 0xc3b4dc, rect: { x: 20,  y: 680, w: 280, h: 260 }, opening: 'east' },
+  { key: 'cat',       label: '🐱 Cats',        floor: 0xcfc0e8, floorDark: 0xc3b4dc, rect: { x: 24,   y: 544, w: 368, h: 422 }, opening: 'east' },
   // Dog playpen later; deliberately next to the back door for potty trips.
-  { key: 'dog',       label: '🐶 Dogs',        floor: 0xaac8e6, floorDark: 0x9ebcda, rect: { x: 980, y: 360, w: 280, h: 260 }, opening: 'west' },
+  { key: 'dog',       label: '🐶 Dogs',        floor: 0xaac8e6, floorDark: 0x9ebcda, rect: { x: 1048, y: 284, w: 368, h: 422 }, opening: 'west' },
 ];
 
 // Pen-wall rects for a section: thin walls on every side not flush with an

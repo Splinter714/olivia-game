@@ -3,7 +3,7 @@
 // food/water bowls, potty messes, and the small "needs attention" bubbles.
 // Same gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
 import { gen } from './_gen.js';
-import { TURTLE, CAT_PLAYPEN, LITTER_BOX } from '../data/props.js';
+import { TURTLE, CAT_PLAYPEN, LITTER_BOX, CAGES } from '../data/props.js';
 
 export const TANK_KEY = 'prop-tank';
 export const ISLAND_KEY = 'prop-island';
@@ -16,6 +16,11 @@ export const COMPUTER_KEY = 'prop-computer';
 export const BLANKET_KEY = 'prop-blanket';
 export const UPGRADE_KEY = 'prop-upgrade-star';
 export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck' };
+
+// One individual-cage texture key per (non-turtle) section (issue #18) — every
+// cage in a section is the same size (data/props.js's CAGES grid), so one
+// texture per section covers all 6.
+export const CAGE_KEY = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-${key}`]));
 
 // Water tank with a glass-cover highlight along the top rim.
 function drawTank(g, w, h) {
@@ -142,6 +147,18 @@ function drawUpgradeStar(g, w, h) {
   g.fillStyle(0xfff3c9, 1).fillCircle(cx, cy, w * 0.2);
 }
 
+// A small, readable wire pen — a floor pad, a wire-mesh frame, and a little
+// mount nub at the top center where the animal's name tag hangs (issue #18:
+// "a small wire/wood pen shape sized to fit one animal + a name tag mount").
+// Deliberately plain/flat so it reads clearly at a glance for a kid player.
+function drawCagePen(g, w, h) {
+  g.fillStyle(0xe8d9b0, 1).fillRoundedRect(2, h * 0.5, w - 4, h * 0.46, 4); // floor pad
+  g.lineStyle(3, 0x8a8a94, 1).strokeRoundedRect(2, 7, w - 4, h - 9, 6);     // wire frame
+  g.lineStyle(1.2, 0xb7b7c0, 0.8);
+  for (let x = 7; x < w - 5; x += 8) g.lineBetween(x, 9, x, h * 0.5);       // wire bars
+  g.fillStyle(0x8a5a34, 1).fillRoundedRect(w / 2 - 5, 0, 10, 6, 2);         // name-tag mount
+}
+
 export function buildPropTextures(scene) {
   gen(scene, TANK_KEY, TURTLE.tank.w, TURTLE.tank.h, (g) => drawTank(g, TURTLE.tank.w, TURTLE.tank.h));
   gen(scene, ISLAND_KEY, TURTLE.island.w, TURTLE.island.h, (g) => drawIsland(g, TURTLE.island.w, TURTLE.island.h));
@@ -158,4 +175,9 @@ export function buildPropTextures(scene) {
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
   gen(scene, BLANKET_KEY, 30, 20, (g) => drawBlanket(g, 30, 20));
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));
+
+  for (const key of Object.keys(CAGES)) {
+    const { w, h } = CAGES[key][0]; // every cage in a section shares one size
+    gen(scene, CAGE_KEY[key], w, h, (g) => drawCagePen(g, w, h));
+  }
 }

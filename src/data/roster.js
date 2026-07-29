@@ -9,6 +9,7 @@ import { SPECIES_KEYS } from './species.js';
 import { createNeeds } from './needs.js';
 import { attachBirthTimer } from './births.js';
 import { pickUpgradeKind } from './economy.js';
+import { CAGES_PER_SECTION } from './sections.js';
 
 // Where a stay currently is. Any SECTIONS[].key (data/sections.js) is also a
 // valid `location` once an animal has been carried to its section.
@@ -31,6 +32,20 @@ export const CARRY_KIND = {
 };
 
 const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
+
+// Issue #18: picks the first open cage slot (0..CAGES_PER_SECTION-1) in
+// `sectionKey` among `stays`, or null if all 6 are taken. Called by KennelScene
+// on drop-off (data/props.js's CAGES holds the actual on-screen rect per slot;
+// turtles don't have a rendered cage grid but still use this for capacity
+// bookkeeping via _islandSlot's own index). A stay's `cageSlot` is freed
+// automatically at checkout since roster.checkoutDue() removes her from `stays`.
+export function assignCageSlot(stays, sectionKey) {
+  const used = new Set(
+    stays.filter((s) => s.location === sectionKey && s.cageSlot != null).map((s) => s.cageSlot),
+  );
+  for (let i = 0; i < CAGES_PER_SECTION; i++) if (!used.has(i)) return i;
+  return null;
+}
 
 // How many named individuals live in the "returning guest" pool per species —
 // small on purpose so the same names come back around within a single session
@@ -84,11 +99,22 @@ export function createRoster() {
     return [createAnimal(speciesKey)];
   }
 
+  // Issue #18: a section has a fixed CAGES_PER_SECTION (6) individual cages —
+  // once every cage is taken by a settled stay, that species quietly stops
+  // arriving (no queue, no penalty, no notification) until a checkout frees
+  // one up. Reception/carrying stays don't count — they haven't taken a cage yet.
+  function isSectionFull(sectionKey) {
+    return stays.filter((s) => s.location === sectionKey).length >= CAGES_PER_SECTION;
+  }
+
   // Spawns one new arrival (an owner dropping off a pet). ~40% of the time it's
   // a returning-pool animal (if one of that species is currently available),
-  // otherwise a fresh family/individual. Adds a new stay to `stays` and returns it.
+  // otherwise a fresh family/individual. Adds a new stay to `stays` and returns
+  // it — or returns null if that species' section is already full (issue #18);
+  // the caller (KennelScene) just skips that particular roll, quietly.
   function spawnArrival({ day, hour, rng = Math.random } = {}) {
     const speciesKey = pickSpecies(rng);
+    if (isSectionFull(speciesKey)) return null;
     let group = null;
 
     if (rng() < 0.4) {

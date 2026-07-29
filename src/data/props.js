@@ -2,7 +2,7 @@
 // data/sections.js's SECTIONS the same way penRects()/wallRects() are: plain
 // rects that both KennelScene's rendering and its interaction/collision code
 // can share, so the numbers only live in one place.
-import { SECTIONS, RECEPTION } from './sections.js';
+import { SECTIONS, RECEPTION, CAGES_PER_SECTION } from './sections.js';
 
 const sectionByKey = (key) => SECTIONS.find((s) => s.key === key);
 
@@ -25,12 +25,70 @@ export const TURTLE = (() => {
 // the section's own pen wall — "so nobody gets in a fight" (DESIGN.md). Both
 // sections happen to share the same w/h, so the two playpens come out the
 // same size (handy: one fence texture covers both).
+//
+// Issue #18 ("cage to sleep, playpen to play"): the playpen now only fills the
+// TOP part of the section — the bottom is reserved for each cat/dog's own
+// individual cage (see CAGES below), which KennelScene switches them into at
+// night (_startNight) and back out of each morning.
 function playpenFor(key) {
   const s = sectionByKey(key).rect;
-  return { x: s.x + 26, y: s.y + 46, w: s.w - 52, h: s.h - 80 };
+  return { x: s.x + 26, y: s.y + 46, w: s.w - 52, h: s.h * 0.5 };
 }
 export const CAT_PLAYPEN = playpenFor('cat');
 export const DOG_PLAYPEN = playpenFor('dog');
+
+// ── Individual cages (issue #18) ────────────────────────────────────────────
+// Every section gets a fixed grid of CAGES_PER_SECTION (6) individual cages —
+// "a cage to sleep" for every animal, auto-assigned on drop-off, one per stay
+// (her babies/eggs share it, same as today's "near mom" rendering). Turtles
+// are the one exception: their tank + shared sand island already IS their
+// cage equivalent (DESIGN.md — "the turtles and the eggs share the island
+// together"), so there's no turtle entry here; capacity bookkeeping for
+// turtles still uses CAGES_PER_SECTION, just without a rendered cage grid.
+//
+// Cats/dogs reserve the bottom of their section (below the playpen) for their
+// cage grid; every other non-turtle section uses its whole rect (minus the
+// floor label at the top).
+function cageAreaFor(key) {
+  const s = sectionByKey(key).rect;
+  if (key === 'cat' || key === 'dog') {
+    const playpen = playpenFor(key);
+    const top = playpen.y + playpen.h + 16;
+    return { x: s.x + 18, y: top, w: s.w - 36, h: s.y + s.h - 16 - top };
+  }
+  return { x: s.x + 16, y: s.y + 48, w: s.w - 32, h: s.h - 64 };
+}
+
+// Lays out `count` equal cage rects in a `cols`x`rows` grid across `rect`.
+function cageGrid(rect, cols = 3, rows = 2, pad = 8, gap = 8) {
+  const cellW = (rect.w - pad * 2 - gap * (cols - 1)) / cols;
+  const cellH = (rect.h - pad * 2 - gap * (rows - 1)) / rows;
+  const out = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      out.push({
+        x: rect.x + pad + c * (cellW + gap),
+        y: rect.y + pad + r * (cellH + gap),
+        w: cellW,
+        h: cellH,
+      });
+    }
+  }
+  return out;
+}
+
+// sectionKey -> array of CAGES_PER_SECTION cage rects (no `turtle` entry —
+// see note above).
+export const CAGES = Object.fromEntries(
+  SECTIONS.filter((s) => s.key !== 'turtle')
+    .map((s) => [s.key, cageGrid(cageAreaFor(s.key), 3, 2, 8, 8)]), // 3x2 = CAGES_PER_SECTION
+);
+
+// Where an animal sprite stands inside a cage rect (origin 0.5, 1 — feet on
+// the ground, matching every other placed sprite).
+export function cageAnimalSpot(cage) {
+  return { x: cage.x + cage.w / 2, y: cage.y + cage.h - 6 };
+}
 
 // Litter box sits in a back corner of the cat playpen — cats "use litter
 // boxes" instead of the general playpen scoop (DESIGN.md).

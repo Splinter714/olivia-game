@@ -3,7 +3,10 @@ import {
   WALL, ROOM, OUTSIDE, WORLD, BACK_DOOR, FRONT_DOOR, RECEPTION, SECTIONS,
   penRects, wallRects, outsideFenceRects,
 } from '../data/sections.js';
-import { TURTLE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT, COMPUTER_SPOT } from '../data/props.js';
+import {
+  TURTLE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT, COMPUTER_SPOT,
+  CAGES, cageAnimalSpot,
+} from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
 import { findPath } from '../data/path.js';
@@ -24,9 +27,9 @@ import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, ISLAND_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY,
+  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY,
 } from '../art/props.js';
-import { createRoster, LOCATION, CARRY_KIND } from '../data/roster.js';
+import { createRoster, LOCATION, CARRY_KIND, assignCageSlot } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
 
 // Placeholder name shown on a baby's tiny label until the owner names it via
@@ -107,6 +110,8 @@ export default class KennelScene extends Phaser.Scene {
     this._staySprites = new Map(); // stay -> { pos, sprite, tag:{bg,text}, extras:[...], needIcons:{} }
     this.carrying = null;          // the stay currently in the player's hands, or null
     this._carryVisual = null;      // { obj } following the player while carrying
+    this.leashedDog = null;        // the dog stay currently being walked outside (issue #19), or null
+    this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
 
     // ── Feeding / potty / playpens (issues #6, #7, #8) ─────────────────────
     this.hasScooper = false;
@@ -223,6 +228,14 @@ export default class KennelScene extends Phaser.Scene {
 
     // Reception computer (issue #10) — baby-announcement messages to owners.
     this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
+
+    // Individual cages (issue #18) — 6 per non-turtle section; turtles keep
+    // their shared tank + sand island instead (drawn above).
+    for (const key of Object.keys(CAGES)) {
+      for (const cage of CAGES[key]) {
+        this.add.image(cage.x, cage.y, CAGE_KEY[key]).setOrigin(0, 0).setDepth(cage.y - 2);
+      }
+    }
   }
 
   _buildCollision() {
@@ -251,9 +264,12 @@ export default class KennelScene extends Phaser.Scene {
   }
 
   _buildPlayer() {
-    // Just off the reception desk — a natural place to start a shift.
+    // Just off the reception desk — a natural place to start a shift. Offset
+    // from the desk's own bottom edge (not a magic constant) so this stays
+    // correct regardless of the desk's size (issue #17 grew it along with
+    // everything else).
     const startX = RECEPTION.desk.x + 40;
-    const startY = RECEPTION.desk.y + 90;
+    const startY = RECEPTION.desk.y + RECEPTION.desk.h + 40;
     this.player = this.physics.add.sprite(startX, startY, 'player').setOrigin(0.5, 1);
     this.player.body.setSize(14, 12).setOffset((PLAYER_W - 14) / 2, PLAYER_H - 14);
     this.player.setCollideWorldBounds(true);
@@ -279,6 +295,9 @@ export default class KennelScene extends Phaser.Scene {
 
   _spawnArrival(day, hour) {
     const stay = this.roster.spawnArrival({ day, hour });
+    // Issue #18: null means that species' section is full (all 6 cages
+    // taken) — quietly skip this roll, no queue/penalty/notification.
+    if (!stay) return;
     this._placeAtReception(stay);
     this._syncTieBreakers(); // a new guest may now match someone already here
     this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived!`);
@@ -544,19 +563,28 @@ export default class KennelScene extends Phaser.Scene {
     // mid-carry when night fell) still needs tucking in, same as everyone
     // else (issue #11).
     if (this.night.active) stay.tuckedIn = stay.tuckedIn ?? false;
+    // Issue #18: auto-assign her into the first open individual cage in this
+    // section (companions/babies share it, same as today's "near mom" render).
+    stay.cageSlot = assignCageSlot(this.roster.stays, section.key);
     const already = this.roster.stays.filter((s) => s !== stay && s.location === section.key).length;
-    const pos = this._sectionSlot(section, already);
+    const pos = this._sectionSlot(section, already, stay);
     this._renderStay(stay, pos.x, pos.y);
   }
 
-  // Placement spot for the `index`-th stay already in a section. Cats/dogs
-  // place inside their playpen; turtles place on the sand island (spread with
-  // a golden-angle spiral so multiples don't stack exactly); everything else
-  // uses the plain wrapping grid across the whole section rect.
-  _sectionSlot(section, index) {
+  // Placement spot for the `index`-th stay already in a section (for the
+  // turtle island's spiral spread and the cat/dog playpen's day-time grid).
+  // Turtles place on the sand island (golden-angle spiral so multiples don't
+  // stack exactly, per DESIGN.md's "plenty of space for everyone"). Cats/dogs
+  // play in their shared playpen by day; at night KennelScene moves them into
+  // their own individual cage instead (see _moveCatsDogsToCages). Everyone
+  // else always uses their assigned individual cage (issue #18).
+  _sectionSlot(section, index, stay) {
     if (section.key === 'turtle') return this._islandSlot(index);
     const playpen = PLAYPEN_RECT[section.key];
-    if (playpen) return this._gridSlot(playpen, index, 20, 42, 56);
+    if (playpen && !this.night.active) return this._gridSlot(playpen, index, 20, 42, 56);
+    const cage = CAGES[section.key]?.[stay?.cageSlot];
+    if (cage) return cageAnimalSpot(cage);
+    if (playpen) return this._gridSlot(playpen, index, 20, 42, 56); // fallback: no free cage
     return this._gridSlot(section.rect, index, 30, 46, 60);
   }
 
@@ -620,44 +648,91 @@ export default class KennelScene extends Phaser.Scene {
     this.game.events.emit(EVENTS.NOTIFY, mess.kind === 'cat' ? 'Litter box cleaned!' : 'All cleaned up!');
   }
 
-  // Simplest read for a kid player: the dog sprite visibly walks off toward
-  // the outside grass strip, pauses a moment, then walks back — no need for
-  // the player to shepherd it there step by step.
-  _takeDogOut(stay) {
-    if (stay._onBathroomTrip) return;
+  // ── Leashed dog walks (issue #19) ─────────────────────────────────────────
+  // A dog who "needs to go" (data/needs.js's bathroom need) has to be walked
+  // outside for real: the player grabs her leash, she follows at the player's
+  // side (not carried above the head, like an arrival), out through the back
+  // door onto the grass, does her business, and gets walked back in — no
+  // accidents, no time pressure; if the player doesn't grab the leash right
+  // away, she just keeps waiting (the need icon stays showing).
+
+  // Picks up a dog's leash: hides her stationary sprite and starts a small
+  // follow-visual with her own walk animation (from the art rewrite).
+  _grabLeash(stay) {
+    if (this.leashedDog) return;
     const rec = this._staySprites.get(stay);
     if (!rec) return;
-    stay._onBathroomTrip = true;
-    const home = { ...rec.pos };
-    const outsideX = OUTSIDE.x + OUTSIDE.w / 2;
-    const outsideY = ROOM.h / 2;
+    this._destroyStaySprites(stay);
 
-    rec.tag.bg.setVisible(false);
-    rec.tag.text.setVisible(false);
-    rec.extras.forEach((e) => e.setVisible(false));
-    this._setNeedIcon(stay, 'bathroom', false);
+    const look = effectiveLook(stay.animal, this._tieBreakers());
+    const base = ensureAnimalTextures(this, stay.animal.species, stay.animal.stage, look);
+    const sprite = this.add.sprite(this.player.x, this.player.y, `${base}_idle_0`)
+      .setOrigin(0.5, 1).setScale(ANIMAL_DISPLAY_SCALE).setDepth(this.player.y);
+    sprite.play(`${base}_idle`);
+    const tag = this._addNameTag(sprite.x, sprite.y - sprite.displayHeight - 6, stay.animal.name);
 
-    this.tweens.add({
-      targets: rec.sprite, x: outsideX, y: outsideY, duration: 900, ease: 'Sine.easeInOut',
-      onComplete: () => {
-        this.time.delayedCall(1400, () => {
-          this.tweens.add({
-            targets: rec.sprite, x: home.x, y: home.y, duration: 900, ease: 'Sine.easeInOut',
-            onComplete: () => {
-              stay._onBathroomTrip = false;
-              clearNeed(stay, 'bathroom');
-              this._renderStay(stay, home.x, home.y);
-              this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} feels much better!`);
-              // If this was the night's current "needs the bathroom" wake-up
-              // (issue #11), taking her outside resolves it — resume toward morning.
-              if (this.night.currentWake?.stay === stay && this.night.currentWake.reason === WAKE_REASON.BATHROOM) {
-                this._resolveWakeUp();
-              }
-            },
-          });
-        });
-      },
-    });
+    this.leashedDog = stay;
+    this._walkVisual = { sprite, tag, base, wentOutside: false, pausing: false, businessDone: false };
+    this.game.events.emit(EVENTS.NOTIFY, `Taking ${stay.animal.name} for a walk!`);
+  }
+
+  // Per-frame follow (same beside-the-player idea as _followCarry, but at
+  // ground level and with a real walk/idle animation instead of riding above
+  // the player's head) plus the outside/business/back-inside phase machine.
+  _updateLeashedDog() {
+    if (!this.leashedDog || !this._walkVisual) return;
+    const wv = this._walkVisual;
+
+    const targetX = this.player.x - PLAYER_W * 0.7;
+    const targetY = this.player.y + 4;
+    wv.sprite.x += (targetX - wv.sprite.x) * 0.25;
+    wv.sprite.y += (targetY - wv.sprite.y) * 0.25;
+    wv.sprite.setDepth(wv.sprite.y);
+    wv.tag.bg.setPosition(wv.sprite.x, wv.sprite.y - wv.sprite.displayHeight - 6);
+    wv.tag.text.setPosition(wv.tag.bg.x, wv.tag.bg.y - wv.tag.bg.height + 4);
+
+    const moving = this.player.body.velocity.length() > 5;
+    const animKey = moving ? `${wv.base}_walk` : `${wv.base}_idle`;
+    if (wv.sprite.anims.currentAnim?.key !== animKey) wv.sprite.play(animKey);
+
+    // Outside the back door → pause → does her business, once.
+    if (!wv.wentOutside && this.player.x > ROOM.w + 30) {
+      wv.wentOutside = true;
+    }
+    if (wv.wentOutside && !wv.businessDone && !wv.pausing) {
+      wv.pausing = true;
+      this.time.delayedCall(1200, () => {
+        wv.businessDone = true;
+        this.game.events.emit(EVENTS.NOTIFY, `${this.leashedDog.animal.name} did her business!`);
+      });
+    }
+    // Back inside, past the door, and done → unleash and settle back in.
+    if (wv.wentOutside && wv.businessDone && this.player.x < ROOM.w - 30) {
+      this._finishWalk();
+    }
+  }
+
+  // Ends the walk: unleashes the dog and settles her back into her normal
+  // section placement (cage or playpen slot), clearing the bathroom need.
+  _finishWalk() {
+    const stay = this.leashedDog;
+    this._walkVisual.sprite.destroy();
+    this._walkVisual.tag.bg.destroy();
+    this._walkVisual.tag.text.destroy();
+    this._walkVisual = null;
+    this.leashedDog = null;
+
+    clearNeed(stay, 'bathroom');
+    const already = this.roster.stays.filter((s) => s !== stay && s.location === 'dog').length;
+    const section = SECTIONS.find((s) => s.key === 'dog');
+    const pos = this._sectionSlot(section, already, stay);
+    this._renderStay(stay, pos.x, pos.y);
+    this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} feels much better!`);
+    // If this was the night's current "needs the bathroom" wake-up (issue
+    // #11), the walk resolves it — resume toward morning.
+    if (this.night.currentWake?.stay === stay && this.night.currentWake.reason === WAKE_REASON.BATHROOM) {
+      this._resolveWakeUp();
+    }
   }
 
   // ── Births: pregnancy/eggs → babies (issue #9) ───────────────────────────
@@ -783,11 +858,39 @@ export default class KennelScene extends Phaser.Scene {
     this.night.sleeping = false;
     this.night.wakeUpsRemaining = 0;
     this.night.currentWake = null;
+    // Issue #18 ("cage to sleep, playpen to play"): cats/dogs move from their
+    // shared playpen into their own individual cage for the night, before
+    // tuck-in starts.
+    this._moveCatsDogsToCages();
     for (const stay of this._presentStays()) {
       stay.tuckedIn = false;
       this._setNeedIcon(stay, 'tuck', true);
     }
     this._checkAllTuckedIn(); // covers the (rare) empty-kennel case
+  }
+
+  // Relocates every present cat/dog stay to its assigned individual cage
+  // (issue #18) — called once at the start of the night, before tuck-in.
+  _moveCatsDogsToCages() {
+    for (const stay of this._presentStays()) {
+      if (stay.location !== 'cat' && stay.location !== 'dog') continue;
+      const cage = CAGES[stay.location]?.[stay.cageSlot];
+      if (!cage) continue;
+      const spot = cageAnimalSpot(cage);
+      this._renderStay(stay, spot.x, spot.y);
+    }
+  }
+
+  // Relocates every present cat/dog stay back to its section's shared playpen
+  // (issue #18) — called once morning resumes, undoing _moveCatsDogsToCages.
+  _moveCatsDogsToPlaypens() {
+    const counts = { cat: 0, dog: 0 };
+    for (const stay of this._presentStays()) {
+      if (stay.location !== 'cat' && stay.location !== 'dog') continue;
+      const idx = counts[stay.location]++;
+      const pos = this._gridSlot(PLAYPEN_RECT[stay.location], idx, 20, 42, 56);
+      this._renderStay(stay, pos.x, pos.y);
+    }
   }
 
   // Lays (or removes) the small fabric sheet over a stay — one blanket per
@@ -852,6 +955,7 @@ export default class KennelScene extends Phaser.Scene {
           this.night.sleeping = false;
           this.night.allTucked = false;
           this.night.currentWake = null;
+          this._moveCatsDogsToPlaypens(); // morning: back out of the cage, into the playpen
         },
       });
       return;
@@ -992,10 +1096,12 @@ export default class KennelScene extends Phaser.Scene {
       consider(mess.x, mess.y, () => this._cleanMess(mess));
     }
 
+    // Issue #19: a dog who needs to go out gets her leash grabbed, not
+    // whisked away automatically — walking her out is the player's job.
     for (const stay of this.roster.stays) {
-      if (stay.location !== 'dog' || !stay.needs.bathroom || stay._onBathroomTrip) continue;
+      if (stay.location !== 'dog' || !stay.needs.bathroom) continue;
       const rec = this._staySprites.get(stay);
-      if (rec) consider(rec.pos.x, rec.pos.y, () => this._takeDogOut(stay));
+      if (rec) consider(rec.pos.x, rec.pos.y, () => this._grabLeash(stay));
     }
 
     if (!this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement)) {
@@ -1044,6 +1150,8 @@ export default class KennelScene extends Phaser.Scene {
     if (this.carrying) {
       this._followCarry();
       this._checkDropoff();
+    } else if (this.leashedDog) {
+      this._updateLeashedDog();
     } else {
       this._checkInteractions(interactPressed);
     }
