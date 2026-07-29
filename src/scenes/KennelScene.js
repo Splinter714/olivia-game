@@ -16,7 +16,11 @@ import { createEconomy, computePayout, upgradeMessage } from '../data/economy.js
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
-import { buildAnimalTextures, ensureAnimalTexture, EGG_KEY, NAME_TAG_KEY } from '../art/animals.js';
+import {
+  buildAnimalTextures, ensureAnimalTextures, ANIMAL_DISPLAY_SCALE, EGG_KEY, NAME_TAG_KEY,
+} from '../art/animals.js';
+import { resolveTieBreakers, effectiveLook } from '../data/distinguish.js';
+import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, ISLAND_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
@@ -29,13 +33,6 @@ import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
 // the reception computer (issue #10). Matches data/animal.js's opts.name
 // override convention — createAnimal({ name: BABY_PLACEHOLDER }).
 const BABY_PLACEHOLDER = '???';
-
-// A handful of collar colors — cycled across siblings that share the SAME
-// species + hue (they "look the same", DESIGN.md's kitten example) so each
-// one is still tellable apart at a glance. Hues are unique per animal now
-// (data/looks.js), so this is a harmless safety net that should rarely-to-
-// never actually trigger.
-const COLLAR_COLORS = [0xdd5555, 0x4b9fc4, 0xf2c96b, 0x6fae5a, 0x9a6fd6];
 
 const SPEED = 160; // px/s, world (logical) units
 const PICKUP_RADIUS = 50; // px, how close the player must be to interact with anything
@@ -283,6 +280,7 @@ export default class KennelScene extends Phaser.Scene {
   _spawnArrival(day, hour) {
     const stay = this.roster.spawnArrival({ day, hour });
     this._placeAtReception(stay);
+    this._syncTieBreakers(); // a new guest may now match someone already here
     this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived!`);
   }
 
@@ -300,6 +298,7 @@ export default class KennelScene extends Phaser.Scene {
       this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} went home!`);
       this._payOutForCheckout(stay);
     }
+    this._syncTieBreakers(); // whoever's left may no longer need a collar
   }
 
   // Issue #12 ("Doing a Great Job"): the owner pays for the stay a moment
@@ -323,22 +322,78 @@ export default class KennelScene extends Phaser.Scene {
     });
   }
 
+  // ── Telling look-alikes apart (issue #16) ─────────────────────────────────
+  // Coats are dealt from a shuffled deck of every coat×pattern combination, so
+  // two same-species guests rarely match — but a litter of puppies, or a busy
+  // day once a species' combinations are used up, will. data/distinguish.js
+  // works out who then needs a coloured collar (and, if the collars run out
+  // too, a small ID tattoo); both get drawn straight into the animal's art.
+
+  // Every animal physically in the kennel right now — placed stays, arrivals
+  // still waiting at reception, whatever's in the player's hands, and every
+  // baby travelling with a mom.
+  _presentAnimals() {
+    const out = [];
+    for (const stay of this.roster.stays) {
+      out.push(stay.animal, ...stay.companions);
+    }
+    return out;
+  }
+
+  _tieBreakers() {
+    return resolveTieBreakers(this._presentAnimals());
+  }
+
+  // Adds one animal sprite: builds its 6-frame sheet for the coat/pattern (plus
+  // collar/tattoo if it needs one), scales the super-sampled art down, and
+  // starts the idle bob so a standing animal is visibly alive.
+  _addAnimalSprite(x, y, animal, stage, tieBreakers) {
+    const look = effectiveLook(animal, tieBreakers);
+    const base = ensureAnimalTextures(this, animal.species, stage, look);
+    const sprite = this.add.sprite(x, y, `${base}_idle_0`)
+      .setOrigin(0.5, 1)
+      .setScale(ANIMAL_DISPLAY_SCALE)
+      .setDepth(y);
+    sprite.play(`${base}_idle`);
+    return sprite;
+  }
+
+  // A cheap string capturing every look decision this stay's render depended
+  // on, so a later arrival that changes them can trigger a redraw.
+  _lookSignature(stay, tieBreakers) {
+    return [stay.animal, ...stay.companions]
+      .map((a) => lookId(effectiveLook(a, tieBreakers)))
+      .join('|');
+  }
+
+  // An arrival or a checkout can create (or dissolve) a look-alike pair among
+  // animals ALREADY on screen, so re-render any stay whose collars/tattoos have
+  // just changed. Cheap: the signature check short-circuits the common case.
+  _syncTieBreakers() {
+    const tb = this._tieBreakers();
+    for (const [stay, rec] of [...this._staySprites.entries()]) {
+      if (this._lookSignature(stay, tb) !== rec.lookSig) {
+        this._renderStay(stay, rec.pos.x, rec.pos.y);
+      }
+    }
+  }
+
   // Draws (or redraws) a stay's standing sprite + name tag + companions (baby
   // sprites, or eggs for a turtle mom with hasEggs) at a fixed world position —
   // used for both reception-waiting and section-placed stays.
   _renderStay(stay, x, y) {
     this._destroyStaySprites(stay);
     const { animal } = stay;
-    const texKey = ensureAnimalTexture(this, animal.species, animal.stage, animal.hue);
-    const sprite = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y);
-    const tag = this._addNameTag(x, y - sprite.height - 6, animal.name);
+    const tb = this._tieBreakers();
+    const sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
+    const tag = this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
 
     // Turtle eggs/babies sit tucked close to mom on the sand island (small
     // island, plenty of animals to share it) — tighter spacing + a little
     // jitter instead of the wider spread used for cat/dog companions.
     const isTurtle = animal.species === 'turtle';
     const extras = [];
-    let cx = x + sprite.width * (isTurtle ? 0.4 : 0.55);
+    let cx = x + sprite.displayWidth * (isTurtle ? 0.4 : 0.55);
     if (animal.hasEggs) {
       for (let i = 0; i < animal.eggCount; i++) {
         const jitterY = (Math.random() - 0.5) * 6;
@@ -346,27 +401,14 @@ export default class KennelScene extends Phaser.Scene {
         cx += isTurtle ? 7 : 10;
       }
     }
-    // Siblings that share a species+hue "look the same" (DESIGN.md's kitten
-    // example) — give each of THOSE a small colored collar so they're still
-    // tellable apart; a baby on its own doesn't need one. Hues are unique per
-    // animal now (data/looks.js), so this is a harmless safety net that
-    // should rarely-to-never actually trigger.
-    const variantCounts = {};
-    for (const b of stay.companions) variantCounts[b.hue] = (variantCounts[b.hue] || 0) + 1;
-    const variantSeen = {};
 
+    // Companions (a mom's litter). Anyone whose coat+pattern is shared with
+    // another animal currently in the kennel gets a coloured collar — and an
+    // ID tattoo once the collars run out — drawn straight into their art by
+    // the tie-breaker resolution above (data/distinguish.js).
     for (const baby of stay.companions) {
-      const babyKey = ensureAnimalTexture(this, baby.species, 'baby', baby.hue);
       const jitterY = isTurtle ? (Math.random() - 0.5) * 6 : 0;
-      const babySprite = this.add.image(cx, y + jitterY, babyKey).setOrigin(0.5, 1).setDepth(y);
-      extras.push(babySprite);
-
-      if (variantCounts[baby.hue] > 1) {
-        const seen = variantSeen[baby.hue] || 0;
-        variantSeen[baby.hue] = seen + 1;
-        const collarColor = COLLAR_COLORS[seen % COLLAR_COLORS.length];
-        extras.push(this.add.circle(cx, y + jitterY - babySprite.height * 0.5, 3, collarColor).setDepth(y + 0.1));
-      }
+      extras.push(this._addAnimalSprite(cx, y + jitterY, baby, 'baby', tb));
 
       // Tiny label under each baby — "???" until the owner names it via the
       // reception computer (issue #10), then its real name.
@@ -388,12 +430,17 @@ export default class KennelScene extends Phaser.Scene {
     // egg/baby companions to the right — a returning regular visibly has a
     // little more "stuff" each time she's back (DESIGN.md).
     (animal.upgrades || []).forEach((_kind, i) => {
-      const sx = x - sprite.width * 0.55 - 4;
-      const sy = y - sprite.height * 0.35 - i * 11;
+      const sx = x - sprite.displayWidth * 0.55 - 4;
+      const sy = y - sprite.displayHeight * 0.35 - i * 11;
       extras.push(this.add.image(sx, sy, UPGRADE_KEY).setOrigin(0.5, 0.5).setDepth(y + 0.1));
     });
 
-    const rec = { pos: { x, y }, sprite, tag, extras, needIcons: {}, blanket: null };
+    const rec = {
+      pos: { x, y }, sprite, tag, extras, needIcons: {}, blanket: null,
+      // What this render assumed about tie-breakers, so _syncTieBreakers can
+      // tell when an arrival/checkout has changed who needs a collar.
+      lookSig: this._lookSignature(stay, tb),
+    };
     this._staySprites.set(stay, rec);
     // Re-show any indicator for a need the animal already had before this
     // (re-)render, e.g. after a section dropoff mid-need.
@@ -459,10 +506,15 @@ export default class KennelScene extends Phaser.Scene {
     this._destroyStaySprites(stay);
     stay.location = LOCATION.CARRYING;
     this.carrying = stay;
-    const key = stay.carryKind === CARRY_KIND.NONE
-      ? ensureAnimalTexture(this, stay.animal.species, stay.animal.stage, stay.animal.hue)
-      : CARRY_KEY[stay.carryKind];
-    const obj = this.add.image(this.player.x, this.player.y, key).setOrigin(0.5, 1).setDepth(9500);
+    // The small pets are carried bare in the player's hands, so their own
+    // animated sprite rides along; everything else gets its carry prop.
+    let obj;
+    if (stay.carryKind === CARRY_KIND.NONE) {
+      obj = this._addAnimalSprite(this.player.x, this.player.y, stay.animal, stay.animal.stage, this._tieBreakers());
+    } else {
+      obj = this.add.image(this.player.x, this.player.y, CARRY_KEY[stay.carryKind]).setOrigin(0.5, 1);
+    }
+    obj.setDepth(9500);
     this._carryVisual = { obj };
   }
 
@@ -746,7 +798,7 @@ export default class KennelScene extends Phaser.Scene {
     if (!rec) return;
     if (show) {
       if (rec.blanket) return;
-      const img = this.add.image(rec.pos.x, rec.pos.y - rec.sprite.height * 0.35, BLANKET_KEY)
+      const img = this.add.image(rec.pos.x, rec.pos.y - rec.sprite.displayHeight * 0.35, BLANKET_KEY)
         .setOrigin(0.5, 0.5).setDepth(rec.sprite.depth + 0.3);
       img.setDisplaySize(rec.sprite.displayWidth * 1.2, rec.sprite.displayHeight * 0.7);
       rec.blanket = img;

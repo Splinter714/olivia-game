@@ -1,9 +1,18 @@
 // Species catalog for the kennel's six animals (see DESIGN.md "The Animals").
-// Pure data, no Phaser — src/art/animals.js reads `size`/`babyScale` (plus
-// src/art/palette.js's paletteForHue(), driven by each animal's own `hue` —
-// see src/data/animal.js/src/data/looks.js — for its body colors) to draw
-// textures; src/data/animal.js reads the species keys to build instances;
-// src/scenes/KennelScene.js reads `size` to place/scale sprites.
+// Pure data, no Phaser — src/data/animal.js reads the species keys to build
+// instances; src/scenes/KennelScene.js reads `size` to place/space sprites.
+//
+// `size` is the DESIGN-GRID size src/art/animals.js authors this species at,
+// NOT its on-screen size: the art is drawn on an ART_SCALE (4x) super-sampled
+// texture and displayed at ANIMAL_DISPLAY_SCALE (0.5), so an animal occupies
+// `size` x 2 LOGICAL pixels on screen (a dog is 28x24 design px = 56x48
+// logical px). Anything measuring a live sprite must use displayWidth/
+// displayHeight rather than width/height.
+//
+// `babyScale` is advisory only now — art/animals.js hand-authors a separate
+// baby layout per species (bigger head, shorter limbs, shorter body) rather
+// than uniformly shrinking the adult, so a baby is NOT simply size*babyScale.
+// Colors come from a named coat + pattern per animal (src/data/coats.js).
 //
 // `family` says how this species' "mom + babies" pattern (DESIGN.md "Moms and
 // Babies") is shaped — every species supports SOME family pattern, this just
@@ -23,42 +32,42 @@ export const SPECIES = {
     key: 'turtle',
     label: '🐢 Turtles',
     family: FAMILY.EGGS_OR_BABIES,
-    size: { w: 30, h: 22 },
+    size: { w: 20, h: 14 },
     babyScale: 0.6,
   },
   guineaPig: {
     key: 'guineaPig',
     label: '🐹 Guinea Pigs',
     family: FAMILY.GENERIC_BABY,
-    size: { w: 26, h: 20 },
+    size: { w: 18, h: 14 },
     babyScale: 0.62,
   },
   hamster: {
     key: 'hamster',
     label: '🐹 Hamsters',
     family: FAMILY.GENERIC_BABY,
-    size: { w: 20, h: 16 },
+    size: { w: 14, h: 12 },
     babyScale: 0.65,
   },
   bunny: {
     key: 'bunny',
     label: '🐰 Bunnies',
     family: FAMILY.GENERIC_BABY,
-    size: { w: 24, h: 26 },
+    size: { w: 20, h: 20 },
     babyScale: 0.58,
   },
   cat: {
     key: 'cat',
     label: '🐱 Cats',
     family: FAMILY.NAMED_BABIES,
-    size: { w: 28, h: 24 },
+    size: { w: 22, h: 20 },
     babyScale: 0.55,
   },
   dog: {
     key: 'dog',
     label: '🐶 Dogs',
     family: FAMILY.NAMED_BABIES,
-    size: { w: 32, h: 26 },
+    size: { w: 28, h: 24 },
     babyScale: 0.55,
   },
 };

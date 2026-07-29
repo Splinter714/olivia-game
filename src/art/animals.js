@@ -1,144 +1,895 @@
-// Procedural sprites for the six kennel species (data/species.js) — simple flat
-// shape language, kid-readable at a glance rather than photorealistic (mirrors
-// the horse game's layered-Graphics technique, simplified: single static pose per
-// stage/hue, no walk-cycle frames yet). Also builds the turtle-egg and floating
-// name-tag textures shared by every cage/demo placement.
+// Procedural pixel-art for the six kennel species (issues #15/#16), rebuilt in
+// the sibling horse game's style: art is authored in a small DESIGN GRID (see
+// data/species.js `size`), drawn through a scaledGraphics wrapper onto an
+// ART_SCALE× super-sampled texture, and displayed at ANIMAL_DISPLAY_SCALE.
+//
+// Every species is layered back-to-front — legs, tail, haunch, body, pattern
+// overlay, neck, head, ears, face — and shaded from its coat's 3-tone ramp
+// (`lo` under the belly and haunch, `mid` across the body, `hi` along the
+// sunlit back). Colours come from data/coats.js: a named realistic coat plus a
+// named pattern, never an arbitrary hue.
+//
+// Every species also gets the same 6-frame sheet — idle_0/1 + walk_0..3 — so a
+// standing animal visibly breathes and a moving one has a real gait. Bunnies
+// hop (the whole body leaves the ground) rather than walk; turtles waddle with
+// almost no leg lift.
+//
+// All animals face RIGHT with origin (0.5, 1) — feet on the ground. Use
+// setFlipX(true) to face left.
+
 import { gen } from './_gen.js';
-import { paletteForHue } from './palette.js';
-import { SPECIES, SPECIES_KEYS } from '../data/species.js';
+import {
+  ART_SCALE, DISPLAY_SCALE, buildFrames, buildPoseFrames, idleWalkLegs, makeLeg,
+} from './_frames.js';
+import { SPECIES } from '../data/species.js';
+import { coatDef, lookId } from '../data/coats.js';
 
 export const EGG_KEY = 'animal-egg';
 export const NAME_TAG_KEY = 'name-tag';
 
-// Texture key for a given species/stage/hue, e.g. "animal-dog-adult-210".
-// Issue #4 (arrivals) and #9 (families) should build sprite keys through this
-// helper (or, better, ensureAnimalTexture() below) rather than hand-assembling
-// the string.
-export function animalTextureKey(speciesKey, stage, hue) {
-  return `animal-${speciesKey}-${stage}-${hue}`;
+// Animal sprites are super-sampled, so scenes must scale them down by this much
+// (each design-grid px becomes 2 logical px on screen). Anything measuring a
+// sprite should read displayWidth/displayHeight, not width/height.
+export const ANIMAL_DISPLAY_SCALE = DISPLAY_SCALE; // 0.5
+
+const WHITE = 0xf7f4ee;
+
+// ── Shared bits ─────────────────────────────────────────────────────────────
+
+// Relative luminance of a packed 0xRRGGBB colour, 0-1. Used to pick a tattoo
+// ink that stays legible on both a cream coat and a black one.
+function lum(c) {
+  const r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
-// ── Per-species draw functions ──────────────────────────────────────────────
-// Each draws into a Graphics sized to (w, h); `baby` nudges proportions (bigger
-// head, shorter limbs) rather than just uniformly shrinking the adult drawing.
-
-function drawTurtle(g, w, h, c, baby) {
-  const bodyY = h * 0.62;
-  g.fillStyle(c.skin, 1);
-  g.fillEllipse(w * 0.26, h * 0.88, w * 0.16, h * 0.14);
-  g.fillEllipse(w * 0.74, h * 0.88, w * 0.16, h * 0.14);
-  g.fillCircle(w * 0.9, bodyY - h * 0.1, h * (baby ? 0.22 : 0.16));
-  const shellW = w * (baby ? 0.66 : 0.74), shellH = h * (baby ? 0.6 : 0.66);
-  g.fillStyle(c.shellDark, 1).fillEllipse(w * 0.46, bodyY, shellW, shellH);
-  g.fillStyle(c.shell, 1).fillEllipse(w * 0.46, bodyY - h * 0.03, shellW * 0.86, shellH * 0.82);
-  g.fillStyle(c.shellDark, 1).fillEllipse(w * 0.46, bodyY - h * 0.03, shellW * 0.32, shellH * 0.32);
-}
-
-function drawGuineaPig(g, w, h, c, baby) {
-  g.fillStyle(c.bodyDark, 1).fillEllipse(w / 2, h * 0.6, w * 0.92, h * 0.7);
-  g.fillStyle(c.body, 1).fillEllipse(w / 2, h * 0.55, w * 0.86, h * 0.62);
-  g.fillStyle(c.belly, 1).fillEllipse(w / 2, h * 0.78, w * 0.5, h * 0.28);
-  const earY = h * (baby ? 0.3 : 0.24);
-  g.fillStyle(c.bodyDark, 1);
-  g.fillCircle(w * 0.28, earY, w * 0.08);
-  g.fillCircle(w * 0.72, earY, w * 0.08);
-  g.fillStyle(0x2b2b2b, 1);
-  g.fillCircle(w * 0.35, h * 0.44, 1.6);
-  g.fillCircle(w * 0.65, h * 0.44, 1.6);
-}
-
-function drawHamster(g, w, h, c, baby) {
-  g.fillStyle(c.bodyDark, 1).fillCircle(w / 2, h * 0.58, w * 0.46);
-  g.fillStyle(c.body, 1).fillCircle(w / 2, h * 0.55, w * 0.42);
-  g.fillStyle(c.cheek, 1);
-  g.fillCircle(w * 0.26, h * 0.62, w * 0.16);
-  g.fillCircle(w * 0.74, h * 0.62, w * 0.16);
-  const earY = h * (baby ? 0.24 : 0.2);
-  g.fillStyle(c.bodyDark, 1);
-  g.fillCircle(w * 0.32, earY, w * 0.09);
-  g.fillCircle(w * 0.68, earY, w * 0.09);
-  g.fillStyle(0x2b2b2b, 1);
-  g.fillCircle(w * 0.42, h * 0.52, 1.4);
-  g.fillCircle(w * 0.58, h * 0.52, 1.4);
-}
-
-function drawBunny(g, w, h, c, baby) {
-  const earH = h * (baby ? 0.34 : 0.44);
-  g.fillStyle(c.body, 1);
-  g.fillRoundedRect(w * 0.32, 0, w * 0.14, earH, 4);
-  g.fillRoundedRect(w * 0.54, 0, w * 0.14, earH, 4);
-  g.fillStyle(c.earInner, 1);
-  g.fillRoundedRect(w * 0.35, earH * 0.15, w * 0.08, earH * 0.6, 3);
-  g.fillRoundedRect(w * 0.57, earH * 0.15, w * 0.08, earH * 0.6, 3);
-  g.fillStyle(c.bodyDark, 1).fillEllipse(w / 2, h * 0.72, w * 0.8, h * 0.48);
-  g.fillStyle(c.body, 1).fillEllipse(w / 2, h * 0.68, w * 0.72, h * 0.4);
-  g.fillStyle(0xffffff, 1).fillCircle(w * 0.14, h * 0.8, w * 0.09);
-  const headCY = earH * 0.85;
-  g.fillStyle(c.body, 1).fillCircle(w / 2, headCY, w * 0.26);
-  g.fillStyle(0x2b2b2b, 1);
-  g.fillCircle(w * 0.42, headCY, 1.4);
-  g.fillCircle(w * 0.58, headCY, 1.4);
-}
-
-function drawCat(g, w, h, c, baby) {
-  g.fillStyle(c.body, 1);
-  g.fillRect(w * 0.06, h * 0.32, w * 0.08, h * 0.4);
-  g.fillCircle(w * 0.1, h * 0.3, w * 0.05);
-  g.fillStyle(c.bodyDark, 1).fillEllipse(w * 0.5, h * 0.66, w * 0.6, h * 0.4);
-  g.fillStyle(c.body, 1).fillEllipse(w * 0.52, h * 0.62, w * 0.54, h * 0.34);
-  const headR = w * (baby ? 0.28 : 0.22);
-  const hx = w * 0.72, hy = h * 0.38;
-  g.fillStyle(c.body, 1);
-  g.fillTriangle(hx - headR * 0.8, hy - headR * 0.4, hx - headR * 0.2, hy - headR * 1.3, hx - headR * 0.05, hy - headR * 0.5);
-  g.fillTriangle(hx + headR * 0.05, hy - headR * 0.5, hx + headR * 0.5, hy - headR * 1.3, hx + headR * 0.9, hy - headR * 0.4);
-  g.fillStyle(c.earInner, 1);
-  g.fillTriangle(hx - headR * 0.55, hy - headR * 0.55, hx - headR * 0.28, hy - headR * 1.0, hx - headR * 0.12, hy - headR * 0.55);
-  g.fillStyle(c.body, 1).fillCircle(hx, hy, headR);
-  g.fillStyle(0x2b2b2b, 1);
-  g.fillCircle(hx - headR * 0.3, hy, 1.5);
-  g.fillCircle(hx + headR * 0.3, hy, 1.5);
-  g.fillStyle(c.bodyDark, 1);
-  g.fillRect(w * 0.34, h * 0.82, w * 0.07, h * 0.14);
-  g.fillRect(w * 0.58, h * 0.82, w * 0.07, h * 0.14);
-}
-
-function drawDog(g, w, h, c, baby) {
-  g.fillStyle(c.body, 1);
-  g.fillCircle(w * 0.08, h * 0.32, w * 0.06);
-  g.fillRect(w * 0.06, h * 0.32, w * 0.06, h * 0.3);
-  g.fillStyle(c.bodyDark, 1).fillEllipse(w * 0.52, h * 0.66, w * 0.62, h * 0.4);
-  g.fillStyle(c.body, 1).fillEllipse(w * 0.54, h * 0.62, w * 0.56, h * 0.34);
-  const headR = w * (baby ? 0.26 : 0.2);
-  const hx = w * 0.76, hy = h * 0.4;
-  g.fillStyle(c.body, 1).fillCircle(hx, hy, headR);
-  g.fillStyle(c.body, 1).fillEllipse(hx + headR * 0.7, hy + headR * 0.3, headR * 0.6, headR * 0.4);
-  g.fillStyle(0x2b2b2b, 1).fillCircle(hx + headR * 1.05, hy + headR * 0.3, 1.4);
-  g.fillStyle(c.earColor, 1);
-  g.fillEllipse(hx - headR * 0.7, hy + headR * 0.2, headR * 0.4, headR * 0.9);
-  g.fillEllipse(hx + headR * 0.2, hy - headR * 0.9, headR * 0.4, headR * 0.7);
-  g.fillStyle(0x2b2b2b, 1);
-  g.fillCircle(hx - headR * 0.15, hy - headR * 0.1, 1.5);
-  g.fillStyle(c.bodyDark, 1);
-  g.fillRect(w * 0.36, h * 0.82, w * 0.08, h * 0.16);
-  g.fillRect(w * 0.62, h * 0.82, w * 0.08, h * 0.16);
-}
-
-const DRAW = {
-  turtle: drawTurtle,
-  guineaPig: drawGuineaPig,
-  hamster: drawHamster,
-  bunny: drawBunny,
-  cat: drawCat,
-  dog: drawDog,
+// A tiny 3x5 micro-font, just the characters the ID tattoos use (coats.js
+// TATTOO_IDS). Each row is 3 bits, top to bottom.
+const GLYPHS = {
+  A: [0b010, 0b101, 0b111, 0b101, 0b101],
+  B: [0b110, 0b101, 0b110, 0b101, 0b110],
+  C: [0b011, 0b100, 0b100, 0b100, 0b011],
+  D: [0b110, 0b101, 0b101, 0b101, 0b110],
+  E: [0b111, 0b100, 0b110, 0b100, 0b111],
+  F: [0b111, 0b100, 0b110, 0b100, 0b100],
+  G: [0b011, 0b100, 0b101, 0b101, 0b011],
+  H: [0b101, 0b101, 0b111, 0b101, 0b101],
+  1: [0b010, 0b110, 0b010, 0b010, 0b111],
+  2: [0b110, 0b001, 0b010, 0b100, 0b111],
+  3: [0b110, 0b001, 0b010, 0b001, 0b110],
+  4: [0b101, 0b101, 0b111, 0b001, 0b001],
+  5: [0b111, 0b100, 0b110, 0b001, 0b110],
+  6: [0b011, 0b100, 0b110, 0b101, 0b010],
+  7: [0b111, 0b001, 0b010, 0b010, 0b010],
+  8: [0b010, 0b101, 0b010, 0b101, 0b010],
 };
 
+// The kennel's last-resort tie-breaker (data/distinguish.js): a small ID mark
+// inked on the flank, like the cruelty-free brand a real kennel uses so two
+// identical guests can never be mixed up. Deliberately subtle — half-size cells
+// on the super-sampled grid and a half-transparent ink, so it reads as a mark
+// on the coat rather than a cartoon label.
+function drawTattoo(g, x, y, id, ramp, cell = 0.5) {
+  if (!id) return;
+  const coatIsLight = lum(ramp.mid) > 0.45;
+  g.fillStyle(coatIsLight ? 0x2a2118 : 0xf2efe8, 0.55);
+  let ox = x;
+  for (const ch of String(id)) {
+    const rows = GLYPHS[ch];
+    if (rows) {
+      rows.forEach((bits, ry) => {
+        for (let cx = 0; cx < 3; cx++) {
+          if (bits & (1 << (2 - cx))) g.fillRect(ox + cx * cell, y + ry * cell, cell, cell);
+        }
+      });
+    }
+    ox += 4 * cell;
+  }
+}
+
+// A collar band with a little hanging tag. Only drawn when the kennel actually
+// needs it to tell two look-alikes apart (DESIGN.md's kitten example).
+function drawCollar(g, r, color) {
+  if (color == null || !r) return;
+  g.fillStyle(color, 1);
+  g.fillRect(r.x, r.y, r.w, r.h);
+  g.fillStyle(0xf3d878, 1);
+  g.fillRect(r.x + r.w * 0.5, r.y + r.h, Math.max(0.5, r.w * 0.25), Math.max(0.5, r.h * 0.6));
+}
+
+// Turtles don't wear collars in a water tank — keepers dab a spot of coloured
+// paint on the shell instead, which is what this draws.
+function drawShellDot(g, r, color) {
+  if (color == null || !r) return;
+  g.fillStyle(0xffffff, 0.85); g.fillCircle(r.x, r.y, r.rad + 0.35);
+  g.fillStyle(color, 1);       g.fillCircle(r.x, r.y, r.rad);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DOG — design grid 28x24 (puppy 17x15)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DOG_GEO = {
+  adult: {
+    W: 28, H: 24,
+    leg: { topY: 17, w: 3, h: 6, pawY: 23, pawW: 5, pawDX: -1, pawH: 1 },
+    hindX: [5, 8], foreX: [17, 20],
+    body: { x: 4, y: 10, w: 20, h: 10 },
+    neck: { x: 20, y: 8, w: 5, h: 6 },
+    head: { x: 22, y: 4, w: 6, h: 7 },
+    snout: { x: 25, y: 8, w: 3, h: 4 },
+    ear: { x: 20, y: 5, w: 3, h: 7 },
+    eye: { x: 23.8, y: 6.8, w: 1.6, h: 2 },
+    tail: { x: 2, y: 7, w: 2, h: 7 },
+    collar: { x: 21, y: 12, w: 5, h: 1.5 },
+    tattoo: { x: 8, y: 14.5 },
+  },
+  // Puppy: same head size on a much shorter body and stubby legs.
+  baby: {
+    W: 17, H: 15,
+    leg: { topY: 11, w: 2, h: 3, pawY: 14, pawW: 3, pawDX: -0.5, pawH: 1 },
+    hindX: [3, 5], foreX: [10, 12],
+    body: { x: 2, y: 7, w: 11, h: 6 },
+    neck: { x: 11, y: 5.5, w: 3, h: 4 },
+    head: { x: 11, y: 1, w: 6, h: 6 },
+    snout: { x: 14, y: 4, w: 3, h: 3 },
+    ear: { x: 9, y: 2, w: 2, h: 5 },
+    eye: { x: 12.8, y: 3.4, w: 1.4, h: 1.6 },
+    tail: { x: 1, y: 5.5, w: 1.5, h: 4 },
+    collar: { x: 11, y: 8, w: 3, h: 1 },
+    tattoo: { x: 3.5, y: 9 },
+  },
+};
+
+function drawDog(g, bob, [lhf, lhn, lff, lfn], look, G) {
+  const c = coatDef('dog', look);
+  const { hi, mid, lo } = c.body;
+  const pts = c.points || c.body; // black-and-tan gets tan legs/muzzle/brows
+  const pat = look?.pattern || 'solid';
+  const socks = pat === 'socksAndBlaze';
+  const leg = makeLeg({ ...G.leg, pawColor: socks ? WHITE : 0x2a2018 });
+  const b = G.body;
+
+  // ── Legs ── far pair in the shadow tone, near pair in the leg/points tone.
+  leg(g, G.hindX[0], lhf, socks ? WHITE : lo, bob);
+  leg(g, G.foreX[0], lff, socks ? WHITE : lo, bob);
+  leg(g, G.hindX[1], lhn, socks ? WHITE : pts.mid, bob);
+  leg(g, G.foreX[1], lfn, socks ? WHITE : pts.mid, bob);
+
+  // ── Tail ── carried up, wagging.
+  g.fillStyle(mid, 1); g.fillRect(G.tail.x, G.tail.y + bob, G.tail.w, G.tail.h);
+  g.fillStyle(hi, 1);  g.fillRect(G.tail.x - 0.5, G.tail.y + bob, G.tail.w * 0.5, G.tail.h * 0.7);
+
+  // ── Body ── barrel with a sunlit back and a shaded belly.
+  g.fillStyle(mid, 1); g.fillRect(b.x, b.y + bob, b.w, b.h);
+  g.fillStyle(hi, 1);  g.fillRect(b.x, b.y + bob, b.w, b.h * 0.3);
+  g.fillStyle(lo, 1);  g.fillRect(b.x, b.y + b.h * 0.7 + bob, b.w, b.h * 0.3);
+  g.fillStyle(mid, 1); g.fillRect(b.x - 1, b.y + b.h * 0.2 + bob, 1, b.h * 0.6); // rump curve
+
+  // ── Pattern overlay ──
+  if (pat === 'patches') {
+    g.fillStyle(c.mark, 1);
+    g.fillRect(b.x + b.w * 0.06, b.y + b.h * 0.08 + bob, b.w * 0.30, b.h * 0.62);
+    g.fillRect(b.x + b.w * 0.52, b.y + b.h * 0.30 + bob, b.w * 0.26, b.h * 0.52);
+    g.fillRect(b.x + b.w * 0.40, b.y + b.h * 0.10 + bob, b.w * 0.12, b.h * 0.22);
+  } else if (pat === 'spots') {
+    const d = Math.max(0.75, b.h * 0.14);
+    g.fillStyle(c.mark, 1);
+    [[0.14, 0.22], [0.30, 0.58], [0.46, 0.30], [0.60, 0.66], [0.74, 0.24], [0.86, 0.52]]
+      .forEach(([fx, fy]) => g.fillRect(b.x + b.w * fx, b.y + b.h * fy + bob, d, d));
+  } else if (socks) {
+    g.fillStyle(WHITE, 1);
+    g.fillRect(b.x + b.w * 0.72, b.y + b.h * 0.55 + bob, b.w * 0.28, b.h * 0.45); // white chest
+  } else if (c.points) {
+    // Black-and-tan: a tan chest patch at the front, not a slab across the
+    // whole belly (which merged with the tan legs into one solid block).
+    g.fillStyle(pts.mid, 1);
+    g.fillRect(b.x + b.w * 0.62, b.y + b.h * 0.6 + bob, b.w * 0.38, b.h * 0.4);
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+
+  // ── Neck ── slopes up from the shoulder to the head.
+  g.fillStyle(mid, 1); g.fillRect(G.neck.x, G.neck.y + bob, G.neck.w, G.neck.h);
+  g.fillStyle(hi, 1);  g.fillRect(G.neck.x, G.neck.y + bob, G.neck.w, G.neck.h * 0.35);
+
+  drawCollar(g, { ...G.collar, y: G.collar.y + bob }, look?.collar);
+
+  // ── Head ── domed skull above the back, snout poking forward-and-down.
+  const h = G.head;
+  g.fillStyle(mid, 1); g.fillRect(h.x, h.y + bob, h.w, h.h);
+  g.fillStyle(hi, 1);  g.fillRect(h.x, h.y + bob, h.w, h.h * 0.28);
+  g.fillStyle(lo, 1);  g.fillRect(h.x, h.y + h.h * 0.85 + bob, h.w * 0.65, h.h * 0.15);
+  if (socks) { // blaze up the middle of the face
+    g.fillStyle(WHITE, 1); g.fillRect(h.x + h.w * 0.42, h.y + bob, h.w * 0.28, h.h);
+  } else if (pat === 'patches') {
+    g.fillStyle(c.mark, 1); g.fillRect(h.x, h.y + h.h * 0.12 + bob, h.w * 0.42, h.h * 0.45);
+  } else if (c.points) {
+    g.fillStyle(pts.mid, 1); // tan eyebrow dot
+    g.fillRect(h.x + h.w * 0.25, h.y + h.h * 0.3 + bob, h.w * 0.2, h.h * 0.12);
+  }
+  // Snout + nose
+  const s = G.snout;
+  g.fillStyle(c.snout, 1); g.fillRect(s.x, s.y + bob, s.w, s.h);
+  g.fillStyle(c.nose, 1);  g.fillRect(s.x + s.w * 0.55, s.y + bob, s.w * 0.45, s.h * 0.45);
+
+  // ── Ear ── floppy, draping the back of the skull.
+  g.fillStyle(c.ear, 1); g.fillRect(G.ear.x, G.ear.y + bob, G.ear.w, G.ear.h);
+  g.fillStyle(lo, 1);    g.fillRect(G.ear.x, G.ear.y + G.ear.h * 0.5 + bob, G.ear.w * 0.7, G.ear.h * 0.5);
+
+  // ── Eye ── a pale socket behind the pupil, so it still reads on a black coat.
+  g.fillStyle(0xe8e2d6, 0.9);  g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w, G.eye.h);
+  g.fillStyle(c.eye, 1);       g.fillRect(G.eye.x + G.eye.w * 0.3, G.eye.y + bob, G.eye.w * 0.6, G.eye.h);
+  g.fillStyle(0xffffff, 0.85); g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w * 0.35, G.eye.h * 0.35);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAT — design grid 22x20 (kitten 13x12)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CAT_GEO = {
+  adult: {
+    W: 22, H: 20,
+    leg: { topY: 16, w: 2, h: 3, pawY: 19, pawW: 4, pawDX: -1, pawH: 1 },
+    hindX: [5, 7], foreX: [15, 17],
+    body: { x: 5, y: 10, w: 13, h: 7 },
+    back: { x: 6, y: 8, w: 9, h: 2 },
+    haunch: { x: 7, y: 13, r: 4 },
+    neck: { x: 15, y: 9, w: 4, h: 6 },
+    head: { x: 15, y: 5, w: 7, h: 5 },
+    ear: { far: 14, near: 19, y: 6, w: 3 },
+    eye: { x1: 16, x2: 19, y: 6, w: 2, h: 2 },
+    nose: { x: 20, y: 9 },
+    tail: { x: 6, y: 12 },
+    collar: { x: 15, y: 10.5, w: 4, h: 1.2 },
+    tattoo: { x: 8, y: 11 },
+  },
+  // Kitten: proportionally huge head, stubby legs, short body.
+  baby: {
+    W: 13, H: 12,
+    leg: { topY: 9, w: 1.5, h: 2, pawY: 11, pawW: 2.5, pawDX: -0.5, pawH: 1 },
+    hindX: [2, 3.5], foreX: [8, 9.5],
+    body: { x: 2, y: 6, w: 8, h: 5 },
+    back: { x: 3, y: 5, w: 5, h: 1 },
+    haunch: { x: 4, y: 8, r: 2.6 },
+    neck: { x: 8, y: 5, w: 3, h: 4 },
+    head: { x: 7, y: 1, w: 6, h: 4.5 },
+    ear: { far: 6.4, near: 10.6, y: 2.4, w: 2.2 },
+    eye: { x1: 8.2, x2: 10.6, y: 2.2, w: 1.6, h: 1.6 },
+    nose: { x: 12, y: 4.6 },
+    tail: { x: 3.2, y: 7 },
+    collar: { x: 8, y: 5.4, w: 3, h: 1 },
+    tattoo: { x: 3.6, y: 6.6 },
+  },
+};
+
+// Tabby barring across the back + the forehead "M".
+function catStripes(g, G, bob, color) {
+  const b = G.body;
+  g.fillStyle(color, 1);
+  for (let i = 0; i < 4; i++) {
+    const x = b.x + b.w * (0.15 + i * 0.19);
+    g.fillRect(x, b.y - b.h * 0.25 + bob, Math.max(0.6, b.w * 0.06), b.h * 0.75);
+  }
+}
+
+function catFaceStripes(g, G, bob, color) {
+  const h = G.head;
+  g.fillStyle(color, 1);
+  g.fillRect(h.x + h.w * 0.18, h.y + bob, h.w * 0.1, h.h * 0.38);
+  g.fillRect(h.x + h.w * 0.44, h.y + bob, h.w * 0.1, h.h * 0.28);
+  g.fillRect(h.x + h.w * 0.7, h.y + bob, h.w * 0.1, h.h * 0.38);
+}
+
+function drawCat(g, bob, [lhf, lhn, lff, lfn], tailTip, look, G) {
+  const c = coatDef('cat', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'solid';
+  const bib = c.mark === 'bib';
+  const whiteFeet = pat === 'socks' || bib;
+  const leg = makeLeg({ ...G.leg, pawColor: whiteFeet ? WHITE : lo });
+  const b = G.body;
+
+  // ── Legs ── cats creep: barely any lift, no body bounce.
+  leg(g, G.hindX[0], lhf, whiteFeet ? WHITE : lo, bob);
+  leg(g, G.foreX[0], lff, whiteFeet ? WHITE : lo, bob);
+  leg(g, G.hindX[1], lhn, whiteFeet ? WHITE : mid, bob);
+  leg(g, G.foreX[1], lfn, whiteFeet ? WHITE : mid, bob);
+
+  // ── Haunch ── rounded rear thigh, the cat's crouched silhouette.
+  g.fillStyle(mid, 1); g.fillCircle(G.haunch.x, G.haunch.y + bob, G.haunch.r);
+  g.fillStyle(lo, 1);  g.fillCircle(G.haunch.x, G.haunch.y + G.haunch.r * 0.5 + bob, G.haunch.r * 0.75);
+
+  // ── Body ── low and sleek with a gently arched back.
+  g.fillStyle(mid, 1); g.fillRect(b.x, b.y + bob, b.w, b.h);
+  g.fillRect(G.back.x, G.back.y + bob, G.back.w, G.back.h);
+  g.fillStyle(hi, 1);  g.fillRect(G.back.x, G.back.y + bob, G.back.w, G.back.h * 0.5);
+  g.fillStyle(lo, 1);  g.fillRect(b.x, b.y + b.h * 0.82 + bob, b.w, b.h * 0.18);
+
+  // ── Markings baked into the coat name (tabby / calico / tuxedo) ──
+  if (c.mark === 'stripes') catStripes(g, G, bob, c.markColor);
+  else if (c.mark === 'patches') {
+    g.fillStyle(c.markColor, 1); // ginger over the rump
+    g.fillRect(b.x, b.y - b.h * 0.2 + bob, b.w * 0.36, b.h * 0.95);
+    g.fillRect(b.x + b.w * 0.16, b.y - b.h * 0.42 + bob, b.w * 0.16, b.h * 0.28);
+    g.fillStyle(c.markColor2, 1); // black saddle over the shoulders
+    g.fillRect(b.x + b.w * 0.46, b.y - b.h * 0.15 + bob, b.w * 0.38, b.h * 0.85);
+    g.fillRect(b.x + b.w * 0.55, b.y - b.h * 0.38 + bob, b.w * 0.22, b.h * 0.25);
+    g.fillStyle(mid, 1); // white notch bitten back in, so the edges look organic
+    g.fillRect(b.x + b.w * 0.36, b.y + b.h * 0.5 + bob, b.w * 0.09, b.h * 0.4);
+  } else if (bib) {
+    g.fillStyle(c.markColor, 1); // white chest/belly flash
+    g.fillRect(b.x + b.w * 0.62, b.y + b.h * 0.35 + bob, b.w * 0.38, b.h * 0.65);
+    g.fillRect(b.x + b.w * 0.3, b.y + b.h * 0.75 + bob, b.w * 0.35, b.h * 0.25);
+  }
+
+  // ── Tail ── overlapping segments sweeping up-and-back from the rump, so it
+  // reads as one continuous curve rather than a detached chimney. Drawn ON TOP
+  // of the haunch/body on purpose: tucked behind them, the big haunch circle ate
+  // the root and left the tail floating. Only the tip flicks (tailTip).
+  const t = G.tail, seg = Math.max(0.8, b.w * 0.14);
+  g.fillStyle(mid, 1);
+  // The two lower segments are deliberately wide so the base merges into the
+  // rump instead of leaving a notch of background between tail and body.
+  g.fillRect(t.x - seg * 1.0, t.y - seg * 0.2 + bob, seg * 2.0, seg * 1.3);  // root at the rump
+  g.fillRect(t.x - seg * 1.9, t.y - seg * 1.4 + bob, seg * 2.6, seg * 1.7);
+  g.fillRect(t.x - seg * 2.5, t.y - seg * 2.8 + bob, seg * 2.0, seg * 1.9);
+  g.fillRect(t.x - seg * 2.8, t.y - seg * 4.0 + bob, seg * 1.2, seg * 1.7);
+  g.fillRect(t.x - seg * 2.7 - tailTip * 0.4, t.y - seg * 5.2 + bob, seg * 1.2, seg * 1.4); // tip
+  g.fillStyle(hi, 1);
+  g.fillRect(t.x - seg * 2.5, t.y - seg * 2.6 + bob, seg * 0.4, seg * 1.7);
+  if (c.mark === 'stripes') {
+    g.fillStyle(c.markColor, 1);
+    g.fillRect(t.x - seg * 1.9, t.y - seg * 0.9 + bob, seg * 1.3, seg * 0.5);
+    g.fillRect(t.x - seg * 2.7, t.y - seg * 3.5 + bob, seg * 1.2, seg * 0.5);
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+
+  // ── Neck / chest ──
+  g.fillStyle(mid, 1); g.fillRect(G.neck.x, G.neck.y + bob, G.neck.w, G.neck.h);
+  if (bib) {
+    g.fillStyle(c.markColor, 1);
+    g.fillRect(G.neck.x, G.neck.y + G.neck.h * 0.55 + bob, G.neck.w, G.neck.h * 0.45);
+  }
+
+  drawCollar(g, { ...G.collar, y: G.collar.y + bob }, look?.collar);
+
+  // ── Ears ── sharp triangles tapering to a point, drawn behind the skull.
+  const e = G.ear;
+  g.fillStyle(mid, 1);
+  g.fillTriangle(e.far, e.y + bob, e.far + e.w, e.y + bob, e.far + e.w * 0.35, e.y - e.w + bob);
+  g.fillStyle(c.mark === 'patches' ? c.markColor2 : mid, 1);
+  g.fillTriangle(e.near, e.y + bob, e.near + e.w, e.y + bob, e.near + e.w * 0.65, e.y - e.w + bob);
+  g.fillStyle(c.ear, 1);
+  g.fillTriangle(e.near + e.w * 0.25, e.y + bob, e.near + e.w * 0.75, e.y + bob,
+    e.near + e.w * 0.6, e.y - e.w * 0.55 + bob);
+
+  // ── Head ── small, round, flat-faced (no dog snout).
+  const h = G.head;
+  g.fillStyle(mid, 1); g.fillRect(h.x, h.y + bob, h.w, h.h);
+  g.fillStyle(hi, 1);  g.fillRect(h.x + h.w * 0.12, h.y + bob, h.w * 0.7, h.h * 0.2);
+  if (c.mark === 'stripes') catFaceStripes(g, G, bob, c.markColor);
+  else if (c.mark === 'patches') {
+    g.fillStyle(c.markColor, 1); g.fillRect(h.x, h.y + bob, h.w * 0.42, h.h * 0.5);
+  } else if (bib) {
+    g.fillStyle(c.markColor, 1); g.fillRect(h.x + h.w * 0.55, h.y + h.h * 0.55 + bob, h.w * 0.45, h.h * 0.45);
+  }
+
+  // ── Eyes ── big, set high and forward, with a catchlight.
+  const ey = G.eye;
+  g.fillStyle(c.eye, 1);
+  g.fillRect(ey.x1, ey.y + bob, ey.w, ey.h); g.fillRect(ey.x2, ey.y + bob, ey.w, ey.h);
+  g.fillStyle(0x14260a, 1);
+  g.fillRect(ey.x1 + ey.w * 0.45, ey.y + bob, ey.w * 0.35, ey.h);
+  g.fillRect(ey.x2 + ey.w * 0.45, ey.y + bob, ey.w * 0.35, ey.h);
+  g.fillStyle(0xffffff, 0.9);
+  g.fillRect(ey.x1, ey.y + bob, ey.w * 0.4, ey.h * 0.4);
+  g.fillRect(ey.x2, ey.y + bob, ey.w * 0.4, ey.h * 0.4);
+
+  // ── Nose + whisker hint ──
+  g.fillStyle(c.nose, 1);     g.fillRect(G.nose.x, G.nose.y + bob, 1, 1);
+  g.fillStyle(0xffffff, 0.5); g.fillRect(G.nose.x + 1, G.nose.y - 0.5 + bob, 1, 0.5);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BUNNY — design grid 20x20 (kit 12x12). Hops instead of walking.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const BUNNY_GEO = {
+  adult: {
+    W: 20, H: 20, hopMax: 4,
+    foot: { x: 3, y: 17, w: 6, h: 2 }, paw: { x: 13, y: 17, w: 3, h: 2 },
+    tail: { x: 3, y: 12, r: 2.6 },
+    haunch: { x: 7, y: 12, r: 4.5 },
+    body: { cx: 11, cy: 12, w: 12, h: 8 },
+    belly: { cx: 11, cy: 15, w: 8, h: 2 },
+    neck: { x: 14, y: 8, w: 4, h: 6 },
+    head: { cx: 17, cy: 8, r: 3.4 },
+    earFar: { x: 16, y: 1, w: 2, h: 5 }, earNear: { x: 18, y: 0, w: 2, h: 6 },
+    eye: { x: 17, y: 7, w: 2, h: 2 },
+    nose: { x: 19.2, y: 8 },
+    collar: { x: 14, y: 11.5, w: 4, h: 1.2 },
+    tattoo: { x: 7.5, y: 11.5 },
+  },
+  baby: {
+    W: 12, H: 12, hopMax: 2.5,
+    foot: { x: 2, y: 10, w: 4, h: 1.5 }, paw: { x: 8, y: 10, w: 2, h: 1.5 },
+    tail: { x: 2, y: 7.5, r: 1.6 },
+    haunch: { x: 4, y: 7.5, r: 2.7 },
+    body: { cx: 6.5, cy: 7.5, w: 7, h: 5 },
+    belly: { cx: 6.5, cy: 9.4, w: 5, h: 1.4 },
+    neck: { x: 8, y: 5, w: 2.5, h: 3.5 },
+    head: { cx: 9.6, cy: 4.6, r: 2.4 },
+    earFar: { x: 8.6, y: 0.6, w: 1.4, h: 3 }, earNear: { x: 10, y: 0.2, w: 1.4, h: 3.4 },
+    eye: { x: 9.6, y: 4, w: 1.4, h: 1.4 },
+    nose: { x: 11.2, y: 4.8 },
+    collar: { x: 8, y: 6.8, w: 2.5, h: 1 },
+    tattoo: { x: 3.8, y: 7 },
+  },
+};
+
+function drawBunny(g, pose, look, G) {
+  const c = coatDef('bunny', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'solid';
+  const lift = pose.hop;
+  const stretch = lift > 0 ? G.body.w * 0.08 : 0;
+  const b = G.body;
+
+  // ── Feet ── long hind foot flat when grounded, tucked back mid-hop.
+  if (lift > 0) {
+    g.fillStyle(lo, 1);  g.fillRect(G.foot.x, G.foot.y - lift - 1, G.foot.w * 0.7, G.foot.h);
+    g.fillStyle(mid, 1); g.fillRect(G.paw.x + 1, G.paw.y - lift, G.paw.w, G.paw.h);
+  } else {
+    g.fillStyle(lo, 1);  g.fillRect(G.foot.x, G.foot.y, G.foot.w, G.foot.h);
+    g.fillStyle(pat === 'dutch' ? WHITE : mid, 1); g.fillRect(G.paw.x, G.paw.y, G.paw.w, G.paw.h);
+  }
+
+  // ── Cotton tail ──
+  g.fillStyle(pat === 'dutch' ? WHITE : mid, 1); g.fillCircle(G.tail.x, G.tail.y - lift, G.tail.r);
+  g.fillStyle(0xffffff, 0.55);
+  g.fillCircle(G.tail.x - G.tail.r * 0.3, G.tail.y - lift - G.tail.r * 0.4, G.tail.r * 0.45);
+
+  // ── Haunch ── the big rounded rear thigh.
+  g.fillStyle(mid, 1); g.fillCircle(G.haunch.x, G.haunch.y - lift, G.haunch.r);
+  g.fillStyle(lo, 1);  g.fillCircle(G.haunch.x, G.haunch.y - lift + G.haunch.r * 0.45, G.haunch.r * 0.78);
+  g.fillStyle(hi, 1);  g.fillCircle(G.haunch.x - G.haunch.r * 0.25, G.haunch.y - lift - G.haunch.r * 0.45, G.haunch.r * 0.42);
+
+  // ── Body ── low rounded loaf; stretches forward a touch mid-hop.
+  g.fillStyle(mid, 1);     g.fillEllipse(b.cx, b.cy - lift, b.w + stretch, b.h);
+  g.fillStyle(hi, 1);      g.fillEllipse(b.cx, b.cy - lift - b.h * 0.25, b.w * 0.75, b.h * 0.35);
+  g.fillStyle(c.belly, 1); g.fillEllipse(G.belly.cx, G.belly.cy - lift, G.belly.w, G.belly.h);
+
+  // ── Pattern overlay ──
+  if (pat === 'dutch') {
+    // Classic Dutch: a clean white band around the middle of the body.
+    g.fillStyle(WHITE, 1);
+    g.fillRect(b.cx - b.w * 0.12, b.cy - lift - b.h * 0.52, b.w * 0.3, b.h);
+  } else if (pat === 'spotted') {
+    const d = Math.max(0.7, b.h * 0.16);
+    g.fillStyle(c.mark, 1);
+    [[-0.3, -0.2], [-0.05, 0.12], [0.18, -0.3], [0.3, 0.15], [-0.42, 0.2]]
+      .forEach(([fx, fy]) => g.fillRect(b.cx + b.w * fx, b.cy - lift + b.h * fy, d, d));
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y - lift, look?.tattoo, c.body);
+
+  // ── Neck / chest ──
+  g.fillStyle(mid, 1);     g.fillRect(G.neck.x, G.neck.y - lift, G.neck.w, G.neck.h);
+  g.fillStyle(c.belly, 1); g.fillRect(G.neck.x, G.neck.y - lift + G.neck.h * 0.78, G.neck.w, G.neck.h * 0.22);
+
+  drawCollar(g, { x: G.collar.x, y: G.collar.y - lift, w: G.collar.w, h: G.collar.h }, look?.collar);
+
+  // ── Head ──
+  const hd = G.head;
+  g.fillStyle(mid, 1); g.fillCircle(hd.cx, hd.cy - lift, hd.r);
+  g.fillStyle(hi, 1);  g.fillCircle(hd.cx - hd.r * 0.3, hd.cy - lift - hd.r * 0.5, hd.r * 0.42);
+  if (pat === 'dutch') { // white blaze up the middle of the face
+    g.fillStyle(WHITE, 1); g.fillRect(hd.cx - hd.r * 0.2, hd.cy - lift - hd.r, hd.r * 0.55, hd.r * 2);
+  } else if (pat === 'spotted') {
+    g.fillStyle(c.mark, 1); g.fillRect(hd.cx - hd.r * 0.9, hd.cy - lift - hd.r * 0.5, hd.r * 0.6, hd.r * 0.6);
+  }
+
+  // ── Ears ── tall and upright; trail back a little mid-hop.
+  const back = lift > 0 ? 1 : 0;
+  g.fillStyle(mid, 1);
+  g.fillRect(G.earFar.x - back, G.earFar.y - lift, G.earFar.w, G.earFar.h);
+  g.fillRect(G.earNear.x - back, G.earNear.y - lift, G.earNear.w, G.earNear.h);
+  g.fillStyle(c.ear, 1);
+  g.fillRect(G.earNear.x - back + G.earNear.w * 0.2, G.earNear.y - lift + G.earNear.h * 0.15,
+    G.earNear.w * 0.5, G.earNear.h * 0.7);
+  g.fillStyle(hi, 1);
+  g.fillRect(G.earFar.x - back, G.earFar.y - lift, G.earFar.w * 0.4, G.earFar.h * 0.4);
+
+  // ── Eye + nose (the idle wiggle twitches just the nose) ──
+  g.fillStyle(c.eye, 1);      g.fillRect(G.eye.x, G.eye.y - lift, G.eye.w, G.eye.h);
+  g.fillStyle(0xffffff, 0.9); g.fillRect(G.eye.x, G.eye.y - lift, G.eye.w * 0.45, G.eye.h * 0.45);
+  g.fillStyle(0xd76b76, 1);   g.fillRect(G.nose.x, G.nose.y - lift + pose.wiggle * 0.4, 0.8, 0.8);
+  g.fillStyle(0xffffff, 0.4); g.fillRect(G.nose.x - 1, G.nose.y - lift + 1, 1, 0.5);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GUINEA PIG — design grid 18x14 (pup 11x9). Long slipper body, no neck.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const GUINEA_PIG_GEO = {
+  adult: {
+    W: 18, H: 14,
+    leg: { topY: 10.5, w: 2, h: 3.5, pawY: 13.4, pawW: 2.6, pawDX: -0.3, pawH: 0.6 },
+    hindX: [3, 5.5], foreX: [11, 13.5],
+    body: { cx: 8.5, cy: 8, w: 16, h: 9 },
+    rump: { x: 4, y: 8, r: 4 },
+    belly: { cx: 8.5, cy: 10.6, w: 11, h: 2.4 },
+    head: { cx: 14.5, cy: 7, r: 3.4 },
+    ear: { x: 12.6, y: 4.2, w: 2.4, h: 1.6 },
+    eye: { x: 15.2, y: 5.8, w: 1.2, h: 1.2 },
+    nose: { x: 17, y: 7.6 },
+    collar: { x: 11.6, y: 9.2, w: 3, h: 1.1 },
+    tattoo: { x: 5.5, y: 7.5 },
+  },
+  baby: {
+    W: 11, H: 9,
+    leg: { topY: 6.8, w: 1.4, h: 2.2, pawY: 8.5, pawW: 1.8, pawDX: -0.2, pawH: 0.5 },
+    hindX: [1.8, 3.4], foreX: [6.6, 8.2],
+    body: { cx: 5.2, cy: 5, w: 10, h: 5.6 },
+    rump: { x: 2.6, y: 5, r: 2.5 },
+    belly: { cx: 5.2, cy: 6.6, w: 7, h: 1.6 },
+    head: { cx: 8.8, cy: 4, r: 2.4 },
+    ear: { x: 7.6, y: 2.2, w: 1.6, h: 1.1 },
+    eye: { x: 9.2, y: 3.2, w: 0.9, h: 0.9 },
+    nose: { x: 10.3, y: 4.6 },
+    collar: { x: 7.2, y: 5.6, w: 2, h: 0.9 },
+    tattoo: { x: 3.2, y: 4.6 },
+  },
+};
+
+function drawGuineaPig(g, bob, [lhf, lhn, lff, lfn], look, G) {
+  const c = coatDef('guineaPig', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'solid';
+  const leg = makeLeg({ ...G.leg, pawColor: lo });
+  const b = G.body;
+
+  // ── Little feet, mostly hidden under the body ──
+  leg(g, G.hindX[0], lhf, lo, bob); leg(g, G.foreX[0], lff, lo, bob);
+  leg(g, G.hindX[1], lhn, mid, bob); leg(g, G.foreX[1], lfn, mid, bob);
+
+  // ── Rump + body ── one continuous slipper shape, no visible neck.
+  g.fillStyle(mid, 1); g.fillCircle(G.rump.x, G.rump.y + bob, G.rump.r);
+  g.fillStyle(mid, 1); g.fillEllipse(b.cx, b.cy + bob, b.w, b.h);
+  g.fillStyle(hi, 1);  g.fillEllipse(b.cx, b.cy + bob - b.h * 0.26, b.w * 0.78, b.h * 0.34);
+  g.fillStyle(lo, 1);  g.fillEllipse(b.cx - b.w * 0.18, b.cy + bob + b.h * 0.22, b.w * 0.5, b.h * 0.3);
+  g.fillStyle(c.belly, 1); g.fillEllipse(G.belly.cx, G.belly.cy + bob, G.belly.w, G.belly.h);
+
+  // ── Pattern overlay ──
+  if (pat === 'triColor') {
+    // Classic tri-colour: a dark saddle over the rear, a white band across the
+    // middle, the base coat left showing at the head end.
+    g.fillStyle(c.mark, 1);
+    g.fillEllipse(b.cx - b.w * 0.28, b.cy + bob, b.w * 0.42, b.h * 0.92);
+    g.fillStyle(WHITE, 1);
+    g.fillRect(b.cx - b.w * 0.06, b.cy + bob - b.h * 0.45, b.w * 0.2, b.h * 0.9);
+  } else if (pat === 'crested') {
+    // A soft whorl rosette on the rump to match the forehead crest below —
+    // a highlight ring only, no dark centre (which read as a hole).
+    g.fillStyle(hi, 0.8); g.fillCircle(G.rump.x, G.rump.y + bob - G.rump.r * 0.15, G.rump.r * 0.55);
+    g.fillStyle(mid, 1);  g.fillCircle(G.rump.x, G.rump.y + bob - G.rump.r * 0.15, G.rump.r * 0.3);
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+  drawCollar(g, { ...G.collar, y: G.collar.y + bob }, look?.collar);
+
+  // ── Ear ── small petal flap set just behind the eye.
+  g.fillStyle(c.ear, 1);
+  g.fillEllipse(G.ear.x + G.ear.w / 2, G.ear.y + bob + G.ear.h / 2, G.ear.w, G.ear.h);
+
+  // ── Head ── blunt, barely separate from the body.
+  const hd = G.head;
+  g.fillStyle(mid, 1); g.fillCircle(hd.cx, hd.cy + bob, hd.r);
+  g.fillStyle(hi, 1);  g.fillCircle(hd.cx - hd.r * 0.2, hd.cy + bob - hd.r * 0.5, hd.r * 0.45);
+  if (pat === 'crested') {
+    // Crest whorl ON the forehead (a pom-pom perched above the skull read as
+    // a horn), tucked inside the head circle.
+    g.fillStyle(WHITE, 1); g.fillCircle(hd.cx - hd.r * 0.2, hd.cy + bob - hd.r * 0.42, hd.r * 0.38);
+  } else if (pat === 'triColor') {
+    g.fillStyle(c.mark, 1); g.fillRect(hd.cx - hd.r * 0.95, hd.cy + bob - hd.r * 0.6, hd.r * 0.7, hd.r * 0.8);
+  }
+
+  // ── Eye + nose ──
+  g.fillStyle(c.eye, 1);       g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w, G.eye.h);
+  g.fillStyle(0xffffff, 0.8);  g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w * 0.5, G.eye.h * 0.5);
+  g.fillStyle(c.ear, 1);       g.fillRect(G.nose.x, G.nose.y + bob, 0.8, 0.6);
+  g.fillStyle(0xffffff, 0.35); g.fillRect(G.nose.x - 1, G.nose.y + bob + 0.8, 1, 0.4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HAMSTER — design grid 14x12 (pup 9x8). Round, cheek-pouched, tiny feet.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const HAMSTER_GEO = {
+  adult: {
+    W: 14, H: 12,
+    leg: { topY: 9.5, w: 1.6, h: 2.5, pawY: 11.5, pawW: 2, pawDX: -0.2, pawH: 0.5 },
+    hindX: [2.6, 4.6], foreX: [8.2, 10],
+    body: { cx: 6.5, cy: 7, w: 12, h: 9 },
+    belly: { cx: 6.5, cy: 9.6, w: 8, h: 2.4 },
+    head: { cx: 10.5, cy: 6, r: 3.2 },
+    cheek: { cx: 11, cy: 7.6, r: 2 },
+    earFar: { cx: 9, cy: 3.2, r: 1.3 }, earNear: { cx: 11.6, cy: 3, r: 1.4 },
+    eye: { x: 10.8, y: 5, w: 1.2, h: 1.2 },
+    nose: { x: 12.8, y: 6.6 },
+    collar: { x: 8.4, y: 8.2, w: 2.6, h: 1 },
+    tattoo: { x: 3.4, y: 6.6 },
+  },
+  baby: {
+    W: 9, H: 8,
+    leg: { topY: 6.4, w: 1.1, h: 1.6, pawY: 7.6, pawW: 1.4, pawDX: -0.15, pawH: 0.4 },
+    hindX: [1.6, 3], foreX: [5.4, 6.6],
+    body: { cx: 4.2, cy: 4.6, w: 8, h: 6 },
+    belly: { cx: 4.2, cy: 6.3, w: 5.2, h: 1.6 },
+    head: { cx: 6.8, cy: 3.6, r: 2.4 },
+    cheek: { cx: 7.1, cy: 4.8, r: 1.4 },
+    earFar: { cx: 5.8, cy: 1.6, r: 1 }, earNear: { cx: 7.5, cy: 1.5, r: 1.05 },
+    eye: { x: 7, y: 3, w: 0.9, h: 0.9 },
+    nose: { x: 8.3, y: 4.2 },
+    collar: { x: 5.4, y: 5.2, w: 1.8, h: 0.8 },
+    tattoo: { x: 2, y: 4.4 },
+  },
+};
+
+function drawHamster(g, bob, [lhf, lhn, lff, lfn], look, G) {
+  const c = coatDef('hamster', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'solid';
+  const leg = makeLeg({ ...G.leg, pawColor: c.ear });
+  const b = G.body;
+
+  leg(g, G.hindX[0], lhf, lo, bob); leg(g, G.foreX[0], lff, lo, bob);
+  leg(g, G.hindX[1], lhn, mid, bob); leg(g, G.foreX[1], lfn, mid, bob);
+
+  // ── Ears ── small rounded discs, drawn behind the head.
+  g.fillStyle(lo, 1);    g.fillCircle(G.earFar.cx, G.earFar.cy + bob, G.earFar.r);
+  g.fillStyle(mid, 1);   g.fillCircle(G.earNear.cx, G.earNear.cy + bob, G.earNear.r);
+  g.fillStyle(c.ear, 1); g.fillCircle(G.earNear.cx, G.earNear.cy + bob + G.earNear.r * 0.15, G.earNear.r * 0.5);
+
+  // ── Body ── a round little loaf; the head is barely separate from it.
+  g.fillStyle(mid, 1);     g.fillEllipse(b.cx, b.cy + bob, b.w, b.h);
+  g.fillStyle(hi, 1);      g.fillEllipse(b.cx, b.cy + bob - b.h * 0.26, b.w * 0.72, b.h * 0.34);
+  g.fillStyle(lo, 1);      g.fillEllipse(b.cx - b.w * 0.14, b.cy + bob + b.h * 0.24, b.w * 0.55, b.h * 0.3);
+  g.fillStyle(c.belly, 1); g.fillEllipse(G.belly.cx, G.belly.cy + bob, G.belly.w, G.belly.h);
+
+  // ── Pattern overlay ── the banded hamster's pale ring round the middle.
+  if (pat === 'banded') {
+    g.fillStyle(c.mark, 1);
+    g.fillRect(b.cx - b.w * 0.1, b.cy + bob - b.h * 0.48, b.w * 0.22, b.h * 0.96);
+    g.fillStyle(lo, 1);
+    g.fillRect(b.cx - b.w * 0.26, b.cy + bob - b.h * 0.42, b.w * 0.07, b.h * 0.6); // dorsal stripe
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+  drawCollar(g, { ...G.collar, y: G.collar.y + bob }, look?.collar);
+
+  // ── Head + cheek pouch ──
+  const hd = G.head;
+  g.fillStyle(mid, 1);     g.fillCircle(hd.cx, hd.cy + bob, hd.r);
+  g.fillStyle(hi, 1);      g.fillCircle(hd.cx - hd.r * 0.2, hd.cy + bob - hd.r * 0.5, hd.r * 0.45);
+  g.fillStyle(c.cheek, 1); g.fillCircle(G.cheek.cx, G.cheek.cy + bob, G.cheek.r);
+
+  // ── Eye + nose ──
+  g.fillStyle(c.eye, 1);       g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w, G.eye.h);
+  g.fillStyle(0xffffff, 0.8);  g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w * 0.5, G.eye.h * 0.5);
+  g.fillStyle(c.ear, 1);       g.fillRect(G.nose.x, G.nose.y + bob, 0.8, 0.6);
+  g.fillStyle(0xffffff, 0.35); g.fillRect(G.nose.x - 1, G.nose.y + bob + 0.8, 1, 0.4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TURTLE — design grid 20x14 (hatchling 12x9). Slow, low-lift waddle.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const TURTLE_GEO = {
+  adult: {
+    W: 20, H: 14,
+    leg: { topY: 10.5, w: 3, h: 3.5, pawY: 13.4, pawW: 3.4, pawDX: -0.3, pawH: 0.6 },
+    hindX: [3, 6], foreX: [11, 14],
+    tail: { x: 0.6, y: 9, w: 2.4, h: 1.6 },
+    shell: { cx: 9.5, cy: 8, w: 16, h: 10 },
+    rim: { cx: 9.5, cy: 10, w: 16.6, h: 4 },
+    neck: { x: 14.5, y: 7.4, w: 3, h: 2.8 },
+    head: { cx: 17.2, cy: 8.4, r: 2.3 },
+    eye: { x: 17.4, y: 7.6, w: 0.9, h: 0.9 },
+    dot: { x: 6.5, y: 5.6, rad: 1.1 },
+    tattoo: { x: 4.5, y: 10.4 },
+  },
+  baby: {
+    W: 12, H: 9,
+    leg: { topY: 6.6, w: 2, h: 2.4, pawY: 8.5, pawW: 2.2, pawDX: -0.2, pawH: 0.5 },
+    hindX: [1.8, 3.6], foreX: [6.4, 8.2],
+    tail: { x: 0.3, y: 5.6, w: 1.5, h: 1 },
+    shell: { cx: 5.6, cy: 5, w: 10, h: 6.4 },
+    rim: { cx: 5.6, cy: 6.3, w: 10.4, h: 2.5 },
+    neck: { x: 8.5, y: 4.6, w: 2, h: 1.8 },
+    head: { cx: 10.2, cy: 5.3, r: 1.6 },
+    eye: { x: 10.3, y: 4.8, w: 0.7, h: 0.7 },
+    dot: { x: 3.8, y: 3.6, rad: 0.8 },
+    tattoo: { x: 2.6, y: 6.6 },
+  },
+};
+
+function drawTurtle(g, bob, [lhf, lhn, lff, lfn], look, G) {
+  const c = coatDef('turtle', look);
+  const { hi, mid, lo } = c.body;
+  const sk = c.skin;
+  const pat = look?.pattern || 'plain';
+  const leg = makeLeg({ ...G.leg, pawColor: sk.lo });
+  const s = G.shell;
+
+  // ── Flippers/legs ── stubby, barely lifting (turtles waddle).
+  leg(g, G.hindX[0], lhf, sk.lo, bob);  leg(g, G.foreX[0], lff, sk.lo, bob);
+  leg(g, G.hindX[1], lhn, sk.mid, bob); leg(g, G.foreX[1], lfn, sk.mid, bob);
+
+  // ── Tail ──
+  g.fillStyle(sk.lo, 1); g.fillRect(G.tail.x, G.tail.y + bob, G.tail.w, G.tail.h);
+
+  // ── Neck + head ── poking out to the right, under the shell's front lip.
+  g.fillStyle(sk.mid, 1); g.fillRect(G.neck.x, G.neck.y + bob, G.neck.w, G.neck.h);
+  g.fillStyle(sk.mid, 1); g.fillCircle(G.head.cx, G.head.cy + bob, G.head.r);
+  g.fillStyle(sk.hi, 1);  g.fillCircle(G.head.cx - G.head.r * 0.25, G.head.cy + bob - G.head.r * 0.45, G.head.r * 0.45);
+  g.fillStyle(c.beak, 1); g.fillRect(G.head.cx + G.head.r * 0.5, G.head.cy + bob + G.head.r * 0.1, G.head.r * 0.6, G.head.r * 0.4);
+  g.fillStyle(c.eye, 1);  g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w, G.eye.h);
+  g.fillStyle(0xffffff, 0.7); g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w * 0.5, G.eye.h * 0.5);
+
+  // ── Shell ── domed carapace with a marginal rim below it.
+  g.fillStyle(lo, 1);  g.fillEllipse(G.rim.cx, G.rim.cy + bob, G.rim.w, G.rim.h);
+  g.fillStyle(mid, 1); g.fillEllipse(s.cx, s.cy + bob, s.w, s.h);
+  g.fillStyle(hi, 1);  g.fillEllipse(s.cx - s.w * 0.06, s.cy + bob - s.h * 0.24, s.w * 0.66, s.h * 0.4);
+  g.fillStyle(lo, 1);  g.fillEllipse(s.cx, s.cy + bob + s.h * 0.34, s.w * 0.9, s.h * 0.24);
+
+  // ── Shell markings ── the turtle's whole look lives here.
+  const dot = (fx, fy, kw, kh) => g.fillRect(s.cx + s.w * fx, s.cy + bob + s.h * fy,
+    Math.max(0.5, s.w * kw), Math.max(0.5, s.h * kh));
+  if (pat === 'starburst') {
+    g.fillStyle(c.mark, 0.85);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      dot(Math.cos(a) * 0.2 - 0.03, Math.sin(a) * 0.2 - 0.03, 0.06, 0.06);
+      dot(Math.cos(a) * 0.33 - 0.025, Math.sin(a) * 0.33 - 0.025, 0.05, 0.05);
+    }
+  } else if (pat === 'rings') {
+    g.fillStyle(c.mark, 0.75); g.fillEllipse(s.cx, s.cy + bob, s.w * 0.62, s.h * 0.58);
+    g.fillStyle(mid, 1);       g.fillEllipse(s.cx, s.cy + bob, s.w * 0.5, s.h * 0.46);
+    g.fillStyle(c.mark, 0.75); g.fillEllipse(s.cx, s.cy + bob, s.w * 0.24, s.h * 0.22);
+  } else if (pat === 'speckled') {
+    g.fillStyle(c.mark, 0.8);
+    [[-0.28, -0.1], [-0.1, 0.12], [0.06, -0.16], [0.2, 0.06], [-0.18, 0.2], [0.3, -0.1], [0, -0.02]]
+      .forEach(([fx, fy]) => dot(fx, fy, 0.07, 0.07));
+  } else {
+    // Plain: just the scute seams, so the shell still reads as segmented.
+    g.fillStyle(lo, 0.55);
+    for (let i = -1; i <= 1; i++) g.fillRect(s.cx + s.w * i * 0.2, s.cy + bob - s.h * 0.32, 0.4, s.h * 0.62);
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+  drawShellDot(g, { x: G.dot.x, y: G.dot.y + bob, rad: G.dot.rad }, look?.collar);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Species registry + texture building
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Per-species build recipe. `walkFps` sets the gait's tempo — a turtle waddles
+// slowly, a hamster scurries.
+const BUILDERS = {
+  dog: {
+    geo: DOG_GEO, walkFps: 8,
+    build: (scene, key, G, look) =>
+      buildFrames(scene, key, G.W, G.H, (g, bob, legs) => drawDog(g, bob, legs, look, G), idleWalkLegs(2)),
+  },
+  cat: {
+    geo: CAT_GEO, walkFps: 8,
+    build: (scene, key, G, look) => {
+      // Cats pad smoothly: no body bob, one paw at a time, tail tip flicking.
+      const frames = [
+        { bob: 0, legs: [0, 0, 0, 0], tail: 0 },
+        { bob: 0, legs: [0, 0, 0, 0], tail: 1 }, // idle tail-tip flick
+        { bob: 0, legs: [0, 0, 0, 0], tail: 0 },
+        { bob: 0, legs: [1, 0, 0, 0], tail: 0 },
+        { bob: 0, legs: [0, 0, 1, 0], tail: 1 },
+        { bob: 0, legs: [0, 0, 0, 1], tail: 0 },
+      ];
+      buildPoseFrames(scene, key, G.W, G.H, (g, f) => drawCat(g, f.bob, f.legs, f.tail, look, G), frames);
+    },
+  },
+  bunny: {
+    geo: BUNNY_GEO, walkFps: 7,
+    build: (scene, key, G, look) => {
+      // Bunnies HOP: the walk frames lift the whole body off the ground rather
+      // than cycling legs, so movement reads as a bounce.
+      const m = G.hopMax;
+      const poses = [
+        { hop: 0, wiggle: 0 },
+        { hop: 0, wiggle: 1 },        // idle nose twitch
+        { hop: 0, wiggle: 0 },        // touch down
+        { hop: m * 0.75, wiggle: 0 }, // mid-hop
+        { hop: 0, wiggle: 0 },        // touch down
+        { hop: m, wiggle: 0 },        // peak hop
+      ];
+      buildPoseFrames(scene, key, G.W, G.H, (g, p) => drawBunny(g, p, look, G), poses);
+    },
+  },
+  guineaPig: {
+    geo: GUINEA_PIG_GEO, walkFps: 9,
+    build: (scene, key, G, look) =>
+      buildFrames(scene, key, G.W, G.H, (g, bob, legs) => drawGuineaPig(g, bob, legs, look, G), idleWalkLegs(1)),
+  },
+  hamster: {
+    geo: HAMSTER_GEO, walkFps: 11,
+    build: (scene, key, G, look) =>
+      buildFrames(scene, key, G.W, G.H, (g, bob, legs) => drawHamster(g, bob, legs, look, G), idleWalkLegs(1)),
+  },
+  turtle: {
+    geo: TURTLE_GEO, walkFps: 4, // slow, low-lift waddle
+    build: (scene, key, G, look) =>
+      buildFrames(scene, key, G.W, G.H, (g, bob, legs) => drawTurtle(g, bob, legs, look, G),
+        idleWalkLegs(0.75), [0, 0.5, 0, 0.5, 0, 0.5]),
+  },
+};
+
+// Base texture key for a species/stage/look, e.g.
+// "animal-dog-adult-golden-patches". Individual frames are `${base}_idle_0` etc.
+export function animalTextureKey(speciesKey, stage, look) {
+  return `animal-${speciesKey}-${stage}-${lookId(look)}`;
+}
+
+// The design-grid dimensions this species/stage is drawn at — the on-screen
+// size is these × 2 logical px (ART_SCALE up, ANIMAL_DISPLAY_SCALE back down).
+export function animalDesignSize(speciesKey, stage) {
+  const G = BUILDERS[speciesKey].geo[stage === 'baby' ? 'baby' : 'adult'];
+  return { w: G.W, h: G.H };
+}
+
+// Lazily builds the full 6-frame sheet AND the idle/walk animations for
+// `speciesKey`/`stage`/`look`, returning the base key either way. Callers do:
+//
+//   const base = ensureAnimalTextures(this, a.species, a.stage, look);
+//   const s = this.add.sprite(x, y, `${base}_idle_0`)
+//     .setOrigin(0.5, 1).setScale(ANIMAL_DISPLAY_SCALE);
+//   s.play(`${base}_idle`);          // or `${base}_walk` when moving
+export function ensureAnimalTextures(scene, speciesKey, stage, look) {
+  const spec = BUILDERS[speciesKey];
+  if (!spec) throw new Error(`ensureAnimalTextures: unknown species "${speciesKey}"`);
+  const key = animalTextureKey(speciesKey, stage, look);
+
+  if (!scene.textures.exists(`${key}_idle_0`)) {
+    spec.build(scene, key, spec.geo[stage === 'baby' ? 'baby' : 'adult'], look);
+  }
+  if (!scene.anims.exists(`${key}_idle`)) {
+    scene.anims.create({
+      key: `${key}_idle`,
+      frames: [{ key: `${key}_idle_0` }, { key: `${key}_idle_1` }],
+      frameRate: 1.6,
+      repeat: -1,
+    });
+    scene.anims.create({
+      key: `${key}_walk`,
+      frames: [0, 1, 2, 3].map((i) => ({ key: `${key}_walk_${i}` })),
+      frameRate: spec.walkFps,
+      repeat: -1,
+    });
+  }
+  return key;
+}
+
+// ── Shared props ────────────────────────────────────────────────────────────
+
 // Small cream egg with a couple of faint speckles — turtle eggs sit on the sand
-// island (DESIGN.md); the water tank/island prop itself is issue #6.
+// island (DESIGN.md).
 function drawEgg(g, w, h) {
-  g.fillStyle(0xf3e6c8, 1).fillEllipse(w / 2, h / 2, w * 0.92, h * 0.96);
+  g.fillStyle(0xf3e6c8, 1); g.fillEllipse(w / 2, h / 2, w * 0.92, h * 0.96);
+  g.fillStyle(0xfffaf0, 0.7); g.fillEllipse(w * 0.4, h * 0.36, w * 0.4, h * 0.34);
   g.fillStyle(0xe0cfa0, 1);
-  g.fillEllipse(w * 0.4, h * 0.4, 1.4, 1.4);
-  g.fillEllipse(w * 0.6, h * 0.58, 1.2, 1.2);
+  g.fillEllipse(w * 0.42, h * 0.46, 1.4, 1.4);
+  g.fillEllipse(w * 0.62, h * 0.6, 1.2, 1.2);
 }
 
 // Small hanging placard — "each cage has a name tag on top" (DESIGN.md). The
@@ -151,31 +902,21 @@ function drawNameTag(g, w, h) {
   g.fillCircle(w - 6, 3, 2);
 }
 
-// Builds the egg and name-tag textures shared by every placement. Animal
-// textures themselves are no longer pre-built here — since every animal now
-// has its own unique hue (data/looks.js), pre-building every combo up front
-// doesn't make sense; see ensureAnimalTexture() below, which builds a
-// species/stage/hue texture lazily the first time it's needed. Call once
-// from KennelScene.create() before placing any animal art.
+// Builds the egg and name-tag textures shared by every placement. Animal sheets
+// themselves are built lazily per species/stage/look — see
+// ensureAnimalTextures(). Call once from KennelScene.create().
 export function buildAnimalTextures(scene) {
   gen(scene, EGG_KEY, 10, 8, (g) => drawEgg(g, 10, 8));
   gen(scene, NAME_TAG_KEY, 60, 20, (g) => drawNameTag(g, 60, 20));
+
+  // Cheap guard: data/species.js `size` is the design grid the art is authored
+  // at, and KennelScene uses it for placement maths — warn loudly if they drift.
+  for (const [k, spec] of Object.entries(SPECIES)) {
+    const G = BUILDERS[k]?.geo.adult;
+    if (G && (spec.size.w !== G.W || spec.size.h !== G.H)) {
+      console.warn(`[animals] species.js size for ${k} (${spec.size.w}x${spec.size.h}) != art grid ${G.W}x${G.H}`);
+    }
+  }
 }
 
-// Lazily builds (and caches) the texture for `speciesKey`/`stage`/`hue`,
-// returning its key either way. Call sites should use the returned key
-// immediately, e.g.:
-//   const key = ensureAnimalTexture(this, animal.species, animal.stage, animal.hue);
-export function ensureAnimalTexture(scene, speciesKey, stage, hue) {
-  const key = animalTextureKey(speciesKey, stage, hue);
-  if (scene.textures.exists(key)) return key;
-
-  const spec = SPECIES[speciesKey];
-  const draw = DRAW[speciesKey];
-  const c = paletteForHue(speciesKey, hue);
-  const baby = stage === 'baby';
-  const w = baby ? Math.max(8, Math.round(spec.size.w * spec.babyScale)) : spec.size.w;
-  const h = baby ? Math.max(8, Math.round(spec.size.h * spec.babyScale)) : spec.size.h;
-  gen(scene, key, w, h, (g) => draw(g, w, h, c, baby));
-  return key;
-}
+export { ART_SCALE };

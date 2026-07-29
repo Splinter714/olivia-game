@@ -3,7 +3,7 @@
 // eggs) should extend the pregnancy/egg fields on rather than reshape the object.
 import { SPECIES } from './species.js';
 import { randomName, registerName } from './names.js';
-import { randomHue } from './looks.js';
+import { randomLook } from './coats.js';
 
 let _nextId = 1;
 
@@ -15,7 +15,7 @@ function nextId(speciesKey) {
 
 // Creates a plain-object animal instance for `speciesKey` (must be a key in
 // data/species.js's SPECIES). Options let callers pin any field (arrivals may
-// want a specific name from the owner, a demo may want a fixed hue);
+// want a specific name from the owner, a demo may want a fixed look);
 // anything omitted is randomized/defaulted sensibly.
 //
 //   createAnimal('dog')
@@ -28,10 +28,17 @@ function nextId(speciesKey) {
 //   name          kid-friendly name (from data/names.js unless overridden) —
 //                 guaranteed unique across every animal (data/names.js)
 //   stage         'baby' | 'adult'
-//   hue           0-359 hue driving this animal's procedural palette
-//                 (data/looks.js picks it; art/palette.js turns it into
-//                 actual colors) — guaranteed unique + well-spaced per
-//                 species so no two animals of the same species look alike
+//   look          { coat, pattern } — a NAMED realistic coat plus a named
+//                 marking pattern (data/coats.js). Dealt from a shuffled deck
+//                 of every valid combination for the species, so two animals
+//                 of the same species can't look alike until the combinations
+//                 are genuinely exhausted
+//   collar        the collar color this animal falls back to if she DOES end
+//                 up sharing a look with a kennel-mate (DESIGN.md's kitten
+//                 example). Only actually drawn when needed — see
+//                 data/distinguish.js
+//   tattoo        the small ID mark she falls back to if the collars are
+//                 exhausted too; likewise only drawn when needed
 //   isPregnant    true if she's expecting but hasn't had babies/eggs yet
 //   hasEggs       true for a turtle mom currently sitting on eggs
 //   eggCount      number of eggs, when hasEggs
@@ -46,7 +53,8 @@ export function createAnimal(speciesKey, opts = {}) {
   const spec = SPECIES[speciesKey];
   if (!spec) throw new Error(`createAnimal: unknown species "${speciesKey}"`);
 
-  const hue = opts.hue ?? randomHue(speciesKey);
+  const dealt = randomLook(speciesKey);
+  const look = opts.look ?? { coat: dealt.coat, pattern: dealt.pattern };
   const name = opts.name ?? randomName(speciesKey);
   registerName(name);
 
@@ -55,7 +63,9 @@ export function createAnimal(speciesKey, opts = {}) {
     species: speciesKey,
     name,
     stage: opts.stage ?? 'adult',
-    hue,
+    look,
+    collar: opts.collar ?? dealt.collar,
+    tattoo: opts.tattoo ?? dealt.tattoo,
     isPregnant: opts.isPregnant ?? false,
     hasEggs: opts.hasEggs ?? false,
     eggCount: opts.eggCount ?? 0,
