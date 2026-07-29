@@ -5,7 +5,7 @@
 // gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
 import { gen } from './_gen.js';
 import {
-  TURTLE, SNAKE, LITTER_BOX, CAGES, OVEN, YARD_DIVIDER_Y1, YARD_DIVIDER_Y0,
+  TURTLE, SNAKE, LITTER_BOX, CAGES, OVEN, YARD_DIVIDER_X1, YARD_DIVIDER_X0,
 } from '../data/props.js';
 
 export const TANK_KEY = 'prop-tank';
@@ -302,14 +302,14 @@ function drawDividerPost(g, w, h) {
   g.fillStyle(0xc79a63, 1).fillRoundedRect(w * 0.08, h * 0.56, w * 0.84, h * 0.16, 2);
 }
 
-// The divider's full-height fence line, redrawn only when the divider moves
-// (KennelScene just repositions this image's x — the line's own art never
-// changes).
+// The divider's full-width HORIZONTAL fence line, redrawn only when the
+// divider moves (KennelScene just repositions this image's y — the line's
+// own art never changes). A row of vertical picket panels running along x.
 function drawDividerLine(g, w, h) {
   g.fillStyle(0xc79a63, 0.92);
-  for (let y = 0; y < h; y += 26) g.fillRect(0, y, w, 16);
+  for (let x = 0; x < w; x += 26) g.fillRect(x, 0, 16, h);
   g.lineStyle(1.5, 0x8a5a34, 0.9);
-  for (let y = 0; y < h; y += 26) g.strokeRect(0.5, y + 0.5, w - 1, 15);
+  for (let x = 0; x < w; x += 26) g.strokeRect(x + 0.5, 0.5, 15, h - 1);
 }
 
 export function buildPropTextures(scene) {
@@ -335,7 +335,7 @@ export function buildPropTextures(scene) {
   gen(scene, BOX_KEY, 34, 30, (g) => drawBoxStack(g, 34, 30));
   gen(scene, BAG_KEY, 22, 30, (g) => drawBag(g, 22, 30));
   gen(scene, YARD_DIVIDER_POST_KEY, 14, 28, (g) => drawDividerPost(g, 14, 28));
-  gen(scene, YARD_DIVIDER_LINE_KEY, 8, YARD_DIVIDER_Y1 - YARD_DIVIDER_Y0, (g) => drawDividerLine(g, 8, YARD_DIVIDER_Y1 - YARD_DIVIDER_Y0));
+  gen(scene, YARD_DIVIDER_LINE_KEY, YARD_DIVIDER_X1 - YARD_DIVIDER_X0, 8, (g) => drawDividerLine(g, YARD_DIVIDER_X1 - YARD_DIVIDER_X0, 8));
 
   for (const key of Object.keys(CAGES)) {
     const { w, h } = CAGES[key][0]; // every cage in a section shares one size

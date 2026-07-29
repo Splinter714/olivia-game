@@ -7,7 +7,7 @@ import {
 import {
   TURTLE, SNAKE, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOTS, TURTLE_FEED_SPOT, COMPUTER_SPOT,
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS,
-  CAGES, cageAnimalSpot, YARD_DIVIDER_DEFAULT_X, YARD_DIVIDER_Y0, YARD_DIVIDER_Y1,
+  CAGES, cageAnimalSpot, YARD_DIVIDER_DEFAULT_Y, YARD_DIVIDER_X0, YARD_DIVIDER_X1,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
@@ -94,10 +94,10 @@ export default class KennelScene extends Phaser.Scene {
     buildPropTextures(this);
     buildRaccoonTextures(this);
 
-    // ── Yard divider (issue #20) — one movable fence post splitting the
-    // outside yard into a left/right zone at its current x. Set before
-    // _buildProps() below, which places the divider sprite at this position. ──
-    this.yardDividerX = YARD_DIVIDER_DEFAULT_X;
+    // ── Yard divider (issue #20) — one movable HORIZONTAL fence line
+    // splitting the outside yard into a top/bottom zone at its current y.
+    // Set before _buildProps() below, which places the divider sprite here. ──
+    this.yardDividerY = YARD_DIVIDER_DEFAULT_Y;
     this.carryingDivider = false;
     this._dividerVisual = null;
 
@@ -138,7 +138,7 @@ export default class KennelScene extends Phaser.Scene {
     this.leashedDog = null;        // the dog stay currently being walked outside (issue #19), or null
     this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
 
-    // (yardDividerX/carryingDivider/_dividerVisual and the scooper-rest state
+    // (yardDividerY/carryingDivider/_dividerVisual and the scooper-rest state
     // are set earlier, above _buildProps() — see that comment.)
     this.messes = [];              // { kind: 'cat', x, y, sprite } — issue #20: dogs no longer mess indoors
     this._catLitterTimer = CAT_LITTER_INTERVAL();
@@ -319,12 +319,12 @@ export default class KennelScene extends Phaser.Scene {
       this.add.image(p.x, p.y, dressingKey[p.key]).setOrigin(0.5, 1).setDepth(p.y);
     }
 
-    // Yard divider (issue #20) — a movable fence line + post splitting the
-    // outside yard into a left/right zone.
-    this.dividerLineImg = this.add.image(this.yardDividerX, YARD_DIVIDER_Y0, YARD_DIVIDER_LINE_KEY)
-      .setOrigin(0.5, 0).setDepth(0.4);
-    this.dividerPostImg = this.add.image(this.yardDividerX, (YARD_DIVIDER_Y0 + YARD_DIVIDER_Y1) / 2, YARD_DIVIDER_POST_KEY)
-      .setOrigin(0.5, 0.5).setDepth((YARD_DIVIDER_Y0 + YARD_DIVIDER_Y1) / 2);
+    // Yard divider (issue #20) — a movable HORIZONTAL fence line + post
+    // splitting the outside yard into a top/bottom zone.
+    this.dividerLineImg = this.add.image(YARD_DIVIDER_X0, this.yardDividerY, YARD_DIVIDER_LINE_KEY)
+      .setOrigin(0, 0.5).setDepth(this.yardDividerY);
+    this.dividerPostImg = this.add.image((YARD_DIVIDER_X0 + YARD_DIVIDER_X1) / 2, this.yardDividerY, YARD_DIVIDER_POST_KEY)
+      .setOrigin(0.5, 0.5).setDepth(this.yardDividerY + 0.1);
   }
 
   // (Re)creates the resting scooper sprite at its current rest spot — called
@@ -518,7 +518,7 @@ export default class KennelScene extends Phaser.Scene {
     // the computer flow) without going through _dropOffToYard again — derive
     // her zone rect from stay.yardZone whenever opts.yardBounds isn't passed,
     // so she doesn't silently lose her wander/spread bounds on a redraw.
-    const yardBounds = stay.location === LOCATION.YARD ? (opts.yardBounds || this._yardZoneRect(stay.yardZone || 'left')) : null;
+    const yardBounds = stay.location === LOCATION.YARD ? (opts.yardBounds || this._yardZoneRect(stay.yardZone || 'top')) : null;
     const bounds = cage || yardBounds || null;
     const spread = Math.min(1.7, Math.max(0.9, (bounds?.w ?? 90) / 90));
 
@@ -751,15 +751,16 @@ export default class KennelScene extends Phaser.Scene {
   }
 
   // Places a carried stay out in the yard to play (issue #20). Zone is
-  // decided by which side of the movable divider the player is standing on
-  // when they drop her off; multiple occupants of the same zone are spread
-  // in a simple grid so they don't stack.
+  // decided by which side of the movable HORIZONTAL divider the player is
+  // standing on when they drop her off (top vs. bottom, not left/right);
+  // multiple occupants of the same zone are spread in a simple grid so they
+  // don't stack.
   _dropOffToYard(stay) {
     this._carryVisual?.obj.destroy();
     this._carryVisual = null;
     this.carrying = null;
     stay.location = LOCATION.YARD;
-    const zoneKey = this.player.x < this.yardDividerX ? 'left' : 'right';
+    const zoneKey = this.player.y < this.yardDividerY ? 'top' : 'bottom';
     stay.yardZone = zoneKey;
     const rect = this._yardZoneRect(zoneKey);
     const already = this.roster.stays.filter((s) => s !== stay && s.location === LOCATION.YARD && s.yardZone === zoneKey).length;
@@ -767,13 +768,13 @@ export default class KennelScene extends Phaser.Scene {
     this._renderStay(stay, pos.x, pos.y, { yardBounds: rect });
   }
 
-  // Left/right yard rect split at the divider's current x, with a little
+  // Top/bottom yard rect split at the divider's current y, with a little
   // margin on either side of the fence line itself.
   _yardZoneRect(zoneKey) {
-    const top = YARD_DIVIDER_Y0, bottom = YARD_DIVIDER_Y1;
-    const left = OUTSIDE.x + 14, right = OUTSIDE.x + OUTSIDE.w - 14;
-    if (zoneKey === 'left') return { x: left, y: top, w: Math.max(40, this.yardDividerX - 10 - left), h: bottom - top };
-    return { x: this.yardDividerX + 10, y: top, w: Math.max(40, right - (this.yardDividerX + 10)), h: bottom - top };
+    const left = YARD_DIVIDER_X0, right = YARD_DIVIDER_X1;
+    const top = ROOM.y + 14, bottom = ROOM.y + ROOM.h - 14;
+    if (zoneKey === 'top') return { x: left, y: top, w: right - left, h: Math.max(40, this.yardDividerY - 10 - top) };
+    return { x: left, y: this.yardDividerY + 10, w: right - left, h: Math.max(40, bottom - (this.yardDividerY + 10)) };
   }
 
   // Placement spot for a stay settling into `section` — her assigned
@@ -799,8 +800,9 @@ export default class KennelScene extends Phaser.Scene {
   }
 
   // ── Yard divider (issue #20) ─────────────────────────────────────────────
-  // A single movable fence post the player can carry and set back down
-  // anywhere in the yard to re-split it into two zones at its new x.
+  // A single movable HORIZONTAL fence the player can carry and set back down
+  // anywhere in the yard to re-split it into two zones (top/bottom) at its
+  // new y.
 
   _pickUpDivider() {
     this.carryingDivider = true;
@@ -821,9 +823,10 @@ export default class KennelScene extends Phaser.Scene {
     this.carryingDivider = false;
     this._dividerVisual?.destroy();
     this._dividerVisual = null;
-    this.yardDividerX = Phaser.Math.Clamp(this.player.x, OUTSIDE.x + 40, OUTSIDE.x + OUTSIDE.w - 40);
-    this.dividerLineImg.setX(this.yardDividerX);
-    this.dividerPostImg.setPosition(this.yardDividerX, (YARD_DIVIDER_Y0 + YARD_DIVIDER_Y1) / 2).setVisible(true);
+    this.yardDividerY = Phaser.Math.Clamp(this.player.y, ROOM.y + 40, ROOM.y + ROOM.h - 40);
+    this.dividerLineImg.setY(this.yardDividerY).setDepth(this.yardDividerY);
+    this.dividerPostImg.setPosition((YARD_DIVIDER_X0 + YARD_DIVIDER_X1) / 2, this.yardDividerY)
+      .setDepth(this.yardDividerY + 0.1).setVisible(true);
     this.game.events.emit(EVENTS.NOTIFY, 'Moved the yard fence!');
   }
 
@@ -1612,7 +1615,7 @@ export default class KennelScene extends Phaser.Scene {
     }
 
     // Yard divider (issue #20) — pick it up from its current post position.
-    consider(this.yardDividerX, (YARD_DIVIDER_Y0 + YARD_DIVIDER_Y1) / 2, () => this._pickUpDivider());
+    consider((YARD_DIVIDER_X0 + YARD_DIVIDER_X1) / 2, this.yardDividerY, () => this._pickUpDivider());
 
     // Tucking animals in for the night (issue #11) — walk up to anyone not
     // yet under their blanket and interact.

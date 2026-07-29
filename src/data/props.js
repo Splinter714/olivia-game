@@ -124,13 +124,14 @@ export const TURTLE_FEED_SPOT = {
 // The outside grass strip (data/sections.js's OUTSIDE/WORLD) is the real play
 // space for any species now. A single movable divider prop splits it into two
 // zones by default ("two zones, but generalizable so they can be split
-// however the player puts them") — the divider only ever moves along x, and
-// a drop point's zone is just "which side of the divider's current x". See
-// KennelScene for the carry/drop logic that moves it.
+// however the player puts them") — the divider is a HORIZONTAL fence line
+// that only ever moves along y, and a drop point's zone is just "which side
+// of the divider's current y" (top/bottom, not left/right). See KennelScene
+// for the carry/drop logic that moves it.
 export const YARD_MARGIN = 40;
-export const YARD_DIVIDER_DEFAULT_X = OUTSIDE.x + OUTSIDE.w / 2;
-export const YARD_DIVIDER_Y0 = ROOM.y + YARD_MARGIN;
-export const YARD_DIVIDER_Y1 = ROOM.y + ROOM.h - YARD_MARGIN;
+export const YARD_DIVIDER_DEFAULT_Y = ROOM.y + ROOM.h / 2;
+export const YARD_DIVIDER_X0 = OUTSIDE.x + YARD_MARGIN;
+export const YARD_DIVIDER_X1 = OUTSIDE.x + OUTSIDE.w - YARD_MARGIN;
 
 // The reception computer (issue #10) — "the player has a computer... to send
 // a message with a picture of the babies to the owners" (DESIGN.md). Sits on
