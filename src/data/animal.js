@@ -53,16 +53,19 @@ export function createAnimal(speciesKey, opts = {}) {
   const spec = SPECIES[speciesKey];
   if (!spec) throw new Error(`createAnimal: unknown species "${speciesKey}"`);
 
+  const stage = opts.stage ?? 'adult';
   const dealt = randomLook(speciesKey);
   const look = opts.look ?? { coat: dealt.coat, pattern: dealt.pattern };
-  const name = opts.name ?? randomName(speciesKey);
+  // Adults are always girl names (every grown-up is a potential mom, per
+  // DESIGN.md's family system); babies can be a girl or boy name.
+  const name = opts.name ?? randomName(speciesKey, undefined, stage);
   registerName(name);
 
   return {
     id: opts.id ?? nextId(speciesKey),
     species: speciesKey,
     name,
-    stage: opts.stage ?? 'adult',
+    stage,
     look,
     collar: opts.collar ?? dealt.collar,
     tattoo: opts.tattoo ?? dealt.tattoo,

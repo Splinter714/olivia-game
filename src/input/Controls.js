@@ -39,6 +39,19 @@ export class Controls {
     });
     this._prevInteractDown = false;
 
+    // Known Phaser gamepad quirk (already hit and fixed in the sibling mech game,
+    // its input/Controls.js #122/#524): each Scene gets its own GamepadPlugin, and
+    // a freshly-created pad wrapper stamps `_created` at "now". Gamepad.update()
+    // then refuses to sync button/axis state until the NATIVE pad's timestamp
+    // moves past that cutoff — which only happens on a genuinely new hardware
+    // state change. A controller that was already connected (very common for
+    // Bluetooth/USB pads on iPad — often paired before the page even loads) and
+    // is then held steady reads as permanently all-zero, i.e. "not working".
+    // Force an unconditional resync for every pad already known at construction,
+    // and for any pad that connects mid-scene.
+    for (const pad of scene.input.gamepad?.getAll?.() ?? []) pad._created = 0;
+    scene.input.gamepad?.on?.('connected', (pad) => { pad._created = 0; });
+
     // Pending "walk here" request from a mouse click or a non-dragging touch tap.
     // The scene consumes it once per request via consumeTapTarget().
     this.tapTarget = null;
