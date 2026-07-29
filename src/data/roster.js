@@ -50,13 +50,49 @@ export function assignCageSlot(stays, sectionKey) {
 // How many named individuals live in the "returning guest" pool per species —
 // small on purpose so the same names come back around within a single session
 // ("every animal always comes back again someday").
-const RETURNING_POOL_SIZE = { turtle: 3, guineaPig: 2, hamster: 2, bunny: 2, cat: 3, dog: 3 };
+const RETURNING_POOL_SIZE = { turtle: 3, guineaPig: 2, hamster: 2, bunny: 2, cat: 3, dog: 3, snake: 2 };
 
 function carryKindForSpecies(speciesKey) {
   if (speciesKey === 'dog') return CARRY_KIND.LEASH;
   if (speciesKey === 'cat') return CARRY_KIND.CAGE;
   if (speciesKey === 'turtle') return CARRY_KIND.BOX;
   return CARRY_KIND.NONE;
+}
+
+// ── Family state (issue #9: "every animal should be pregnant or come with
+// eggs or babies or pregnant... usually, not guaranteed") ───────────────────
+//
+// FAMILY_CHANCE is the odds ANY arrival (fresh or returning) lands in some
+// family state at all, applied uniformly across every species: turtle/snake
+// choose between eggs, live babies, or pregnant; every other species (cat/
+// dog/guineaPig/hamster/bunny) chooses between pregnant or live babies. The
+// remaining ~15% arrive as a plain solo adult — "usually, not guaranteed".
+const FAMILY_CHANCE = 0.85;
+// A returning pool member who was already expecting last visit is weighted
+// hard toward resolving that into "arrives with the babies/hatchlings this
+// time" rather than being re-rolled like a stranger — DESIGN.md's "when they
+// go home they'll come back with babies in the future".
+const RETURNING_RESOLVES_CHANCE = 0.85;
+
+const FAMILY_STATE = { EGGS: 'eggs', PREGNANT: 'pregnant', BABIES: 'babies', SOLO: 'solo' };
+
+function rollFamilyState(speciesKey, rng) {
+  if (rng() >= FAMILY_CHANCE) return FAMILY_STATE.SOLO;
+  const eggSpecies = speciesKey === 'turtle' || speciesKey === 'snake';
+  const roll = rng();
+  if (eggSpecies) {
+    if (roll < 0.34) return FAMILY_STATE.EGGS;
+    if (roll < 0.67) return FAMILY_STATE.BABIES;
+    return FAMILY_STATE.PREGNANT;
+  }
+  return roll < 0.5 ? FAMILY_STATE.PREGNANT : FAMILY_STATE.BABIES;
+}
+
+// Cat/dog litters can run a bit bigger than everyone else's, matching the
+// counts this file already used before issue #9's probability bump.
+function babyCountFor(speciesKey, rng) {
+  const maxExtra = (speciesKey === 'cat' || speciesKey === 'dog') ? 3 : 2;
+  return 1 + Math.floor(rng() * maxExtra);
 }
 
 // Creates a fresh roster: an empty in-memory stay list plus a returning-guest
@@ -76,27 +112,32 @@ export function createRoster() {
   }
 
   // Builds the group of animal instances that arrive together for `speciesKey`,
-  // per DESIGN.md's "Moms and Babies": usually just a single adult, sometimes a
-  // family. Returns [primary, ...companions] — companions are babies that travel
-  // with the primary (mom); turtle eggs are tracked on the primary via
+  // per DESIGN.md's "Moms and Babies": usually a family (pregnant / eggs /
+  // babies — see rollFamilyState), sometimes a plain solo adult. Returns
+  // [primary, ...companions] — companions are babies that travel with the
+  // primary (mom); turtle/snake eggs are tracked on the primary via
   // hasEggs/eggCount instead of as separate instances.
-  function familyFor(speciesKey, rng) {
-    if (speciesKey === 'turtle' && rng() < 0.35) {
-      if (rng() < 0.5) {
-        const mom = createAnimal('turtle', { hasEggs: true, eggCount: 1 + Math.floor(rng() * 3) });
-        return [mom];
-      }
-      const mom = createAnimal('turtle');
-      mom.babies = Array.from({ length: 1 + Math.floor(rng() * 2) }, () => createAnimal('turtle', { stage: 'baby' }));
-      return [mom, ...mom.babies];
+  //
+  // `mom` lets a returning pool member (spawnArrival below) reuse her own
+  // animal instance instead of getting a freshly created one, so she keeps
+  // her name/look/upgrades across the roll.
+  function familyFor(speciesKey, rng, mom = null) {
+    const state = rollFamilyState(speciesKey, rng);
+    const primary = mom ?? createAnimal(speciesKey);
+    if (state === FAMILY_STATE.EGGS) {
+      primary.hasEggs = true;
+      primary.eggCount = 1 + Math.floor(rng() * 3);
+      return [primary];
     }
-    if ((speciesKey === 'cat' || speciesKey === 'dog') && rng() < 0.3) {
-      if (rng() < 0.4) return [createAnimal(speciesKey, { isPregnant: true })]; // pregnant, no babies yet
-      const mom = createAnimal(speciesKey);
-      mom.babies = Array.from({ length: 1 + Math.floor(rng() * 3) }, () => createAnimal(speciesKey, { stage: 'baby' }));
-      return [mom, ...mom.babies];
+    if (state === FAMILY_STATE.PREGNANT) {
+      primary.isPregnant = true;
+      return [primary];
     }
-    return [createAnimal(speciesKey)];
+    if (state === FAMILY_STATE.BABIES) {
+      primary.babies = Array.from({ length: babyCountFor(speciesKey, rng) }, () => createAnimal(speciesKey, { stage: 'baby' }));
+      return [primary, ...primary.babies];
+    }
+    return [primary]; // solo
   }
 
   // Issue #18: a section has a fixed CAGES_PER_SECTION (6) individual cages —
@@ -122,7 +163,21 @@ export function createRoster() {
       if (candidates.length) {
         const entry = candidates[Math.floor(rng() * candidates.length)];
         entry.available = false;
-        group = [entry.animal];
+        const mom = entry.animal;
+        const wasExpecting = mom.isPregnant || mom.hasEggs;
+        if (wasExpecting && rng() < RETURNING_RESOLVES_CHANCE) {
+          // She was already expecting when she last left — resolve that into
+          // babies/hatchlings now rather than simulating the wait, per
+          // DESIGN.md's "when they go home they'll come back with babies".
+          mom.isPregnant = false;
+          mom.hasEggs = false;
+          mom.eggCount = 0;
+          mom.babies = Array.from({ length: babyCountFor(speciesKey, rng) }, () => createAnimal(speciesKey, { stage: 'baby' }));
+          group = [mom, ...mom.babies];
+        } else {
+          if (wasExpecting) { mom.isPregnant = false; mom.hasEggs = false; mom.eggCount = 0; }
+          group = familyFor(speciesKey, rng, mom);
+        }
       }
     }
     if (!group) group = familyFor(speciesKey, rng);

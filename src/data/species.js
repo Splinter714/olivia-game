@@ -16,13 +16,15 @@
 //
 // `family` says how this species' "mom + babies" pattern (DESIGN.md "Moms and
 // Babies") is shaped — every species supports SOME family pattern, this just
-// picks which: turtles are the only species that can have EGGS as well as live
-// babies; cats/dogs have named baby forms (kittens/puppies) that stay with mom;
-// the small pets just get a generic "baby" variant since DESIGN.md doesn't detail
-// them further. Issue #9 (moms/babies/eggs) is expected to extend this, not
-// reshape it.
+// picks which: turtle/snake are the only species that can have EGGS as well as
+// live babies; cats/dogs have named baby forms (kittens/puppies) that stay with
+// mom; the small pets just get a generic "baby" variant since DESIGN.md doesn't
+// detail them further. Issue #9 (moms/babies/eggs): every species (including
+// the generic-baby ones) can also arrive `isPregnant` — that flag/the birth
+// timer plumbing (data/births.js) was already generic, not gated by `family`,
+// so no schema change was needed here to extend it.
 export const FAMILY = {
-  EGGS_OR_BABIES: 'eggsOrBabies', // turtle: mom arrives with eggs OR live babies
+  EGGS_OR_BABIES: 'eggsOrBabies', // turtle/snake: mom arrives with eggs OR live babies
   NAMED_BABIES: 'namedBabies',    // cat/dog: kittens/puppies stay with mom
   GENERIC_BABY: 'genericBaby',    // guineaPig/hamster/bunny: simple baby variant
 };
@@ -69,6 +71,13 @@ export const SPECIES = {
     family: FAMILY.NAMED_BABIES,
     size: { w: 28, h: 24 },
     babyScale: 0.55,
+  },
+  snake: {
+    key: 'snake',
+    label: '🐍 Snakes',
+    family: FAMILY.EGGS_OR_BABIES,
+    size: { w: 24, h: 10 },
+    babyScale: 0.6,
   },
 };
 

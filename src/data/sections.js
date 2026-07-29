@@ -44,7 +44,7 @@ export const RECEPTION = {
   mat:  { x: 600, y: 936, w: 90,  h: 36 },
 };
 
-// Six species sections, packed tightly (32px walkway gaps) instead of spread
+// Seven species sections, packed tightly (32px walkway gaps) instead of spread
 // across a big open floor — turtle/guineaPig/hamster along the top, bunny/cat
 // stacked in the west column below turtle, dog on the east column below
 // hamster (flush against the back-door wall for potty trips). `opening` names
@@ -53,11 +53,21 @@ export const RECEPTION = {
 // floor-tile colours (worldArt reads them). guineaPig/hamster/bunny/turtle
 // are all sized to snugly fit a 3x2 cage grid (data/props.js); cat/dog are
 // taller to also fit their shared playpen above their cage row.
+//
+// Issue #14: snakes were slotted into the top-right corner — the empty span
+// of hallway east of the hamster section and north of the dog section —
+// mirroring the turtle section's top-left corner placement (same size, same
+// flush-to-outer-wall + 'south' opening), just reflected onto the opposite
+// side of the room. This is a minimal fit, not the general layout tightening
+// the owner deferred to his own guidance later.
 export const SECTIONS = [
   // Will hold the water tank (glass cover + sand island) in a later phase.
   { key: 'turtle',    label: '🐢 Turtles',     floor: 0x9fd4c6, floorDark: 0x93c8ba, rect: { x: 24,   y: 24,  w: 304, h: 228 }, opening: 'south' },
   { key: 'guineaPig', label: '🐹 Guinea Pigs', floor: 0xeec08a, floorDark: 0xe2b47e, rect: { x: 360,  y: 24,  w: 304, h: 228 }, opening: 'south' },
   { key: 'hamster',   label: '🐹 Hamsters',    floor: 0xeedc9e, floorDark: 0xe2d092, rect: { x: 696,  y: 24,  w: 304, h: 228 }, opening: 'south' },
+  // Top-right corner, flush against the north + east walls — mirrors turtle's
+  // top-left corner placement (flush north + west) at the same size.
+  { key: 'snake',     label: '🐍 Snakes',      floor: 0xc7cf8e, floorDark: 0xbac07f, rect: { x: 1112, y: 24,  w: 304, h: 228 }, opening: 'south' },
   { key: 'bunny',     label: '🐰 Bunnies',     floor: 0xf0c2cc, floorDark: 0xe4b6c0, rect: { x: 24,   y: 284, w: 304, h: 228 }, opening: 'east' },
   // Cat playpen attaches here in a later phase.
   { key: 'cat',       label: '🐱 Cats',        floor: 0xcfc0e8, floorDark: 0xc3b4dc, rect: { x: 24,   y: 544, w: 368, h: 422 }, opening: 'east' },

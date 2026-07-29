@@ -4,7 +4,7 @@ import {
   penRects, wallRects, outsideFenceRects,
 } from '../data/sections.js';
 import {
-  TURTLE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT, COMPUTER_SPOT,
+  TURTLE, SNAKE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT, COMPUTER_SPOT,
   CAGES, cageAnimalSpot,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
@@ -26,7 +26,7 @@ import { resolveTieBreakers, effectiveLook } from '../data/distinguish.js';
 import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
-  buildPropTextures, TANK_KEY, ISLAND_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
+  buildPropTextures, TANK_KEY, ISLAND_KEY, SNAKE_TANK_KEY, SNAKE_PERCH_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
   SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY,
 } from '../art/props.js';
 import { createRoster, LOCATION, CARRY_KIND, assignCageSlot } from '../data/roster.js';
@@ -214,6 +214,12 @@ export default class KennelScene extends Phaser.Scene {
     this.add.image(TURTLE.island.x, TURTLE.island.y, ISLAND_KEY).setOrigin(0, 0).setDepth(-1.2);
     this._tankMarker = { x: TURTLE.tank.x + TURTLE.tank.w / 2, y: TURTLE.tank.y + TURTLE.tank.h - 6 };
 
+    // Snake tank + resting perch (issue #14) — same tank silhouette as the
+    // turtle's, no water-topping chore (snakes just get a bowl like everyone
+    // else — see BOWL_SPOT below).
+    this.add.image(SNAKE.tank.x, SNAKE.tank.y, SNAKE_TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
+    this.add.image(SNAKE.perch.x, SNAKE.perch.y, SNAKE_PERCH_KEY).setOrigin(0, 0).setDepth(-1.2);
+
     this.add.image(CAT_PLAYPEN.x, CAT_PLAYPEN.y, PLAYPEN_FENCE_KEY).setOrigin(0, 0).setDepth(0.5);
     this.add.image(DOG_PLAYPEN.x, DOG_PLAYPEN.y, PLAYPEN_FENCE_KEY).setOrigin(0, 0).setDepth(0.5);
 
@@ -249,6 +255,7 @@ export default class KennelScene extends Phaser.Scene {
       ...SECTIONS.flatMap((s) => penRects(s)),
       RECEPTION.desk,
       TURTLE.tank,
+      SNAKE.tank,
       ...outsideFenceRects(),
     ];
 
@@ -407,17 +414,18 @@ export default class KennelScene extends Phaser.Scene {
     const sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
     const tag = this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
 
-    // Turtle eggs/babies sit tucked close to mom on the sand island (small
-    // island, plenty of animals to share it) — tighter spacing + a little
-    // jitter instead of the wider spread used for cat/dog companions.
-    const isTurtle = animal.species === 'turtle';
+    // Turtle/snake eggs/babies sit tucked close to mom on the shared
+    // island/perch (small space, plenty of animals to share it) — tighter
+    // spacing + a little jitter instead of the wider spread used for cat/dog
+    // companions.
+    const sharesHome = animal.species === 'turtle' || animal.species === 'snake';
     const extras = [];
-    let cx = x + sprite.displayWidth * (isTurtle ? 0.4 : 0.55);
+    let cx = x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);
     if (animal.hasEggs) {
       for (let i = 0; i < animal.eggCount; i++) {
         const jitterY = (Math.random() - 0.5) * 6;
         extras.push(this.add.image(cx, y - 1 + jitterY, EGG_KEY).setOrigin(0.5, 1).setDepth(y - 1));
-        cx += isTurtle ? 7 : 10;
+        cx += sharesHome ? 7 : 10;
       }
     }
 
@@ -426,7 +434,7 @@ export default class KennelScene extends Phaser.Scene {
     // ID tattoo once the collars run out — drawn straight into their art by
     // the tie-breaker resolution above (data/distinguish.js).
     for (const baby of stay.companions) {
-      const jitterY = isTurtle ? (Math.random() - 0.5) * 6 : 0;
+      const jitterY = sharesHome ? (Math.random() - 0.5) * 6 : 0;
       extras.push(this._addAnimalSprite(cx, y + jitterY, baby, 'baby', tb));
 
       // Tiny label under each baby — "???" until the owner names it via the
@@ -440,7 +448,7 @@ export default class KennelScene extends Phaser.Scene {
         padding: { x: 2, y: 0 },
       }).setOrigin(0.5, 0).setDepth(y + 0.2));
 
-      cx += isTurtle ? 9 : 14;
+      cx += sharesHome ? 9 : 14;
     }
 
     // Issue #12: a small gold sparkle per upgrade this specific animal has
@@ -572,14 +580,16 @@ export default class KennelScene extends Phaser.Scene {
   }
 
   // Placement spot for the `index`-th stay already in a section (for the
-  // turtle island's spiral spread and the cat/dog playpen's day-time grid).
-  // Turtles place on the sand island (golden-angle spiral so multiples don't
-  // stack exactly, per DESIGN.md's "plenty of space for everyone"). Cats/dogs
-  // play in their shared playpen by day; at night KennelScene moves them into
-  // their own individual cage instead (see _moveCatsDogsToCages). Everyone
-  // else always uses their assigned individual cage (issue #18).
+  // turtle island / snake perch's spiral spread and the cat/dog playpen's
+  // day-time grid). Turtles/snakes place on their shared island/perch
+  // (golden-angle spiral so multiples don't stack exactly, per DESIGN.md's
+  // "plenty of space for everyone"). Cats/dogs play in their shared playpen
+  // by day; at night KennelScene moves them into their own individual cage
+  // instead (see _moveCatsDogsToCages). Everyone else always uses their
+  // assigned individual cage (issue #18).
   _sectionSlot(section, index, stay) {
-    if (section.key === 'turtle') return this._islandSlot(index);
+    if (section.key === 'turtle') return this._islandSlot(index, TURTLE.island);
+    if (section.key === 'snake') return this._islandSlot(index, SNAKE.perch);
     const playpen = PLAYPEN_RECT[section.key];
     if (playpen && !this.night.active) return this._gridSlot(playpen, index, 20, 42, 56);
     const cage = CAGES[section.key]?.[stay?.cageSlot];
@@ -599,11 +609,12 @@ export default class KennelScene extends Phaser.Scene {
     };
   }
 
-  // Spreads points across the sand island using the golden angle, so
-  // successive turtles/eggs land at visibly different spots rather than
-  // clustering — "plenty of space for everyone" (DESIGN.md).
-  _islandSlot(index) {
-    const { x, y, w, h } = TURTLE.island;
+  // Spreads points across the sand island/perch using the golden angle, so
+  // successive turtles/snakes/eggs land at visibly different spots rather
+  // than clustering — "plenty of space for everyone" (DESIGN.md). `rect` is
+  // TURTLE.island for turtles, SNAKE.perch for snakes.
+  _islandSlot(index, rect) {
+    const { x, y, w, h } = rect;
     const cx = x + w / 2, cy = y + h / 2;
     const GOLDEN_ANGLE = 2.399963;
     const ring = Math.floor(Math.sqrt(index + 0.5));
@@ -749,8 +760,8 @@ export default class KennelScene extends Phaser.Scene {
     }
   }
 
-  // Turns a turtle mom's eggs into hatchlings, or gives a pregnant mom (any
-  // species) 1-2 babies — either way the new babies start unnamed
+  // Turns a turtle/snake mom's eggs into hatchlings, or gives a pregnant mom
+  // (any species) 1-2 babies — either way the new babies start unnamed
   // (BABY_PLACEHOLDER) until the player sends the owner an announcement via
   // the reception computer (issue #10), and the stay is flagged so the
   // computer's "needs attention" icon picks it up.
@@ -759,14 +770,14 @@ export default class KennelScene extends Phaser.Scene {
     const rec = this._staySprites.get(stay);
     const pos = rec ? { ...rec.pos } : null;
 
-    if (stay.animal.species === 'turtle' && stay.animal.hasEggs) {
+    if (stay.animal.hasEggs) {
       const count = stay.animal.eggCount;
       stay.animal.hasEggs = false;
       stay.animal.eggCount = 0;
       // "Then you take out the shells!" (DESIGN.md) — the egg extras are
       // simply gone once _renderStay redraws below; no separate pickup step.
       const babies = Array.from({ length: count }, () =>
-        createAnimal('turtle', { stage: 'baby', name: BABY_PLACEHOLDER }));
+        createAnimal(stay.animal.species, { stage: 'baby', name: BABY_PLACEHOLDER }));
       stay.companions = [...stay.companions, ...babies];
       stay.needsAnnouncement = true;
       this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s eggs are hatching!`);

@@ -3,10 +3,12 @@
 // food/water bowls, potty messes, and the small "needs attention" bubbles.
 // Same gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
 import { gen } from './_gen.js';
-import { TURTLE, CAT_PLAYPEN, LITTER_BOX, CAGES } from '../data/props.js';
+import { TURTLE, SNAKE, CAT_PLAYPEN, LITTER_BOX, CAGES } from '../data/props.js';
 
 export const TANK_KEY = 'prop-tank';
 export const ISLAND_KEY = 'prop-island';
+export const SNAKE_TANK_KEY = 'prop-snake-tank';
+export const SNAKE_PERCH_KEY = 'prop-snake-perch';
 export const PLAYPEN_FENCE_KEY = 'prop-playpen-fence';
 export const LITTER_BOX_KEY = 'prop-litter-box';
 export const SCOOPER_KEY = 'prop-scooper';
@@ -40,6 +42,26 @@ function drawIsland(g, w, h) {
   g.fillCircle(w * 0.3, h * 0.4, 2);
   g.fillCircle(w * 0.68, h * 0.6, 1.6);
   g.fillCircle(w * 0.5, h * 0.7, 1.4);
+}
+
+// Snake tank (issue #14): same glass-covered-tank silhouette as the turtle
+// tank, but drier — a sandy substrate instead of blue water, since a snake
+// needs a solid resting surface, not "lots of water".
+function drawSnakeTank(g, w, h) {
+  g.fillStyle(0x8a6a3e, 1).fillRoundedRect(0, 0, w, h, 10);
+  g.fillStyle(0xd9c9a0, 0.9).fillRoundedRect(3, 3, w - 6, h - 6, 8);
+  g.fillStyle(0xeee6d0, 0.35).fillRoundedRect(6, 4, w - 12, h * 0.14, 6); // glass-cover highlight
+  g.lineStyle(3, 0xcfe9f2, 0.55).strokeRoundedRect(1.5, 1.5, w - 3, h - 3, 9); // glass sheen
+}
+
+// A simple resting branch the snakes (and their eggs) coil around, sitting
+// inside the tank — the snake-section equivalent of the turtle's sand island.
+function drawSnakePerch(g, w, h) {
+  g.fillStyle(0x6b4426, 1).fillRoundedRect(0, h * 0.3, w, h * 0.44, h * 0.2);
+  g.fillStyle(0x8a5a34, 1).fillRoundedRect(0, h * 0.3, w, h * 0.18, h * 0.12);
+  g.fillStyle(0x4f3018, 1);
+  g.fillCircle(w * 0.08, h * 0.52, h * 0.28);
+  g.fillCircle(w * 0.92, h * 0.52, h * 0.24);
 }
 
 // Low playpen corral — a friendlier, rounder fence than the section's own
@@ -162,6 +184,8 @@ function drawCagePen(g, w, h) {
 export function buildPropTextures(scene) {
   gen(scene, TANK_KEY, TURTLE.tank.w, TURTLE.tank.h, (g) => drawTank(g, TURTLE.tank.w, TURTLE.tank.h));
   gen(scene, ISLAND_KEY, TURTLE.island.w, TURTLE.island.h, (g) => drawIsland(g, TURTLE.island.w, TURTLE.island.h));
+  gen(scene, SNAKE_TANK_KEY, SNAKE.tank.w, SNAKE.tank.h, (g) => drawSnakeTank(g, SNAKE.tank.w, SNAKE.tank.h));
+  gen(scene, SNAKE_PERCH_KEY, SNAKE.perch.w, SNAKE.perch.h, (g) => drawSnakePerch(g, SNAKE.perch.w, SNAKE.perch.h));
   gen(scene, PLAYPEN_FENCE_KEY, CAT_PLAYPEN.w, CAT_PLAYPEN.h, (g) => drawPlaypenFence(g, CAT_PLAYPEN.w, CAT_PLAYPEN.h));
   gen(scene, LITTER_BOX_KEY, LITTER_BOX.w, LITTER_BOX.h, (g) => drawLitterBox(g, LITTER_BOX.w, LITTER_BOX.h));
   gen(scene, SCOOPER_KEY, 26, 32, (g) => drawScooper(g, 26, 32));

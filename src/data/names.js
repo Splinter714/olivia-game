@@ -82,6 +82,17 @@ export const NAME_POOLS = {
       'Winston', 'Peanut', 'Scout', 'Ranger', 'Waffles', 'Gus', 'Bear',
     ],
   },
+  snake: {
+    girl: [
+      'Noodle', 'Ribbon', 'Sable', 'Jade', 'Autumn', 'Sassy',
+      'Kiwi', 'Mocha', 'Ember', 'Sierra', 'Cinder', 'Onyx',
+      'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
+    ],
+    boy: [
+      'Slinky', 'Fang', 'Rusty', 'Monty', 'Gordon',
+      'Zippy', 'Rope', 'Cobra', 'Diesel', 'Loki',
+    ],
+  },
 };
 
 const FALLBACK_POOL = { girl: ['Pal'], boy: ['Pal'] };

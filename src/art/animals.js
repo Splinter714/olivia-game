@@ -774,6 +774,86 @@ function drawTurtle(g, bob, [lhf, lhn, lff, lfn], look, G) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SNAKE — design grid 24x10 (hatchling 15x7). No legs — an S-curve chain of
+// overlapping segments that undulates to slither, modeled on the turtle's
+// slow low-lift gait but with a wave instead of a leg cycle.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SNAKE_GEO = {
+  adult: {
+    W: 24, H: 10, segs: 6, segR: 2.1, ampY: 2.6, headR: 2.6,
+    head: { cx: 21, cy: 5 },
+    eye: { dx: 0.9, dy: -0.7, w: 0.9, h: 0.9 },
+    tongue: { len: 2.4 },
+    dot: { x: 12, y: 4, rad: 1.0 },
+    tattoo: { x: 5, y: 7 },
+  },
+  baby: {
+    W: 15, H: 7, segs: 5, segR: 1.3, ampY: 1.7, headR: 1.6,
+    head: { cx: 13, cy: 3.4 },
+    eye: { dx: 0.6, dy: -0.4, w: 0.6, h: 0.6 },
+    tongue: { len: 1.5 },
+    dot: { x: 7.5, y: 2.6, rad: 0.65 },
+    tattoo: { x: 3, y: 4.6 },
+  },
+};
+
+// `pose` is { phase, bob, tongue } — `phase` shifts the sine wave the body
+// segments trace, so cycling it across frames reads as a slither; `tongue`
+// flicks a little forked tongue out on the frames that want it.
+function drawSnake(g, pose, look, G) {
+  const c = coatDef('snake', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'solid';
+  const { segs, segR, ampY, headR } = G;
+  const bob = pose.bob || 0;
+  const phase = pose.phase || 0;
+  const waveAt = (t) => Math.sin(t * Math.PI * 1.6 + phase) * ampY * (0.4 + 0.6 * t);
+
+  // ── Body ── a chain of overlapping circles tracing an S-curve from the
+  // tail (left) to the head (right), thickening toward the head.
+  const pts = [];
+  for (let i = 0; i < segs; i++) {
+    const t = i / (segs - 1);
+    const x = 2 + t * (G.head.cx - headR * 0.6 - 2);
+    pts.push({ x, y: G.head.cy + bob + waveAt(t), r: segR * (0.55 + 0.45 * t) });
+  }
+  g.fillStyle(lo, 1);
+  pts.forEach((p) => g.fillCircle(p.x, p.y + 0.6, p.r));
+  g.fillStyle(mid, 1);
+  pts.forEach((p) => g.fillCircle(p.x, p.y, p.r));
+  g.fillStyle(c.belly, 1);
+  pts.forEach((p) => g.fillCircle(p.x, p.y + p.r * 0.35, p.r * 0.55));
+  g.fillStyle(hi, 1);
+  pts.forEach((p) => g.fillCircle(p.x - p.r * 0.2, p.y - p.r * 0.4, p.r * 0.5));
+
+  if (pat === 'banded') {
+    g.fillStyle(c.mark, 1);
+    pts.forEach((p, i) => { if (i % 2 === 0) g.fillCircle(p.x, p.y, p.r * 0.8); });
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+  // Snakes don't wear collars in a tank — a dab of coloured paint on the
+  // scales does the same job as the turtle's shell dot.
+  drawShellDot(g, { x: G.dot.x, y: G.dot.y + bob, rad: G.dot.rad }, look?.collar);
+
+  // ── Head ── a slightly bigger circle at the end, with an eye and a
+  // flicking tongue on frames that want one.
+  const hx = G.head.cx;
+  const hy = G.head.cy + bob + waveAt(1);
+  g.fillStyle(mid, 1); g.fillCircle(hx, hy, headR);
+  g.fillStyle(hi, 1);  g.fillCircle(hx - headR * 0.25, hy - headR * 0.35, headR * 0.45);
+  g.fillStyle(c.eye, 1);       g.fillRect(hx + G.eye.dx, hy + G.eye.dy, G.eye.w, G.eye.h);
+  g.fillStyle(0xffffff, 0.7);  g.fillRect(hx + G.eye.dx, hy + G.eye.dy, G.eye.w * 0.5, G.eye.h * 0.5);
+  if (pose.tongue) {
+    g.fillStyle(0xd94f4f, 1);
+    const tx = hx + headR + G.tongue.len;
+    g.fillTriangle(hx + headR * 0.9, hy, tx, hy - 0.6, hx + headR + G.tongue.len * 0.6, hy);
+    g.fillTriangle(hx + headR * 0.9, hy, tx, hy + 0.6, hx + headR + G.tongue.len * 0.6, hy);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Species registry + texture building
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -832,6 +912,20 @@ const BUILDERS = {
     build: (scene, key, G, look) =>
       buildFrames(scene, key, G.W, G.H, (g, bob, legs) => drawTurtle(g, bob, legs, look, G),
         idleWalkLegs(0.75), [0, 0.5, 0, 0.5, 0, 0.5]),
+  },
+  snake: {
+    geo: SNAKE_GEO, walkFps: 5, // slow slither
+    build: (scene, key, G, look) => {
+      const poses = [
+        { phase: 0, bob: 0, tongue: false },
+        { phase: 0.3, bob: 0, tongue: true }, // idle tongue flick
+        { phase: 0, bob: 0, tongue: false },
+        { phase: Math.PI * 0.5, bob: 0.4, tongue: false },
+        { phase: Math.PI, bob: 0, tongue: false },
+        { phase: Math.PI * 1.5, bob: 0.4, tongue: false },
+      ];
+      buildPoseFrames(scene, key, G.W, G.H, (g, p) => drawSnake(g, p, look, G), poses);
+    },
   },
 };
 

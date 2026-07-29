@@ -186,6 +186,39 @@ const TURTLE_COATS = {
   },
 };
 
+// ── Snakes (issue #14) ──────────────────────────────────────────────────────
+// Two plain solid colours plus two named banded morphs — the banded ones bake
+// their band colour in as `mark` and restrict themselves to the 'banded'
+// pattern via `patterns` below (the same trick CAT_COATS' calico/tuxedo use),
+// so a black-and-white snake is always drawn banded and a green/brown one is
+// always drawn solid.
+const SNAKE_COATS = {
+  green: {
+    label: 'Green',
+    body: { hi: 0x8fbf5a, mid: 0x6a9c3e, lo: 0x486e29 },
+    belly: 0xdadfb2, eye: 0x140f08, mark: 0x486e29,
+    patterns: ['solid'],
+  },
+  brownTan: {
+    label: 'Brown & Tan',
+    body: { hi: 0xc9a15f, mid: 0xa17a3f, lo: 0x785929 },
+    belly: 0xe9d9b1, eye: 0x140f08, mark: 0x785929,
+    patterns: ['solid'],
+  },
+  blackWhiteBanded: {
+    label: 'Black & White Banded',
+    body: { hi: 0x4a4750, mid: 0x312e36, lo: 0x1c1a20 },
+    belly: 0xf0ece4, eye: 0xe0c64a, mark: 0xf0ece4,
+    patterns: ['banded'],
+  },
+  orangeBlackBanded: {
+    label: 'Orange & Black Banded',
+    body: { hi: 0xe8862c, mid: 0xd06a18, lo: 0x9c4c10 },
+    belly: 0xf3d6a8, eye: 0x140f08, mark: 0x241f20,
+    patterns: ['banded'],
+  },
+};
+
 export const COATS = {
   dog: DOG_COATS,
   cat: CAT_COATS,
@@ -193,6 +226,7 @@ export const COATS = {
   guineaPig: GUINEA_PIG_COATS,
   hamster: HAMSTER_COATS,
   turtle: TURTLE_COATS,
+  snake: SNAKE_COATS,
 };
 
 // Species-wide pattern lists. A coat may narrow this via its own `patterns`
@@ -205,6 +239,7 @@ export const PATTERNS = {
   guineaPig: ['solid', 'triColor', 'crested'],
   hamster: ['solid', 'banded'],
   turtle: ['plain', 'starburst', 'rings', 'speckled'], // shell markings
+  snake: ['solid', 'banded'],
 };
 
 // Collar colours, in the order they're handed out to look-alikes. Kept few and
