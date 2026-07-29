@@ -219,6 +219,36 @@ const SNAKE_COATS = {
   },
 };
 
+// ── Birds (issue #24) ───────────────────────────────────────────────────────
+// Four cheerful pet-bird looks: a plain-blue budgie/parakeet, a red cardinal,
+// a yellow canary, and a brown speckled sparrow. `wing`/`beak` are flat
+// colours the art asks for directly; `mark` (speckled sparrow only) is the
+// darker speckle colour scattered over the body/wing.
+const BIRD_COATS = {
+  blue: {
+    label: 'Blue',
+    body: { hi: 0x7ec4e8, mid: 0x4f9fd6, lo: 0x3679ac },
+    wing: 0x2e5f8a, belly: 0xdff0f7, beak: 0xe8b34a, eye: 0x1c1410,
+  },
+  cardinal: {
+    label: 'Red',
+    body: { hi: 0xf16f5c, mid: 0xd9432c, lo: 0xac2e1c },
+    wing: 0x8a2418, belly: 0xf7c8a8, beak: 0xe8622a, eye: 0x1c1410,
+  },
+  canary: {
+    label: 'Yellow',
+    body: { hi: 0xf9e675, mid: 0xf0cf3e, lo: 0xc7a323 },
+    wing: 0xb08a1e, belly: 0xfdf6cf, beak: 0xe8862c, eye: 0x1c1410,
+  },
+  sparrow: {
+    label: 'Brown & Speckled',
+    body: { hi: 0xc7a473, mid: 0xa17e4d, lo: 0x785c34 },
+    wing: 0x5c4526, belly: 0xe9dcc0, beak: 0x8a6a3e, eye: 0x1c1410,
+    mark: 0x4a3620,
+    patterns: ['speckled'],
+  },
+};
+
 export const COATS = {
   dog: DOG_COATS,
   cat: CAT_COATS,
@@ -227,6 +257,7 @@ export const COATS = {
   hamster: HAMSTER_COATS,
   turtle: TURTLE_COATS,
   snake: SNAKE_COATS,
+  bird: BIRD_COATS,
 };
 
 // Species-wide pattern lists. A coat may narrow this via its own `patterns`
@@ -240,6 +271,7 @@ export const PATTERNS = {
   hamster: ['solid', 'banded'],
   turtle: ['plain', 'starburst', 'rings', 'speckled'], // shell markings
   snake: ['solid', 'banded'],
+  bird: ['solid', 'speckled'],
 };
 
 // Collar colours, in the order they're handed out to look-alikes. Kept few and

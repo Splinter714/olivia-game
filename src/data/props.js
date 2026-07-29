@@ -109,7 +109,7 @@ function bowlSpotForCage(cage) {
   return { x: cage.x + cage.w - 6, y: cage.y + cage.h - 4 };
 }
 export const BOWL_SPOTS = Object.fromEntries(
-  ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog'].map((key) => [key, CAGES[key].map(bowlSpotForCage)]),
+  ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'].map((key) => [key, CAGES[key].map(bowlSpotForCage)]),
 );
 
 // Turtle feeding spot (issue #20 follow-up): a little lettuce-leaf marker at
@@ -129,8 +129,8 @@ export const TURTLE_FEED_SPOT = {
 // KennelScene for the carry/drop logic that moves it.
 export const YARD_MARGIN = 40;
 export const YARD_DIVIDER_DEFAULT_X = OUTSIDE.x + OUTSIDE.w / 2;
-export const YARD_DIVIDER_Y0 = YARD_MARGIN;
-export const YARD_DIVIDER_Y1 = ROOM.h - YARD_MARGIN;
+export const YARD_DIVIDER_Y0 = ROOM.y + YARD_MARGIN;
+export const YARD_DIVIDER_Y1 = ROOM.y + ROOM.h - YARD_MARGIN;
 
 // The reception computer (issue #10) — "the player has a computer... to send
 // a message with a picture of the babies to the owners" (DESIGN.md). Sits on

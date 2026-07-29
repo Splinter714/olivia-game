@@ -71,6 +71,29 @@ function drawPerchSlot(g, w, h) {
   g.fillCircle(w * 0.86, h * 0.53, h * 0.13);
 }
 
+// A small individual twig nest (issue #24) — one per bird cage slot, sitting
+// in place of the wire pen every other land species gets. A loosely woven
+// ring of twigs on the cage floor, just big enough to hold a bird and its
+// eggs/chicks; no wire mesh — birds' cages read as a simple perch-and-nest
+// setup rather than the same pen as guinea pigs/hamsters/bunnies/cats/dogs.
+function drawNestSlot(g, w, h) {
+  g.fillStyle(0xe8d9b0, 1).fillRoundedRect(2, h * 0.5, w - 4, h * 0.46, 4); // floor pad (matches drawCagePen)
+  g.fillStyle(0x8a5a34, 1).fillRoundedRect(w / 2 - 5, 0, 10, 6, 2);         // name-tag mount
+  // Woven twig ring.
+  g.fillStyle(0x8a6a3e, 1).fillEllipse(w * 0.5, h * 0.62, w * 0.66, h * 0.4);
+  g.fillStyle(0xc79a63, 1).fillEllipse(w * 0.5, h * 0.58, w * 0.5, h * 0.3);
+  g.lineStyle(1.4, 0x6b4a26, 0.8);
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    g.lineBetween(
+      w * 0.5 + Math.cos(a) * w * 0.3, h * 0.62 + Math.sin(a) * h * 0.18,
+      w * 0.5 - Math.cos(a) * w * 0.3, h * 0.62 - Math.sin(a) * h * 0.18,
+    );
+  }
+  // Soft hollow in the middle where eggs/chicks sit.
+  g.fillStyle(0xf2e6c8, 0.9).fillEllipse(w * 0.5, h * 0.56, w * 0.28, h * 0.16);
+}
+
 function drawLitterBox(g, w, h) {
   g.fillStyle(0x8a8a94, 1).fillRoundedRect(0, 0, w, h, 5);
   g.fillStyle(0xd9c9a0, 1).fillRoundedRect(3, 3, w - 6, h - 6, 3);
@@ -318,6 +341,7 @@ export function buildPropTextures(scene) {
     const { w, h } = CAGES[key][0]; // every cage in a section shares one size
     if (key === 'turtle') gen(scene, CAGE_KEY[key], w, h, (g) => drawIslandSlot(g, w, h));
     else if (key === 'snake') gen(scene, CAGE_KEY[key], w, h, (g) => drawPerchSlot(g, w, h));
+    else if (key === 'bird') gen(scene, CAGE_KEY[key], w, h, (g) => drawNestSlot(g, w, h));
     else gen(scene, CAGE_KEY[key], w, h, (g) => drawCagePen(g, w, h));
   }
 }

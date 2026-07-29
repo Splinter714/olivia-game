@@ -79,6 +79,16 @@ export const SPECIES = {
     size: { w: 24, h: 10 },
     babyScale: 0.6,
   },
+  // Issue #24: birds — like turtles/snakes, a bird mom can arrive with eggs
+  // OR live chicks, hatching in a nest rather than sitting on a sand island
+  // or perch (data/props.js/art/props.js's nest-styled cage slot).
+  bird: {
+    key: 'bird',
+    label: '🐦 Birds',
+    family: FAMILY.EGGS_OR_BABIES,
+    size: { w: 16, h: 14 },
+    babyScale: 0.6,
+  },
 };
 
 export const SPECIES_LIST = Object.values(SPECIES);

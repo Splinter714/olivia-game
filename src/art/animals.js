@@ -853,6 +853,113 @@ function drawSnake(g, pose, look, G) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// BIRD (issue #24) — design grid 16x14 (chick 10x9). Hops instead of walking,
+// like the bunny, plus a little wing flutter on the idle/mid-hop frames.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const BIRD_GEO = {
+  adult: {
+    W: 16, H: 14, hopMax: 3,
+    leg: { cx: 7.4, spread: 1.2, topY: 10.4, w: 1, h: 2.6, pawW: 2.2, pawH: 0.8 },
+    tail: { x: 0.4, y: 6.2, w: 3.2, h: 2.6 },
+    body: { cx: 7.6, cy: 7.8, w: 9.6, h: 7.4 },
+    belly: { cx: 7.8, cy: 9.6, w: 6, h: 2.2 },
+    wing: { cx: 6.6, cy: 7.4, w: 5.6, h: 4.4 },
+    neck: { x: 11, y: 4.6, w: 2.2, h: 3 },
+    head: { cx: 13, cy: 4.6, r: 2.6 },
+    beak: { x: 15.2, y: 4.2, w: 2.2, h: 1.5 },
+    eye: { x: 13.6, y: 3.5, w: 1, h: 1 },
+    dot: { x: 4.4, y: 5.4, rad: 1 },
+    tattoo: { x: 2.4, y: 9 },
+  },
+  baby: {
+    W: 10, H: 9, hopMax: 2,
+    leg: { cx: 4.6, spread: 0.8, topY: 6.6, w: 0.7, h: 1.7, pawW: 1.4, pawH: 0.5 },
+    tail: { x: 0.2, y: 4, w: 2, h: 1.7 },
+    body: { cx: 4.8, cy: 5, w: 6.2, h: 4.8 },
+    belly: { cx: 4.9, cy: 6.2, w: 3.8, h: 1.4 },
+    wing: { cx: 4.2, cy: 4.8, w: 3.6, h: 2.9 },
+    neck: { x: 6.8, y: 3, w: 1.4, h: 1.9 },
+    head: { cx: 8, cy: 3, r: 1.7 },
+    beak: { x: 9.4, y: 2.7, w: 1.4, h: 1 },
+    eye: { x: 8.4, y: 2.3, w: 0.65, h: 0.65 },
+    dot: { x: 2.8, y: 3.5, rad: 0.65 },
+    tattoo: { x: 1.5, y: 5.8 },
+  },
+};
+
+// `pose` is { hop, flap } — `hop` lifts the whole body (birds hop, not walk,
+// same idea as the bunny); `flap` raises the wing a touch on the frames that
+// want a flutter (idle and mid-hop).
+function drawBird(g, pose, look, G) {
+  const c = coatDef('bird', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'solid';
+  const lift = pose.hop || 0;
+  const flap = pose.flap || 0;
+  const b = G.body;
+  const L = G.leg;
+
+  // ── Legs + feet ── thin stalks, tucked up together mid-hop.
+  g.fillStyle(c.beak, 1);
+  g.fillRect(L.cx - L.spread - L.w / 2, L.topY - lift, L.w, L.h);
+  g.fillRect(L.cx + L.spread - L.w / 2, L.topY - lift, L.w, L.h);
+  g.fillRect(L.cx - L.spread - L.pawW * 0.4, L.topY + L.h - lift, L.pawW, L.pawH);
+  g.fillRect(L.cx + L.spread - L.pawW * 0.4, L.topY + L.h - lift, L.pawW, L.pawH);
+
+  // ── Tail ── short, fanned feathers pointing back-and-down.
+  g.fillStyle(lo, 1);  g.fillRect(G.tail.x, G.tail.y - lift, G.tail.w, G.tail.h);
+  g.fillStyle(mid, 1); g.fillRect(G.tail.x + G.tail.w * 0.3, G.tail.y - lift, G.tail.w * 0.5, G.tail.h * 0.7);
+
+  // ── Body ── round little puff.
+  g.fillStyle(mid, 1);     g.fillEllipse(b.cx, b.cy - lift, b.w, b.h);
+  g.fillStyle(hi, 1);      g.fillEllipse(b.cx, b.cy - lift - b.h * 0.26, b.w * 0.68, b.h * 0.32);
+  g.fillStyle(c.belly, 1); g.fillEllipse(G.belly.cx, G.belly.cy - lift, G.belly.w, G.belly.h);
+
+  // ── Pattern overlay ── sparrow speckling.
+  if (pat === 'speckled') {
+    const d = Math.max(0.5, b.h * 0.12);
+    g.fillStyle(c.mark, 0.85);
+    [[-0.22, -0.12], [-0.02, 0.1], [0.16, -0.18], [0.24, 0.08], [-0.1, 0.2], [0.05, -0.24]]
+      .forEach(([fx, fy]) => g.fillRect(b.cx + b.w * fx, b.cy - lift + b.h * fy, d, d));
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y - lift, look?.tattoo, c.body);
+
+  // ── Wing ── overlaps the body, tip lifting a little on a flutter frame.
+  g.fillStyle(lo, 1);
+  g.fillEllipse(G.wing.cx, G.wing.cy - lift - flap, G.wing.w, G.wing.h);
+  g.fillStyle(c.wing, 1);
+  g.fillEllipse(G.wing.cx - G.wing.w * 0.1, G.wing.cy - lift - flap - G.wing.h * 0.06, G.wing.w * 0.68, G.wing.h * 0.58);
+
+  // Birds don't wear a collar — a small dab of coloured paint on the wing
+  // does the same tie-breaking job (same trick as the turtle/snake dot).
+  drawShellDot(g, { x: G.dot.x, y: G.dot.y - lift, rad: G.dot.rad }, look?.collar);
+
+  // ── Neck + head ──
+  g.fillStyle(mid, 1); g.fillRect(G.neck.x, G.neck.y - lift, G.neck.w, G.neck.h);
+  const hd = G.head;
+  g.fillStyle(mid, 1); g.fillCircle(hd.cx, hd.cy - lift, hd.r);
+  g.fillStyle(hi, 1);  g.fillCircle(hd.cx - hd.r * 0.3, hd.cy - lift - hd.r * 0.4, hd.r * 0.42);
+  if (pat === 'speckled') {
+    g.fillStyle(c.mark, 0.7);
+    g.fillRect(hd.cx - hd.r * 0.5, hd.cy - lift - hd.r * 0.2, hd.r * 0.5, hd.r * 0.4);
+  }
+
+  // ── Beak ──
+  g.fillStyle(c.beak, 1);
+  g.fillTriangle(
+    G.beak.x, G.beak.y - lift,
+    G.beak.x + G.beak.w, G.beak.y - lift + G.beak.h * 0.4,
+    G.beak.x, G.beak.y - lift + G.beak.h,
+  );
+
+  // ── Eye ──
+  g.fillStyle(c.eye, 1);      g.fillRect(G.eye.x, G.eye.y - lift, G.eye.w, G.eye.h);
+  g.fillStyle(0xffffff, 0.85); g.fillRect(G.eye.x, G.eye.y - lift, G.eye.w * 0.4, G.eye.h * 0.4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Species registry + texture building
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -924,6 +1031,23 @@ const BUILDERS = {
         { phase: Math.PI * 1.5, bob: 0.4, tongue: false },
       ];
       buildPoseFrames(scene, key, G.W, G.H, (g, p) => drawSnake(g, p, look, G), poses);
+    },
+  },
+  bird: {
+    geo: BIRD_GEO, walkFps: 9,
+    build: (scene, key, G, look) => {
+      // Birds HOP, same idea as the bunny, plus a wing flutter on the idle
+      // and mid-hop frames.
+      const m = G.hopMax;
+      const poses = [
+        { hop: 0, flap: 0 },
+        { hop: 0, flap: 1.2 },        // idle wing flutter
+        { hop: 0, flap: 0 },          // touch down
+        { hop: m * 0.75, flap: 0.7 }, // mid-hop
+        { hop: 0, flap: 0 },          // touch down
+        { hop: m, flap: 0.9 },        // peak hop
+      ];
+      buildPoseFrames(scene, key, G.W, G.H, (g, p) => drawBird(g, p, look, G), poses);
     },
   },
 };

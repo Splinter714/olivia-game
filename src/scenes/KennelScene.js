@@ -184,8 +184,8 @@ export default class KennelScene extends Phaser.Scene {
 
   _drawWorld() {
     // Base hallway floor + outside grass, under the section floors.
-    this.add.tileSprite(0, 0, ROOM.w, ROOM.h, 'tile-wood').setOrigin(0, 0).setDepth(-3);
-    this.add.tileSprite(OUTSIDE.x, 0, OUTSIDE.w, ROOM.h, 'tile-grass').setOrigin(0, 0).setDepth(-3);
+    this.add.tileSprite(0, ROOM.y, ROOM.w, ROOM.h, 'tile-wood').setOrigin(0, 0).setDepth(-3);
+    this.add.tileSprite(OUTSIDE.x, ROOM.y, OUTSIDE.w, ROOM.h, 'tile-grass').setOrigin(0, 0).setDepth(-3);
 
     for (const s of SECTIONS) {
       const { x, y, w, h } = s.rect;
@@ -221,16 +221,16 @@ export default class KennelScene extends Phaser.Scene {
     // Front door — visual only this phase; the south wall behind it stays solid.
     const doorGfx = this.add.graphics().setDepth(1);
     const dw = FRONT_DOOR.x1 - FRONT_DOOR.x0;
-    doorGfx.fillStyle(0x7a4a2a, 1).fillRect(FRONT_DOOR.x0, ROOM.h - WALL, dw, WALL);
-    doorGfx.fillStyle(0x5c3620, 1).fillRect(FRONT_DOOR.x0 + dw / 2 - 1, ROOM.h - WALL, 2, WALL);
+    doorGfx.fillStyle(0x7a4a2a, 1).fillRect(FRONT_DOOR.x0, ROOM.y + ROOM.h - WALL, dw, WALL);
+    doorGfx.fillStyle(0x5c3620, 1).fillRect(FRONT_DOOR.x0 + dw / 2 - 1, ROOM.y + ROOM.h - WALL, 2, WALL);
 
     // Back door — the east wall already has a gap here (see wallRects); mark the
     // threshold so it reads as a doorway rather than just an empty wall.
     doorGfx.fillStyle(0xe8c68f, 1).fillRect(ROOM.w - WALL, BACK_DOOR.y0, WALL, BACK_DOOR.y1 - BACK_DOOR.y0);
 
-    // Staff door — the gap this same wall-split carved in the south wall,
-    // leading down into the back wing (issue #13).
-    doorGfx.fillStyle(0xe8c68f, 1).fillRect(STAFF_DOOR.x0, ROOM.h - WALL, STAFF_DOOR.x1 - STAFF_DOOR.x0, WALL);
+    // Staff door — the gap this same wall-split carved in the north wall,
+    // leading up into the back wing (issue #13, repositioned north by #23).
+    doorGfx.fillStyle(0xe8c68f, 1).fillRect(STAFF_DOOR.x0, ROOM.y, STAFF_DOOR.x1 - STAFF_DOOR.x0, WALL);
 
     this._drawBackWing(doorGfx);
   }
@@ -517,10 +517,10 @@ export default class KennelScene extends Phaser.Scene {
     const bounds = cage || yardBounds || null;
     const spread = Math.min(1.7, Math.max(0.9, (bounds?.w ?? 90) / 90));
 
-    // Turtle/snake eggs/babies sit tucked close to mom on her own individual
-    // island/perch (small space, plenty of room to share) — tighter spacing
-    // than the wider spread used for cat/dog companions.
-    const sharesHome = animal.species === 'turtle' || animal.species === 'snake';
+    // Turtle/snake/bird eggs/babies sit tucked close to mom on her own
+    // individual island/perch/nest (small space, plenty of room to share) —
+    // tighter spacing than the wider spread used for cat/dog companions.
+    const sharesHome = animal.species === 'turtle' || animal.species === 'snake' || animal.species === 'bird';
     const extras = [];
     const babyLabels = [];
     let cx = x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);

@@ -51,7 +51,7 @@ export function assignCageSlot(stays, sectionKey) {
 // How many named individuals live in the "returning guest" pool per species —
 // small on purpose so the same names come back around within a single session
 // ("every animal always comes back again someday").
-const RETURNING_POOL_SIZE = { turtle: 3, guineaPig: 2, hamster: 2, bunny: 2, cat: 3, dog: 3, snake: 2 };
+const RETURNING_POOL_SIZE = { turtle: 3, guineaPig: 2, hamster: 2, bunny: 2, cat: 3, dog: 3, snake: 2, bird: 2 };
 
 function carryKindForSpecies(speciesKey) {
   if (speciesKey === 'dog') return CARRY_KIND.LEASH;
@@ -79,7 +79,8 @@ const FAMILY_STATE = { EGGS: 'eggs', PREGNANT: 'pregnant', BABIES: 'babies', SOL
 
 function rollFamilyState(speciesKey, rng) {
   if (rng() >= FAMILY_CHANCE) return FAMILY_STATE.SOLO;
-  const eggSpecies = speciesKey === 'turtle' || speciesKey === 'snake';
+  // Issue #24: birds share turtle/snake's eggs-or-babies pattern (FAMILY.EGGS_OR_BABIES).
+  const eggSpecies = speciesKey === 'turtle' || speciesKey === 'snake' || speciesKey === 'bird';
   const roll = rng();
   if (eggSpecies) {
     if (roll < 0.34) return FAMILY_STATE.EGGS;

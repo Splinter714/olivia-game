@@ -16,21 +16,36 @@ export const PEN_GAP = 90; // walk-in opening in each pen wall
 // between them for a walkway/door, not open lawn. Revised after an owner note
 // mid-build: prioritize a tight, walkable layout over generous open space —
 // less trekking between chores, for a kid player.
-export const ROOM = { w: 1440, h: 1000 };     // the kennel building interior
+// Issue #23: the back wing moved from south of the main room to the TOP of
+// the screen (north of it). Rather than redesign the wing or ROOM's internal
+// layout, ROOM.y is a real vertical offset — every coordinate below that used
+// to be authored against an implicit y:0 at ROOM's own top wall now adds
+// ROOM.y, and the wing itself sits at y:0..ROOM.y, right where ROOM's top
+// wall used to be. Every rect's width/height/relative layout is unchanged —
+// this is a pure block shift, not a re-layout.
+export const ROOM = { y: 380, w: 1440, h: 1000 }; // the kennel building interior; y == the wing's height (BACK_WING.h below)
+
 export const OUTSIDE = { x: ROOM.w, w: 700 }; // grass strip east of the building
 
-// Back wing (issue #13): a two-room area behind (south of) the main kennel
-// building — a supply-storage room and the player's house/kitchen. It shares
-// ROOM's south wall as its own north wall (no separate wall drawn there),
-// the same trick OUTSIDE uses for the east wall/BACK_DOOR gap — the wing
-// simply begins where that wall's gap lets you through.
-export const BACK_WING = { x: 0, y: ROOM.h, w: ROOM.w, h: 380 };
+// Back wing (issue #13, repositioned north by issue #23): a two-room area
+// above the main kennel building — a supply-storage room and the player's
+// house/kitchen. It shares ROOM's north wall as its own south wall (no
+// separate wall drawn there), the same trick OUTSIDE uses for the east
+// wall/BACK_DOOR gap — the wing simply ends where that wall's gap lets you
+// through, at ROOM.y.
+export const BACK_WING = { x: 0, y: 0, w: ROOM.w, h: ROOM.y };
 
-// Staff door: gap in ROOM's south wall leading down into the back wing.
-// Sits under the open hallway south of the dog section (clear of every
-// section's own footprint and of the reception desk/rug), well clear of the
-// (still-solid, visual-only) FRONT_DOOR further west.
-export const STAFF_DOOR = { x0: 1140, x1: 1280 };
+// Staff door: gap in ROOM's north wall leading up into the back wing (still
+// landing inside HOUSE_ROOM, the wing's east/kitchen side — see WING_DIVIDE_X
+// below). Issue #23 moved this gap from ROOM's south wall to its north wall;
+// the south wall had 274px of buffered hallway below the dog section there
+// (clear of every section's footprint), but the same x-range on the north
+// wall now runs directly behind the flush-north snake section (issue #14) —
+// so unlike every other rect in this file, this one couldn't just carry its
+// old numbers over. Re-homed to the 112px hallway between hamster (ends 1000)
+// and snake (starts 1112), the only gap in the new top row wide enough for a
+// walk-in doorway.
+export const STAFF_DOOR = { x0: 1006, x1: 1106 };
 
 // Internal wall splitting the wing into the storage room (west, entered via
 // the house) and the house/kitchen (east, just inside the staff door), with
@@ -47,7 +62,7 @@ export const HOUSE_ROOM = {
   w: BACK_WING.x + BACK_WING.w - WALL - (WING_DIVIDE_X + WALL / 2), h: BACK_WING.h - WALL * 2,
 };
 
-export const WORLD = { w: ROOM.w + OUTSIDE.w, h: ROOM.h + BACK_WING.h };
+export const WORLD = { w: ROOM.w + OUTSIDE.w, h: ROOM.y + ROOM.h };
 
 // Fixed capacity of individual cages/tank-slots per section (issue #18) —
 // once a section holds 6 settled stays, that species quietly stops arriving
@@ -56,11 +71,11 @@ export const CAGES_PER_SECTION = 6;
 
 // Gap in the east wall — the door to the outside grass (dog potty walks, issue #19).
 // Centered on the dog section's y-range (see SECTIONS below).
-export const BACK_DOOR = { y0: 415, y1: 575 };
+export const BACK_DOOR = { y0: ROOM.y + 415, y1: ROOM.y + 575 };
 
 // Front door on the south wall — visual only for now (the player can't leave
 // through it); owners will arrive here in Phase B. Centered under the
-// reception mat.
+// reception mat. (x-only, unaffected by the vertical shift.)
 export const FRONT_DOOR = { x0: 575, x1: 715 };
 
 // Reception / front-desk area, just inside the front door, in the open
@@ -68,12 +83,12 @@ export const FRONT_DOOR = { x0: 575, x1: 715 };
 // (hamster/dog) section columns. The computer for baby announcements
 // (Phase C+) sits on this desk.
 export const RECEPTION = {
-  desk: { x: 555, y: 750, w: 170, h: 64 },
-  rug:  { x: 520, y: 830, w: 240, h: 110 },
-  mat:  { x: 600, y: 936, w: 90,  h: 36 },
+  desk: { x: 555, y: ROOM.y + 750, w: 170, h: 64 },
+  rug:  { x: 520, y: ROOM.y + 830, w: 240, h: 110 },
+  mat:  { x: 600, y: ROOM.y + 936, w: 90,  h: 36 },
 };
 
-// Seven species sections, packed tightly (32px walkway gaps) instead of spread
+// Eight species sections, packed tightly (32px walkway gaps) instead of spread
 // across a big open floor — turtle/guineaPig/hamster along the top, bunny/cat
 // stacked in the west column below turtle, dog on the east column below
 // hamster (flush against the back-door wall for potty trips). `opening` names
@@ -89,19 +104,28 @@ export const RECEPTION = {
 // flush-to-outer-wall + 'south' opening), just reflected onto the opposite
 // side of the room. This is a minimal fit, not the general layout tightening
 // the owner deferred to his own guidance later.
+//
+// Issue #24: birds were slotted into the remaining unused hallway strip south
+// of bunny/west of cat — a small gap the same width as bunny's section, just
+// below it, flush against the west wall (mirrors bunny's own flush-west
+// placement). No stated corner preference for birds, and this spot fits an
+// 8th section without touching any of the other seven's positions or sizes.
 export const SECTIONS = [
   // Will hold the water tank (glass cover + sand island) in a later phase.
-  { key: 'turtle',    label: '🐢 Turtles',     floor: 0x9fd4c6, floorDark: 0x93c8ba, rect: { x: 24,   y: 24,  w: 304, h: 228 }, opening: 'south' },
-  { key: 'guineaPig', label: '🐹 Guinea Pigs', floor: 0xeec08a, floorDark: 0xe2b47e, rect: { x: 360,  y: 24,  w: 304, h: 228 }, opening: 'south' },
-  { key: 'hamster',   label: '🐹 Hamsters',    floor: 0xeedc9e, floorDark: 0xe2d092, rect: { x: 696,  y: 24,  w: 304, h: 228 }, opening: 'south' },
+  { key: 'turtle',    label: '🐢 Turtles',     floor: 0x9fd4c6, floorDark: 0x93c8ba, rect: { x: 24,   y: ROOM.y + 24,  w: 304, h: 228 }, opening: 'south' },
+  { key: 'guineaPig', label: '🐹 Guinea Pigs', floor: 0xeec08a, floorDark: 0xe2b47e, rect: { x: 360,  y: ROOM.y + 24,  w: 304, h: 228 }, opening: 'south' },
+  { key: 'hamster',   label: '🐹 Hamsters',    floor: 0xeedc9e, floorDark: 0xe2d092, rect: { x: 696,  y: ROOM.y + 24,  w: 304, h: 228 }, opening: 'south' },
   // Top-right corner, flush against the north + east walls — mirrors turtle's
   // top-left corner placement (flush north + west) at the same size.
-  { key: 'snake',     label: '🐍 Snakes',      floor: 0xc7cf8e, floorDark: 0xbac07f, rect: { x: 1112, y: 24,  w: 304, h: 228 }, opening: 'south' },
-  { key: 'bunny',     label: '🐰 Bunnies',     floor: 0xf0c2cc, floorDark: 0xe4b6c0, rect: { x: 24,   y: 284, w: 304, h: 228 }, opening: 'east' },
+  { key: 'snake',     label: '🐍 Snakes',      floor: 0xc7cf8e, floorDark: 0xbac07f, rect: { x: 1112, y: ROOM.y + 24,  w: 304, h: 228 }, opening: 'south' },
+  { key: 'bunny',     label: '🐰 Bunnies',     floor: 0xf0c2cc, floorDark: 0xe4b6c0, rect: { x: 24,   y: ROOM.y + 284, w: 304, h: 228 }, opening: 'east' },
+  // Bird section (issue #24): tucked into the unused strip east of bunny and
+  // north of cat, flush against the west wall like bunny above it.
+  { key: 'bird',      label: '🐦 Birds',       floor: 0xa9d8e0, floorDark: 0x9ccbd3, rect: { x: 360,  y: ROOM.y + 284, w: 304, h: 228 }, opening: 'south' },
   // Cat playpen attaches here in a later phase.
-  { key: 'cat',       label: '🐱 Cats',        floor: 0xcfc0e8, floorDark: 0xc3b4dc, rect: { x: 24,   y: 544, w: 368, h: 422 }, opening: 'east' },
+  { key: 'cat',       label: '🐱 Cats',        floor: 0xcfc0e8, floorDark: 0xc3b4dc, rect: { x: 24,   y: ROOM.y + 544, w: 368, h: 422 }, opening: 'east' },
   // Dog playpen later; deliberately next to the back door for potty trips.
-  { key: 'dog',       label: '🐶 Dogs',        floor: 0xaac8e6, floorDark: 0x9ebcda, rect: { x: 1048, y: 284, w: 368, h: 422 }, opening: 'west' },
+  { key: 'dog',       label: '🐶 Dogs',        floor: 0xaac8e6, floorDark: 0x9ebcda, rect: { x: 1048, y: ROOM.y + 284, w: 368, h: 422 }, opening: 'west' },
 ];
 
 // Pen-wall rects for a section: thin walls on every side not flush with an
@@ -110,8 +134,8 @@ export function penRects({ rect, opening }) {
   const { x, y, w, h } = rect;
   const out = [];
   const touching = {
-    north: y <= WALL,
-    south: y + h >= ROOM.h - WALL,
+    north: y <= ROOM.y + WALL,
+    south: y + h >= ROOM.y + ROOM.h - WALL,
     west:  x <= WALL,
     east:  x + w >= ROOM.w - WALL,
   };
@@ -136,30 +160,31 @@ export function penRects({ rect, opening }) {
 }
 
 // Outer building walls; the east wall splits around the back-door gap, the
-// south wall splits around the staff-door gap into the back wing (issue #13).
+// north wall splits around the staff-door gap up into the back wing (issue
+// #13, repositioned north by issue #23).
 export function wallRects() {
   return [
-    { x: 0, y: 0, w: ROOM.w, h: WALL },                                          // north
-    { x: 0, y: ROOM.h - WALL, w: STAFF_DOOR.x0, h: WALL },                       // south (west of staff door)
-    { x: STAFF_DOOR.x1, y: ROOM.h - WALL, w: ROOM.w - STAFF_DOOR.x1, h: WALL },  // south (east of staff door)
-    { x: 0, y: 0, w: WALL, h: ROOM.h },                                          // west
-    { x: ROOM.w - WALL, y: 0, w: WALL, h: BACK_DOOR.y0 },                        // east (above door)
-    { x: ROOM.w - WALL, y: BACK_DOOR.y1, w: WALL, h: ROOM.h - BACK_DOOR.y1 },    // east (below door)
+    { x: 0, y: ROOM.y, w: STAFF_DOOR.x0, h: WALL },                                    // north (west of staff door)
+    { x: STAFF_DOOR.x1, y: ROOM.y, w: ROOM.w - STAFF_DOOR.x1, h: WALL },                // north (east of staff door)
+    { x: 0, y: ROOM.y + ROOM.h - WALL, w: ROOM.w, h: WALL },                            // south
+    { x: 0, y: ROOM.y, w: WALL, h: ROOM.h },                                            // west
+    { x: ROOM.w - WALL, y: ROOM.y, w: WALL, h: BACK_DOOR.y0 - ROOM.y },                 // east (above door)
+    { x: ROOM.w - WALL, y: BACK_DOOR.y1, w: WALL, h: ROOM.y + ROOM.h - BACK_DOOR.y1 },  // east (below door)
   ];
 }
 
-// Back wing's own outer walls (south/west/east) plus the storage/house
+// Back wing's own outer walls (north/west/east) plus the storage/house
 // dividing wall — same split-around-a-gap pattern as wallRects' door
-// segments. The wing's north side is ROOM's own south wall above (with the
+// segments. The wing's south side is ROOM's own north wall below (with the
 // STAFF_DOOR gap already carved there), so no separate wall is drawn here.
 export function backWingWallRects() {
   const { x, y, w, h } = BACK_WING;
   const divX = x + w / 2;
   return [
-    { x, y: y + h - WALL, w, h: WALL },                                    // south
-    { x, y, w: WALL, h },                                                  // west
-    { x: x + w - WALL, y, w: WALL, h },                                    // east
-    { x: divX - WALL / 2, y, w: WALL, h: WING_DOOR.y0 - y },               // divider (above door)
+    { x, y, w, h: WALL },                                                     // north (wing's own outer wall)
+    { x, y, w: WALL, h },                                                     // west
+    { x: x + w - WALL, y, w: WALL, h },                                       // east
+    { x: divX - WALL / 2, y, w: WALL, h: WING_DOOR.y0 - y },                  // divider (above door)
     { x: divX - WALL / 2, y: WING_DOOR.y1, w: WALL, h: y + h - WING_DOOR.y1 }, // divider (below door)
   ];
 }
@@ -167,8 +192,8 @@ export function backWingWallRects() {
 // Fence around the outside grass strip (the building wall closes its west side).
 export function outsideFenceRects() {
   return [
-    { x: OUTSIDE.x, y: 0, w: OUTSIDE.w, h: 12 },
-    { x: OUTSIDE.x, y: ROOM.h - 12, w: OUTSIDE.w, h: 12 },
-    { x: WORLD.w - 12, y: 0, w: 12, h: ROOM.h },
+    { x: OUTSIDE.x, y: ROOM.y, w: OUTSIDE.w, h: 12 },
+    { x: OUTSIDE.x, y: ROOM.y + ROOM.h - 12, w: OUTSIDE.w, h: 12 },
+    { x: WORLD.w - 12, y: ROOM.y, w: 12, h: ROOM.h },
   ];
 }

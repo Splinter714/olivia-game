@@ -93,6 +93,17 @@ export const NAME_POOLS = {
       'Zippy', 'Rope', 'Cobra', 'Diesel', 'Loki',
     ],
   },
+  bird: {
+    girl: [
+      'Sunny', 'Skye', 'Robin', 'Piper', 'Sparrow', 'Feather',
+      'Chirpy', 'Daisy', 'Coco', 'Marigold', 'Breezy',
+      'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
+    ],
+    boy: [
+      'Pip', 'Sky', 'Tweety', 'Rio', 'Peep', 'Kiwi',
+      'Blue', 'Sunshine', 'Percy',
+    ],
+  },
 };
 
 const FALLBACK_POOL = { girl: ['Pal'], boy: ['Pal'] };
