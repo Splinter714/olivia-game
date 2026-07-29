@@ -8,6 +8,9 @@ export default class BootScene extends Phaser.Scene {
   }
 
   create() {
+    // Camera zoom = DPR keeps coordinates logical while the canvas renders at
+    // physical pixels (see src/main.js).
+    this.cameras.main.setZoom(this.registry.get('dpr') || 1);
     this.add
       .text(this.scale.width / 2, this.scale.height / 2, 'olivia-game — skeleton ready', {
         fontFamily: 'monospace',
