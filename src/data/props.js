@@ -2,7 +2,7 @@
 // data/sections.js's SECTIONS the same way penRects()/wallRects() are: plain
 // rects that both KennelScene's rendering and its interaction/collision code
 // can share, so the numbers only live in one place.
-import { SECTIONS, RECEPTION, CAGES_PER_SECTION } from './sections.js';
+import { SECTIONS, RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM } from './sections.js';
 
 const sectionByKey = (key) => SECTIONS.find((s) => s.key === key);
 
@@ -150,3 +150,24 @@ export const COMPUTER_SPOT = {
   x: RECEPTION.desk.x + RECEPTION.desk.w - 22,
   y: RECEPTION.desk.y + 6,
 };
+
+// ── Back wing furniture (issue #13) ─────────────────────────────────────────
+// The storage room's shelves/boxes are purely atmospheric fixed dressing; the
+// house's oven/counter is the one real interactive spot — interact there to
+// bake a treat, which then sits as a tray on the counter until it either gets
+// eaten (not modeled) or a raccoon sneaks in and steals it.
+
+export const OVEN_SPOT = { x: HOUSE_ROOM.x + HOUSE_ROOM.w * 0.62, y: HOUSE_ROOM.y + HOUSE_ROOM.h * 0.36 };
+// Solid counter/oven obstacle — same idea as the reception desk.
+export const OVEN = { x: OVEN_SPOT.x - 24, y: OVEN_SPOT.y - 34, w: 56, h: 40 };
+// Where the baked treat tray appears, just beside the oven on the counter.
+export const TREAT_TRAY_SPOT = { x: OVEN_SPOT.x - 38, y: OVEN_SPOT.y + 2 };
+
+// Fixed shelves/box/bag dressing scattered around the storage room.
+export const STORAGE_PROPS = [
+  { key: 'shelf', x: STORAGE_ROOM.x + 20, y: STORAGE_ROOM.y + 46 },
+  { key: 'shelf', x: STORAGE_ROOM.x + 20, y: STORAGE_ROOM.y + 166 },
+  { key: 'boxes', x: STORAGE_ROOM.x + STORAGE_ROOM.w * 0.55, y: STORAGE_ROOM.y + STORAGE_ROOM.h - 30 },
+  { key: 'boxes', x: STORAGE_ROOM.x + STORAGE_ROOM.w * 0.78, y: STORAGE_ROOM.y + 120 },
+  { key: 'bag', x: STORAGE_ROOM.x + STORAGE_ROOM.w * 0.4, y: STORAGE_ROOM.y + STORAGE_ROOM.h - 26 },
+];

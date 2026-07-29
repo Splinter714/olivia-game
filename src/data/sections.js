@@ -18,7 +18,36 @@ export const PEN_GAP = 90; // walk-in opening in each pen wall
 // less trekking between chores, for a kid player.
 export const ROOM = { w: 1440, h: 1000 };     // the kennel building interior
 export const OUTSIDE = { x: ROOM.w, w: 700 }; // grass strip east of the building
-export const WORLD = { w: ROOM.w + OUTSIDE.w, h: ROOM.h };
+
+// Back wing (issue #13): a two-room area behind (south of) the main kennel
+// building — a supply-storage room and the player's house/kitchen. It shares
+// ROOM's south wall as its own north wall (no separate wall drawn there),
+// the same trick OUTSIDE uses for the east wall/BACK_DOOR gap — the wing
+// simply begins where that wall's gap lets you through.
+export const BACK_WING = { x: 0, y: ROOM.h, w: ROOM.w, h: 380 };
+
+// Staff door: gap in ROOM's south wall leading down into the back wing.
+// Sits under the open hallway south of the dog section (clear of every
+// section's own footprint and of the reception desk/rug), well clear of the
+// (still-solid, visual-only) FRONT_DOOR further west.
+export const STAFF_DOOR = { x0: 1140, x1: 1280 };
+
+// Internal wall splitting the wing into the storage room (west, entered via
+// the house) and the house/kitchen (east, just inside the staff door), with
+// its own doorway between the two.
+const WING_DIVIDE_X = BACK_WING.x + BACK_WING.w / 2;
+export const WING_DOOR = { y0: BACK_WING.y + 150, y1: BACK_WING.y + 270 };
+
+export const STORAGE_ROOM = {
+  x: WALL, y: BACK_WING.y + WALL,
+  w: WING_DIVIDE_X - WALL - WALL / 2, h: BACK_WING.h - WALL * 2,
+};
+export const HOUSE_ROOM = {
+  x: WING_DIVIDE_X + WALL / 2, y: BACK_WING.y + WALL,
+  w: BACK_WING.x + BACK_WING.w - WALL - (WING_DIVIDE_X + WALL / 2), h: BACK_WING.h - WALL * 2,
+};
+
+export const WORLD = { w: ROOM.w + OUTSIDE.w, h: ROOM.h + BACK_WING.h };
 
 // Fixed capacity of individual cages/tank-slots per section (issue #18) —
 // once a section holds 6 settled stays, that species quietly stops arriving
@@ -106,14 +135,32 @@ export function penRects({ rect, opening }) {
   return out;
 }
 
-// Outer building walls; the east wall splits around the back-door gap.
+// Outer building walls; the east wall splits around the back-door gap, the
+// south wall splits around the staff-door gap into the back wing (issue #13).
 export function wallRects() {
   return [
     { x: 0, y: 0, w: ROOM.w, h: WALL },                                          // north
-    { x: 0, y: ROOM.h - WALL, w: ROOM.w, h: WALL },                              // south
+    { x: 0, y: ROOM.h - WALL, w: STAFF_DOOR.x0, h: WALL },                       // south (west of staff door)
+    { x: STAFF_DOOR.x1, y: ROOM.h - WALL, w: ROOM.w - STAFF_DOOR.x1, h: WALL },  // south (east of staff door)
     { x: 0, y: 0, w: WALL, h: ROOM.h },                                          // west
     { x: ROOM.w - WALL, y: 0, w: WALL, h: BACK_DOOR.y0 },                        // east (above door)
     { x: ROOM.w - WALL, y: BACK_DOOR.y1, w: WALL, h: ROOM.h - BACK_DOOR.y1 },    // east (below door)
+  ];
+}
+
+// Back wing's own outer walls (south/west/east) plus the storage/house
+// dividing wall — same split-around-a-gap pattern as wallRects' door
+// segments. The wing's north side is ROOM's own south wall above (with the
+// STAFF_DOOR gap already carved there), so no separate wall is drawn here.
+export function backWingWallRects() {
+  const { x, y, w, h } = BACK_WING;
+  const divX = x + w / 2;
+  return [
+    { x, y: y + h - WALL, w, h: WALL },                                    // south
+    { x, y, w: WALL, h },                                                  // west
+    { x: x + w - WALL, y, w: WALL, h },                                    // east
+    { x: divX - WALL / 2, y, w: WALL, h: WING_DOOR.y0 - y },               // divider (above door)
+    { x: divX - WALL / 2, y: WING_DOOR.y1, w: WALL, h: y + h - WING_DOOR.y1 }, // divider (below door)
   ];
 }
 

@@ -1,10 +1,12 @@
 import Phaser from 'phaser';
 import {
   WALL, ROOM, OUTSIDE, WORLD, BACK_DOOR, FRONT_DOOR, RECEPTION, SECTIONS,
-  penRects, wallRects, outsideFenceRects,
+  BACK_WING, STAFF_DOOR, WING_DOOR, STORAGE_ROOM, HOUSE_ROOM,
+  penRects, wallRects, backWingWallRects, outsideFenceRects,
 } from '../data/sections.js';
 import {
   TURTLE, SNAKE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT, COMPUTER_SPOT,
+  OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS,
   CAGES, cageAnimalSpot,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
@@ -28,9 +30,12 @@ import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, ISLAND_KEY, SNAKE_TANK_KEY, SNAKE_PERCH_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
   SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY,
+  OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY,
 } from '../art/props.js';
+import { buildRaccoonTextures, RACCOON_KEYS, CRUMB_KEY } from '../art/raccoon.js';
+import { RACCOON_CHECK_INTERVAL, SCAMPER_VISIBLE_CHANCE, randomTreat } from '../data/raccoon.js';
 import { createRoster, LOCATION, CARRY_KIND, assignCageSlot } from '../data/roster.js';
-import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
+import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 
 // Placeholder name shown on a baby's tiny label until the owner names it via
 // the reception computer (issue #10). Matches data/animal.js's opts.name
@@ -79,10 +84,13 @@ export default class KennelScene extends Phaser.Scene {
 
     buildKennelTextures(this);
     for (const s of SECTIONS) buildFloorTile(this, `floor-${s.key}`, s.floor, s.floorDark);
+    buildFloorTile(this, 'floor-storage', 0xcbb994, 0xbfa987);
+    buildFloorTile(this, 'floor-house', 0xf5ecd8, 0xe8dfc8);
     buildPlayerTexture(this);
     buildAnimalTextures(this);
     buildCarryTextures(this);
     buildPropTextures(this);
+    buildRaccoonTextures(this);
 
     this._drawWorld();
     this._buildProps();
@@ -129,6 +137,11 @@ export default class KennelScene extends Phaser.Scene {
 
     // ── Economy: payouts + returning-guest upgrades (issue #12) ────────────
     this.economy = createEconomy();
+
+    // ── Back wing: baking + the raccoon surprise (issue #13) ───────────────
+    this.treatTray = null;                        // { treat, sprite } on the kitchen counter, or null
+    this._raccoonTimer = RACCOON_CHECK_INTERVAL();
+    this._raccoon = null;                          // active scamper visual, or null while she's mid-run
 
     // ── Night: tuck-in / staying awake / wake-ups (issue #11) ──────────────
     this.night = {
@@ -203,6 +216,39 @@ export default class KennelScene extends Phaser.Scene {
     // Back door — the east wall already has a gap here (see wallRects); mark the
     // threshold so it reads as a doorway rather than just an empty wall.
     doorGfx.fillStyle(0xe8c68f, 1).fillRect(ROOM.w - WALL, BACK_DOOR.y0, WALL, BACK_DOOR.y1 - BACK_DOOR.y0);
+
+    // Staff door — the gap this same wall-split carved in the south wall,
+    // leading down into the back wing (issue #13).
+    doorGfx.fillStyle(0xe8c68f, 1).fillRect(STAFF_DOOR.x0, ROOM.h - WALL, STAFF_DOOR.x1 - STAFF_DOOR.x0, WALL);
+
+    this._drawBackWing(doorGfx);
+  }
+
+  // Back wing (issue #13): base hallway floor, the storage/house rooms' own
+  // floors + labels, the wing's outer + dividing walls, and the internal
+  // doorway between the two rooms. Same layered approach as the main
+  // building above, just south of it.
+  _drawBackWing(doorGfx) {
+    this.add.tileSprite(BACK_WING.x, BACK_WING.y, BACK_WING.w, BACK_WING.h, 'tile-wood').setOrigin(0, 0).setDepth(-3);
+    this.add.tileSprite(STORAGE_ROOM.x, STORAGE_ROOM.y, STORAGE_ROOM.w, STORAGE_ROOM.h, 'floor-storage').setOrigin(0, 0).setDepth(-2);
+    this.add.tileSprite(HOUSE_ROOM.x, HOUSE_ROOM.y, HOUSE_ROOM.w, HOUSE_ROOM.h, 'floor-house').setOrigin(0, 0).setDepth(-2);
+
+    const labelStyle = {
+      fontFamily: 'system-ui, sans-serif', fontSize: '15px', color: '#2b2b2b',
+      backgroundColor: '#ffffffcc', padding: { x: 6, y: 3 },
+    };
+    this.add.text(STORAGE_ROOM.x + STORAGE_ROOM.w / 2, STORAGE_ROOM.y + 10, '📦 Storage', labelStyle)
+      .setOrigin(0.5, 0).setDepth(50);
+    this.add.text(HOUSE_ROOM.x + HOUSE_ROOM.w / 2, HOUSE_ROOM.y + 10, '🏠 House', labelStyle)
+      .setOrigin(0.5, 0).setDepth(50);
+
+    for (const r of backWingWallRects()) {
+      this.add.tileSprite(r.x, r.y, r.w, r.h, 'tile-wall').setOrigin(0, 0).setDepth(0);
+    }
+
+    // Doorway between storage and house.
+    const divX = BACK_WING.x + BACK_WING.w / 2;
+    doorGfx.fillStyle(0xe8c68f, 1).fillRect(divX - WALL / 2, WING_DOOR.y0, WALL, WING_DOOR.y1 - WING_DOOR.y0);
   }
 
   // Furniture added by issues #6/#7/#8 — turtle tank + sand island, cat/dog
@@ -242,6 +288,15 @@ export default class KennelScene extends Phaser.Scene {
         this.add.image(cage.x, cage.y, CAGE_KEY[key]).setOrigin(0, 0).setDepth(cage.y - 2);
       }
     }
+
+    // Back wing furniture (issue #13): the kitchen's oven/counter (the one
+    // interactive spot — baking lives at _bakeTreat) and the storage room's
+    // purely-atmospheric shelves/boxes/bags.
+    this.add.image(OVEN_SPOT.x, OVEN_SPOT.y, OVEN_KEY).setOrigin(0.5, 1).setDepth(OVEN_SPOT.y);
+    const dressingKey = { shelf: SHELF_KEY, boxes: BOX_KEY, bag: BAG_KEY };
+    for (const p of STORAGE_PROPS) {
+      this.add.image(p.x, p.y, dressingKey[p.key]).setOrigin(0.5, 1).setDepth(p.y);
+    }
   }
 
   _buildCollision() {
@@ -257,6 +312,8 @@ export default class KennelScene extends Phaser.Scene {
       TURTLE.tank,
       SNAKE.tank,
       ...outsideFenceRects(),
+      ...backWingWallRects(),
+      OVEN,
     ];
 
     this.physics.world.setBounds(0, 0, WORLD.w, WORLD.h);
@@ -875,6 +932,105 @@ export default class KennelScene extends Phaser.Scene {
     });
   }
 
+  // ── The kitchen: baking + the raccoon surprise (issue #13) ───────────────
+  // Interact at the oven to bake a random treat — no ingredients/recipe, just
+  // a satisfying "you baked ___!" and a tray on the counter. Every so often,
+  // "not very often" per DESIGN.md, a raccoon check rolls; if a tray is
+  // actually out when it fires, she steals it — pure surprise, no cost, no
+  // way to stop her.
+
+  _bakeTreat() {
+    const treat = randomTreat();
+    const sprite = this.add.image(TREAT_TRAY_SPOT.x, TREAT_TRAY_SPOT.y, TREAT_TRAY_KEY)
+      .setOrigin(0.5, 1).setDepth(TREAT_TRAY_SPOT.y);
+    this.treatTray = { treat, sprite };
+    this.game.events.emit(EVENTS.NOTIFY, `You baked ${treat.label}!`);
+  }
+
+  _updateRaccoon(delta) {
+    this._raccoonTimer -= delta;
+    if (this._raccoonTimer > 0) return;
+    this._raccoonTimer = RACCOON_CHECK_INTERVAL();
+    if (this.treatTray && !this._raccoon) this._triggerRaccoon();
+  }
+
+  _triggerRaccoon() {
+    const tray = this.treatTray;
+    this.treatTray = null;
+    tray.sprite.destroy();
+
+    this.game.events.emit(EVENTS.NOTIFY, 'A raccoon stole your treats!');
+    this._showNooo();
+    if (Math.random() < SCAMPER_VISIBLE_CHANCE) this._spawnScamperingRaccoon();
+  }
+
+  // A big, silly, brief center-screen pop — deliberately more dramatic than
+  // the normal bottom-left notification line (DESIGN.md explicitly calls for
+  // "a big Nooooooooooo!"). Pure flavor: it fades itself out and never blocks
+  // input.
+  _showNooo() {
+    const off = worldUiOffset(this);
+    const cx = off.x + logicalW(this) / 2;
+    const cy = off.y + logicalH(this) / 2;
+    const text = this.add.text(cx, cy, 'Nooooooooooo!', {
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '56px',
+      fontStyle: 'bold',
+      color: '#ff5544',
+      stroke: '#3a1200',
+      strokeThickness: 8,
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(20000).setScale(0.4).setAlpha(0);
+
+    this.tweens.add({
+      targets: text, scale: 1.15, alpha: 1, duration: 220, ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: text, scale: 1.35, alpha: 0, duration: 900, delay: 450, ease: 'Sine.easeIn',
+          onComplete: () => text.destroy(),
+        });
+      },
+    });
+  }
+
+  // Sometimes visible: the raccoon herself scampers from the counter toward
+  // the storage-room doorway (her way out), leaving a fading crumb trail —
+  // "sometimes you see the raccoon scampering away... leaving a trail of
+  // crumbs and getting crumbs on himself" (DESIGN.md). No interaction stops
+  // her; she just runs the path and disappears.
+  _spawnScamperingRaccoon() {
+    const from = { x: TREAT_TRAY_SPOT.x, y: TREAT_TRAY_SPOT.y };
+    const divX = BACK_WING.x + BACK_WING.w / 2;
+    const exit = { x: divX, y: (WING_DOOR.y0 + WING_DOOR.y1) / 2 };
+
+    const sprite = this.add.sprite(from.x, from.y, RACCOON_KEYS[0])
+      .setOrigin(0.5, 1).setScale(1.6).setDepth(20001).setFlipX(exit.x < from.x);
+    this._raccoon = { sprite };
+
+    let frame = 0;
+    const frameTimer = this.time.addEvent({
+      delay: 120, loop: true,
+      callback: () => { frame = 1 - frame; sprite.setTexture(RACCOON_KEYS[frame]); },
+    });
+    const crumbTimer = this.time.addEvent({
+      delay: 150, loop: true,
+      callback: () => {
+        const c = this.add.image(sprite.x + (Math.random() - 0.5) * 6, sprite.y - 2, CRUMB_KEY)
+          .setDepth(sprite.depth - 1);
+        this.tweens.add({ targets: c, alpha: 0, duration: 700, delay: 250, onComplete: () => c.destroy() });
+      },
+    });
+
+    this.tweens.add({
+      targets: sprite, x: exit.x, y: exit.y, duration: 1400, ease: 'Sine.easeIn',
+      onComplete: () => {
+        frameTimer.remove();
+        crumbTimer.remove();
+        sprite.destroy();
+        this._raccoon = null;
+      },
+    });
+  }
+
   // ── Night: tuck-in, staying awake, wake-ups (issue #11) ──────────────────
   // At NIGHT_START every present animal needs tucking in (DESIGN.md's small
   // fabric sheet); once the last one is tucked, the player "goes to sleep"
@@ -1159,6 +1315,10 @@ export default class KennelScene extends Phaser.Scene {
       if (rec) consider(rec.pos.x, rec.pos.y, () => this._triggerBirth(stay));
     }
 
+    // Issue #13: bake a treat at the kitchen oven — only while the counter's
+    // clear, so there's always at most one tray out for the raccoon to steal.
+    if (!this.treatTray) consider(OVEN_SPOT.x, OVEN_SPOT.y, () => this._bakeTreat());
+
     // Tucking animals in for the night (issue #11) — walk up to anyone not
     // yet under their blanket and interact.
     if (this.night.active) {
@@ -1193,6 +1353,7 @@ export default class KennelScene extends Phaser.Scene {
     this._updateMesses(delta);
     this._updateBirths(delta);
     this._updateComputerIcon();
+    this._updateRaccoon(delta);
     this.player.setDepth(this.player.y);
 
     // interactJustDown() is stateful (edge-triggered) — read it exactly once

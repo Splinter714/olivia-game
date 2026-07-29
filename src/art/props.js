@@ -3,7 +3,7 @@
 // food/water bowls, potty messes, and the small "needs attention" bubbles.
 // Same gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
 import { gen } from './_gen.js';
-import { TURTLE, SNAKE, CAT_PLAYPEN, LITTER_BOX, CAGES } from '../data/props.js';
+import { TURTLE, SNAKE, CAT_PLAYPEN, LITTER_BOX, CAGES, OVEN } from '../data/props.js';
 
 export const TANK_KEY = 'prop-tank';
 export const ISLAND_KEY = 'prop-island';
@@ -17,6 +17,11 @@ export const MESS_KEY = 'prop-mess';
 export const COMPUTER_KEY = 'prop-computer';
 export const BLANKET_KEY = 'prop-blanket';
 export const UPGRADE_KEY = 'prop-upgrade-star';
+export const OVEN_KEY = 'prop-oven';
+export const TREAT_TRAY_KEY = 'prop-treat-tray';
+export const SHELF_KEY = 'prop-shelf';
+export const BOX_KEY = 'prop-boxes';
+export const BAG_KEY = 'prop-bag';
 export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck', babies: 'need-babies' };
 
 // One individual-cage texture key per (non-turtle) section (issue #18) — every
@@ -190,6 +195,59 @@ function drawCagePen(g, w, h) {
   g.fillStyle(0x8a5a34, 1).fillRoundedRect(w / 2 - 5, 0, 10, 6, 2);         // name-tag mount
 }
 
+// The house kitchen's one interactive prop (issue #13) — a simple counter
+// with an oven built into it; interacting here bakes a treat.
+function drawOven(g, w, h) {
+  g.fillStyle(0x8a5a34, 1).fillRoundedRect(0, h * 0.55, w, h * 0.45, 4);      // counter base
+  g.fillStyle(0xc79a63, 1).fillRoundedRect(0, h * 0.5, w, h * 0.12, 3);       // countertop
+  g.fillStyle(0x4a4a52, 1).fillRoundedRect(w * 0.1, 0, w * 0.8, h * 0.52, 4); // oven body
+  g.fillStyle(0x2a2a30, 1).fillRoundedRect(w * 0.18, h * 0.14, w * 0.64, h * 0.3, 3); // window
+  g.fillStyle(0xe8955a, 0.6).fillRoundedRect(w * 0.22, h * 0.18, w * 0.56, h * 0.22, 3); // warm glow
+  g.fillStyle(0xd9d9de, 1);
+  g.fillCircle(w * 0.28, h * 0.46, 2).fillCircle(w * 0.5, h * 0.46, 2).fillCircle(w * 0.72, h * 0.46, 2); // knobs
+}
+
+// A tray of whatever just got baked — one silhouette covers cookies, cake, or
+// cupcakes alike (the flavor is only in the notification text). Appears on
+// the counter after baking; disappears again if the raccoon steals it.
+function drawTreatTray(g, w, h) {
+  g.fillStyle(0x9aa0ab, 1).fillEllipse(w / 2, h * 0.86, w, h * 0.28); // tray
+  g.fillStyle(0xd9a45c, 1);
+  g.fillCircle(w * 0.32, h * 0.6, w * 0.16);
+  g.fillCircle(w * 0.55, h * 0.5, w * 0.18);
+  g.fillCircle(w * 0.75, h * 0.62, w * 0.15);
+  g.fillStyle(0xb9803c, 0.7);
+  g.fillCircle(w * 0.32, h * 0.6, w * 0.06);
+  g.fillCircle(w * 0.55, h * 0.5, w * 0.06);
+  g.fillCircle(w * 0.75, h * 0.62, w * 0.06);
+}
+
+// Storage-room dressing (issue #13, purely atmospheric this pass): plain wire
+// shelving with a few labeled supply bins, and loose box/bag piles.
+function drawShelf(g, w, h) {
+  g.fillStyle(0x8a5a34, 1).fillRect(0, 0, w * 0.08, h).fillRect(w - w * 0.08, 0, w * 0.08, h);
+  g.fillStyle(0xb08a5a, 1);
+  for (let i = 0; i < 3; i++) g.fillRect(0, h * (0.15 + i * 0.3), w, h * 0.06);
+  g.fillStyle(0x6fa8d6, 1).fillRect(w * 0.14, h * 0.02, w * 0.28, h * 0.12);
+  g.fillStyle(0xe0a95e, 1).fillRect(w * 0.5, h * 0.02, w * 0.3, h * 0.12);
+  g.fillStyle(0xcf6f6f, 1).fillRect(w * 0.14, h * 0.32, w * 0.3, h * 0.12);
+  g.fillStyle(0xd9c9a0, 1).fillRect(w * 0.5, h * 0.32, w * 0.32, h * 0.12);
+}
+
+function drawBoxStack(g, w, h) {
+  g.fillStyle(0xc79a63, 1).fillRect(w * 0.1, h * 0.4, w * 0.8, h * 0.32);
+  g.fillStyle(0xb8875a, 1).fillRect(w * 0.02, h * 0.72, w * 0.96, h * 0.26);
+  g.lineStyle(1.5, 0x8a5a34, 0.8)
+    .strokeRect(w * 0.1, h * 0.4, w * 0.8, h * 0.32)
+    .strokeRect(w * 0.02, h * 0.72, w * 0.96, h * 0.26);
+}
+
+function drawBag(g, w, h) {
+  g.fillStyle(0xd9c9a0, 1).fillRoundedRect(w * 0.1, h * 0.2, w * 0.8, h * 0.78, 6);
+  g.fillStyle(0xb9a678, 1).fillRect(w * 0.1, h * 0.2, w * 0.8, h * 0.14);
+  g.fillStyle(0x8a5a34, 1).fillCircle(w * 0.5, h * 0.44, w * 0.18);
+}
+
 export function buildPropTextures(scene) {
   gen(scene, TANK_KEY, TURTLE.tank.w, TURTLE.tank.h, (g) => drawTank(g, TURTLE.tank.w, TURTLE.tank.h));
   gen(scene, ISLAND_KEY, TURTLE.island.w, TURTLE.island.h, (g) => drawIsland(g, TURTLE.island.w, TURTLE.island.h));
@@ -209,6 +267,11 @@ export function buildPropTextures(scene) {
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
   gen(scene, BLANKET_KEY, 30, 20, (g) => drawBlanket(g, 30, 20));
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));
+  gen(scene, OVEN_KEY, OVEN.w, OVEN.h, (g) => drawOven(g, OVEN.w, OVEN.h));
+  gen(scene, TREAT_TRAY_KEY, 26, 16, (g) => drawTreatTray(g, 26, 16));
+  gen(scene, SHELF_KEY, 40, 70, (g) => drawShelf(g, 40, 70));
+  gen(scene, BOX_KEY, 34, 30, (g) => drawBoxStack(g, 34, 30));
+  gen(scene, BAG_KEY, 22, 30, (g) => drawBag(g, 22, 30));
 
   for (const key of Object.keys(CAGES)) {
     const { w, h } = CAGES[key][0]; // every cage in a section shares one size
