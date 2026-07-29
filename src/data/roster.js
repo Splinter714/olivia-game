@@ -6,6 +6,7 @@
 // off the game clock's HOUR_CHANGE event.
 import { createAnimal } from './animal.js';
 import { SPECIES_KEYS } from './species.js';
+import { createNeeds } from './needs.js';
 
 // Where a stay currently is. Any SECTIONS[].key (data/sections.js) is also a
 // valid `location` once an animal has been carried to its section.
@@ -99,6 +100,7 @@ export function createRoster() {
     if (!group) group = familyFor(speciesKey, rng);
 
     const primary = group[0];
+    const { needs, timers } = createNeeds(speciesKey);
     const stay = {
       animal: primary,
       companions: group.slice(1),
@@ -107,6 +109,11 @@ export function createRoster() {
       checkoutDay: day + MIN_NIGHTS + Math.floor(rng() * 2), // 2-3 nights
       location: LOCATION.RECEPTION,
       carryKind: primary.hasEggs ? CARRY_KIND.BASKET : carryKindForSpecies(speciesKey),
+      // Feeding/potty chores (issues #6/#7) — see data/needs.js for the shape.
+      // Timers only actually count down once the stay has settled into its
+      // section; KennelScene ticks them.
+      needs,
+      timers,
     };
     stays.push(stay);
     return stay;

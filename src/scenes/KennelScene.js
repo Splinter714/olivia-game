@@ -3,19 +3,35 @@ import {
   WALL, ROOM, OUTSIDE, WORLD, BACK_DOOR, FRONT_DOOR, RECEPTION, SECTIONS,
   penRects, wallRects, outsideFenceRects,
 } from '../data/sections.js';
+import { TURTLE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT } from '../data/props.js';
 import { createClock, tintForHour, PHASE } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
 import { findPath } from '../data/path.js';
+import { tickNeeds, clearNeed } from '../data/needs.js';
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
 import { buildAnimalTextures, animalTextureKey, EGG_KEY, NAME_TAG_KEY } from '../art/animals.js';
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
+import {
+  buildPropTextures, TANK_KEY, ISLAND_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
+  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY,
+} from '../art/props.js';
 import { createRoster, LOCATION, CARRY_KIND } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
 
 const SPEED = 160; // px/s, world (logical) units
-const PICKUP_RADIUS = 50; // px, how close the player must be to interact-pick-up a waiting arrival
+const PICKUP_RADIUS = 50; // px, how close the player must be to interact with anything
+
+// Sections that get their own smaller "corral" for placement instead of the
+// full section rect (cat/dog playpens, turtle sand island). Anything else
+// falls back to the plain section-rect grid.
+const PLAYPEN_RECT = { cat: CAT_PLAYPEN, dog: DOG_PLAYPEN };
+
+const DOG_MESS_INTERVAL = () => 25_000 + Math.random() * 25_000;
+const CAT_LITTER_INTERVAL = () => 25_000 + Math.random() * 25_000;
+const TANK_WATER_INTERVAL = () => 30_000 + Math.random() * 25_000; // turtles need "a lot of water"
+const MAX_MESS_PER_SPOT = 2;
 
 // Circle-vs-axis-aligned-rect overlap test, used by findPath's `collides` callback.
 function circleRectOverlap(cx, cy, r, rect) {
@@ -25,9 +41,9 @@ function circleRectOverlap(cx, cy, r, rect) {
 }
 
 // Main gameplay scene: draws the kennel building + outside strip from
-// data/sections.js, and drives the player around it. Phase B (animals,
-// arrivals, cages) hangs off the same section rects — nothing here is
-// hardcoded beyond them.
+// data/sections.js, and drives the player around it. Animals, arrivals, and
+// carrying (issues #4/#5) hang off the same section rects; feeding/potty/
+// playpens (issues #6/#7/#8) hang off data/props.js's furniture rects.
 export default class KennelScene extends Phaser.Scene {
   constructor() {
     super('Kennel');
@@ -41,8 +57,10 @@ export default class KennelScene extends Phaser.Scene {
     buildPlayerTexture(this);
     buildAnimalTextures(this);
     buildCarryTextures(this);
+    buildPropTextures(this);
 
     this._drawWorld();
+    this._buildProps();
     this._buildCollision();
     this._buildPlayer();
 
@@ -64,9 +82,19 @@ export default class KennelScene extends Phaser.Scene {
 
     // ── Roster / arrivals / carrying (issues #4, #5) ──────────────────────
     this.roster = createRoster();
-    this._staySprites = new Map(); // stay -> { sprite, tag:{bg,text}, extras:[...] }
+    this._staySprites = new Map(); // stay -> { pos, sprite, tag:{bg,text}, extras:[...], needIcons:{} }
     this.carrying = null;          // the stay currently in the player's hands, or null
     this._carryVisual = null;      // { obj } following the player while carrying
+
+    // ── Feeding / potty / playpens (issues #6, #7, #8) ─────────────────────
+    this.hasScooper = false;
+    this._scooperVisual = null;
+    this.messes = [];              // { kind: 'dog'|'cat', x, y, sprite }
+    this._dogMessTimer = DOG_MESS_INTERVAL();
+    this._catLitterTimer = CAT_LITTER_INTERVAL();
+    this.turtleTankNeedsWater = false;
+    this._tankTimer = TANK_WATER_INTERVAL();
+    this._tankNeedIcon = null;
 
     this.game.events.on(EVENTS.HOUR_CHANGE, this._onHourChange, this);
     this.events.once('shutdown', () => this.game.events.off(EVENTS.HOUR_CHANGE, this._onHourChange, this));
@@ -125,13 +153,39 @@ export default class KennelScene extends Phaser.Scene {
     doorGfx.fillStyle(0xe8c68f, 1).fillRect(ROOM.w - WALL, BACK_DOOR.y0, WALL, BACK_DOOR.y1 - BACK_DOOR.y0);
   }
 
+  // Furniture added by issues #6/#7/#8 — turtle tank + sand island, cat/dog
+  // playpen fences, litter box, scooper, and one food/water bowl per section
+  // (turtles get the tank instead). All positions come from data/props.js so
+  // interaction code below reads the exact same rects.
+  _buildProps() {
+    this.add.image(TURTLE.tank.x, TURTLE.tank.y, TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
+    this.add.image(TURTLE.island.x, TURTLE.island.y, ISLAND_KEY).setOrigin(0, 0).setDepth(-1.2);
+    this._tankMarker = { x: TURTLE.tank.x + TURTLE.tank.w / 2, y: TURTLE.tank.y + TURTLE.tank.h - 6 };
+
+    this.add.image(CAT_PLAYPEN.x, CAT_PLAYPEN.y, PLAYPEN_FENCE_KEY).setOrigin(0, 0).setDepth(0.5);
+    this.add.image(DOG_PLAYPEN.x, DOG_PLAYPEN.y, PLAYPEN_FENCE_KEY).setOrigin(0, 0).setDepth(0.5);
+
+    this.add.image(LITTER_BOX.x, LITTER_BOX.y, LITTER_BOX_KEY).setOrigin(0, 0).setDepth(-1);
+
+    this.add.image(SCOOPER_SPOT.x, SCOOPER_SPOT.y, SCOOPER_KEY).setOrigin(0.5, 1).setDepth(SCOOPER_SPOT.y);
+
+    for (const key of Object.keys(BOWL_SPOT)) {
+      const { x, y } = BOWL_SPOT[key];
+      this.add.image(x, y, BOWL_KEY).setOrigin(0.5, 1).setDepth(y - 1);
+    }
+  }
+
   _buildCollision() {
     // Every rect a body can't walk through — feeds both the arcade static
-    // colliders below and findPath's obstacle-aware routing.
+    // colliders below and findPath's obstacle-aware routing. Playpen fences,
+    // the litter box, scooper, and bowls stay non-solid on purpose — they're
+    // small furniture, not walls, and keeping them out of pathfinding avoids
+    // extra routing complexity for a first pass.
     this.obstacleRects = [
       ...wallRects(),
       ...SECTIONS.flatMap((s) => penRects(s)),
       RECEPTION.desk,
+      TURTLE.tank,
       ...outsideFenceRects(),
     ];
 
@@ -204,21 +258,33 @@ export default class KennelScene extends Phaser.Scene {
     const sprite = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y);
     const tag = this._addNameTag(x, y - sprite.height - 6, animal.name);
 
+    // Turtle eggs/babies sit tucked close to mom on the sand island (small
+    // island, plenty of animals to share it) — tighter spacing + a little
+    // jitter instead of the wider spread used for cat/dog companions.
+    const isTurtle = animal.species === 'turtle';
     const extras = [];
-    let cx = x + sprite.width * 0.55;
+    let cx = x + sprite.width * (isTurtle ? 0.4 : 0.55);
     if (animal.hasEggs) {
       for (let i = 0; i < animal.eggCount; i++) {
-        extras.push(this.add.image(cx, y - 1, EGG_KEY).setOrigin(0.5, 1).setDepth(y - 1));
-        cx += 10;
+        const jitterY = (Math.random() - 0.5) * 6;
+        extras.push(this.add.image(cx, y - 1 + jitterY, EGG_KEY).setOrigin(0.5, 1).setDepth(y - 1));
+        cx += isTurtle ? 7 : 10;
       }
     }
     for (const baby of stay.companions) {
       const babyKey = animalTextureKey(baby.species, 'baby', baby.colorVariant);
-      extras.push(this.add.image(cx, y, babyKey).setOrigin(0.5, 1).setDepth(y));
-      cx += 14;
+      const jitterY = isTurtle ? (Math.random() - 0.5) * 6 : 0;
+      extras.push(this.add.image(cx, y + jitterY, babyKey).setOrigin(0.5, 1).setDepth(y));
+      cx += isTurtle ? 9 : 14;
     }
 
-    this._staySprites.set(stay, { pos: { x, y }, sprite, tag, extras });
+    const rec = { pos: { x, y }, sprite, tag, extras, needIcons: {} };
+    this._staySprites.set(stay, rec);
+    // Re-show any indicator for a need the animal already had before this
+    // (re-)render, e.g. after a section dropoff mid-need.
+    for (const key of Object.keys(stay.needs || {})) {
+      if (stay.needs[key]) this._setNeedIcon(stay, key, true);
+    }
   }
 
   _destroyStaySprites(stay) {
@@ -228,6 +294,7 @@ export default class KennelScene extends Phaser.Scene {
     rec.tag.bg.destroy();
     rec.tag.text.destroy();
     rec.extras.forEach((e) => e.destroy());
+    Object.values(rec.needIcons).forEach((icon) => icon.destroy());
     this._staySprites.delete(stay);
   }
 
@@ -244,24 +311,28 @@ export default class KennelScene extends Phaser.Scene {
     return { bg, text };
   }
 
+  // Small floating icon above a stay's name tag showing it needs food/water/
+  // a bathroom trip — added/removed as the need flips, not recreated per frame.
+  _setNeedIcon(stay, key, show) {
+    const rec = this._staySprites.get(stay);
+    if (!rec) return;
+    if (show) {
+      if (rec.needIcons[key]) return;
+      const already = Object.keys(rec.needIcons).length;
+      const x = rec.pos.x - 10 + already * 16;
+      const y = rec.tag.bg.y - rec.tag.bg.height - 2;
+      rec.needIcons[key] = this.add.image(x, y, NEED_KEY[key]).setOrigin(0.5, 1).setDepth(9002);
+    } else if (rec.needIcons[key]) {
+      rec.needIcons[key].destroy();
+      delete rec.needIcons[key];
+    }
+  }
+
   // ── Carrying (issue #5) ──────────────────────────────────────────────────
   // Press interact near a waiting reception arrival to pick it up; the carry
   // prop (leash/cage/box/basket — or the bare animal for the small pets) then
   // follows the player. Walking into the animal's own section auto-drops it off
   // — simpler for a kid player than requiring a second interact press.
-
-  _checkPickup() {
-    if (!this.controls.interactJustDown()) return;
-    let nearest = null, nearestD = Infinity;
-    for (const stay of this.roster.stays) {
-      if (stay.location !== LOCATION.RECEPTION) continue;
-      const rec = this._staySprites.get(stay);
-      if (!rec) continue;
-      const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, rec.pos.x, rec.pos.y);
-      if (d < PICKUP_RADIUS && d < nearestD) { nearest = stay; nearestD = d; }
-    }
-    if (nearest) this._pickUp(nearest);
-  }
 
   _pickUp(stay) {
     this._destroyStaySprites(stay);
@@ -301,19 +372,204 @@ export default class KennelScene extends Phaser.Scene {
     this._renderStay(stay, pos.x, pos.y);
   }
 
-  // Simple wrapping grid of standing spots inside a section's rect, indexed by
-  // how many other stays are already placed there — good enough for a handful
-  // of animals per section without needing real cage furniture yet.
+  // Placement spot for the `index`-th stay already in a section. Cats/dogs
+  // place inside their playpen; turtles place on the sand island (spread with
+  // a golden-angle spiral so multiples don't stack exactly); everything else
+  // uses the plain wrapping grid across the whole section rect.
   _sectionSlot(section, index) {
-    const { x, y, w, h } = section.rect;
-    const margin = 30;
-    const cols = Math.max(1, Math.floor((w - margin * 2) / 60));
+    if (section.key === 'turtle') return this._islandSlot(index);
+    const playpen = PLAYPEN_RECT[section.key];
+    if (playpen) return this._gridSlot(playpen, index, 20, 42, 56);
+    return this._gridSlot(section.rect, index, 30, 46, 60);
+  }
+
+  _gridSlot(rect, index, margin, rowH, colW) {
+    const { x, y, w, h } = rect;
+    const cols = Math.max(1, Math.floor((w - margin * 2) / colW));
     const col = index % cols;
     const row = Math.floor(index / cols);
     return {
-      x: x + margin + col * 60,
-      y: Math.min(y + h - margin, y + margin + 40 + row * 46),
+      x: x + margin + col * colW,
+      y: Math.min(y + h - margin, y + margin + 30 + row * rowH),
     };
+  }
+
+  // Spreads points across the sand island using the golden angle, so
+  // successive turtles/eggs land at visibly different spots rather than
+  // clustering — "plenty of space for everyone" (DESIGN.md).
+  _islandSlot(index) {
+    const { x, y, w, h } = TURTLE.island;
+    const cx = x + w / 2, cy = y + h / 2;
+    const GOLDEN_ANGLE = 2.399963;
+    const ring = Math.floor(Math.sqrt(index + 0.5));
+    const angle = index * GOLDEN_ANGLE;
+    const rx = (w / 2 - 6) * Math.min(1, (ring + 1) / 3);
+    const ry = (h / 2 - 6) * Math.min(1, (ring + 1) / 3);
+    return { x: cx + Math.cos(angle) * rx * 0.7, y: cy + Math.sin(angle) * ry * 0.7 };
+  }
+
+  // ── Feeding / water (issue #6) ────────────────────────────────────────────
+
+  _feedSection(sectionKey) {
+    let fedAny = false;
+    for (const stay of this.roster.stays) {
+      if (stay.location !== sectionKey) continue;
+      if (!stay.needs.food) continue;
+      clearNeed(stay, 'food');
+      this._setNeedIcon(stay, 'food', false);
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} got fed!`);
+      fedAny = true;
+    }
+    return fedAny;
+  }
+
+  _topOffTank() {
+    this.turtleTankNeedsWater = false;
+    this._tankTimer = TANK_WATER_INTERVAL();
+    if (this._tankNeedIcon) { this._tankNeedIcon.destroy(); this._tankNeedIcon = null; }
+    this.game.events.emit(EVENTS.NOTIFY, 'Topped off the turtle tank!');
+  }
+
+  // ── Potty: scooper / litter box / dogs outside (issue #7) ────────────────
+
+  _pickUpScooper() {
+    this.hasScooper = true;
+    this.game.events.emit(EVENTS.NOTIFY, 'Got the scooper!');
+  }
+
+  _cleanMess(mess) {
+    mess.sprite.destroy();
+    this.messes = this.messes.filter((m) => m !== mess);
+    this.game.events.emit(EVENTS.NOTIFY, mess.kind === 'cat' ? 'Litter box cleaned!' : 'All cleaned up!');
+  }
+
+  // Simplest read for a kid player: the dog sprite visibly walks off toward
+  // the outside grass strip, pauses a moment, then walks back — no need for
+  // the player to shepherd it there step by step.
+  _takeDogOut(stay) {
+    if (stay._onBathroomTrip) return;
+    const rec = this._staySprites.get(stay);
+    if (!rec) return;
+    stay._onBathroomTrip = true;
+    const home = { ...rec.pos };
+    const outsideX = OUTSIDE.x + OUTSIDE.w / 2;
+    const outsideY = ROOM.h / 2;
+
+    rec.tag.bg.setVisible(false);
+    rec.tag.text.setVisible(false);
+    rec.extras.forEach((e) => e.setVisible(false));
+    this._setNeedIcon(stay, 'bathroom', false);
+
+    this.tweens.add({
+      targets: rec.sprite, x: outsideX, y: outsideY, duration: 900, ease: 'Sine.easeInOut',
+      onComplete: () => {
+        this.time.delayedCall(1400, () => {
+          this.tweens.add({
+            targets: rec.sprite, x: home.x, y: home.y, duration: 900, ease: 'Sine.easeInOut',
+            onComplete: () => {
+              stay._onBathroomTrip = false;
+              clearNeed(stay, 'bathroom');
+              this._renderStay(stay, home.x, home.y);
+              this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} feels much better!`);
+            },
+          });
+        });
+      },
+    });
+  }
+
+  // ── Per-frame need/mess ticking ──────────────────────────────────────────
+
+  _updateNeeds(delta) {
+    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
+    for (const stay of this.roster.stays) {
+      if (!sectionKeys.has(stay.location)) continue; // only settled stays accrue needs
+      const flipped = tickNeeds(stay, delta);
+      for (const key of flipped) {
+        this._setNeedIcon(stay, key, true);
+        if (key === 'bathroom') {
+          this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} needs to go to the bathroom!`);
+        }
+      }
+    }
+
+    this._tankTimer -= delta;
+    if (this._tankTimer <= 0 && !this.turtleTankNeedsWater) {
+      this.turtleTankNeedsWater = true;
+      this._tankNeedIcon = this.add.image(this._tankMarker.x, this._tankMarker.y - 30, NEED_KEY.water)
+        .setDepth(9002);
+    }
+  }
+
+  _updateMesses(delta) {
+    this._dogMessTimer -= delta;
+    if (this._dogMessTimer <= 0) {
+      this._dogMessTimer = DOG_MESS_INTERVAL();
+      const dogsPresent = this.roster.stays.some((s) => s.location === 'dog');
+      const count = this.messes.filter((m) => m.kind === 'dog').length;
+      if (dogsPresent && count < MAX_MESS_PER_SPOT) this._spawnMess('dog', DOG_PLAYPEN);
+    }
+
+    this._catLitterTimer -= delta;
+    if (this._catLitterTimer <= 0) {
+      this._catLitterTimer = CAT_LITTER_INTERVAL();
+      const catsPresent = this.roster.stays.some((s) => s.location === 'cat');
+      const count = this.messes.filter((m) => m.kind === 'cat').length;
+      if (catsPresent && count < MAX_MESS_PER_SPOT) this._spawnMess('cat', LITTER_BOX);
+    }
+  }
+
+  _spawnMess(kind, rect) {
+    const x = rect.x + 10 + Math.random() * Math.max(1, rect.w - 20);
+    const y = rect.y + 10 + Math.random() * Math.max(1, rect.h - 20);
+    const sprite = this.add.image(x, y, MESS_KEY).setOrigin(0.5, 0.5).setDepth(y - 0.5);
+    this.messes.push({ kind, x, y, sprite });
+  }
+
+  // ── Unified interaction (issues #5, #6, #7, #8) ──────────────────────────
+  // A single interact press resolves to whichever nearby thing makes sense —
+  // picking up an arrival, feeding a section, topping off the tank, grabbing
+  // the scooper, scooping a mess, or taking a dog out — whichever is closest,
+  // so the same button works everywhere without stepping on itself.
+
+  _checkInteractions(interactPressed) {
+    if (!interactPressed) return;
+    const px = this.player.x, py = this.player.y;
+    const dist = (x, y) => Phaser.Math.Distance.Between(px, py, x, y);
+
+    let best = null, bestD = PICKUP_RADIUS;
+    const consider = (x, y, action) => {
+      const d = dist(x, y);
+      if (d < bestD) { bestD = d; best = action; }
+    };
+
+    for (const stay of this.roster.stays) {
+      if (stay.location !== LOCATION.RECEPTION) continue;
+      const rec = this._staySprites.get(stay);
+      if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
+    }
+
+    for (const key of Object.keys(BOWL_SPOT)) {
+      const { x, y } = BOWL_SPOT[key];
+      consider(x, y, () => this._feedSection(key));
+    }
+
+    consider(this._tankMarker.x, this._tankMarker.y, () => this._topOffTank());
+
+    if (!this.hasScooper) consider(SCOOPER_SPOT.x, SCOOPER_SPOT.y, () => this._pickUpScooper());
+
+    for (const mess of this.messes) {
+      if (mess.kind === 'dog' && !this.hasScooper) continue; // dog messes need the scooper equipped
+      consider(mess.x, mess.y, () => this._cleanMess(mess));
+    }
+
+    for (const stay of this.roster.stays) {
+      if (stay.location !== 'dog' || !stay.needs.bathroom || stay._onBathroomTrip) continue;
+      const rec = this._staySprites.get(stay);
+      if (rec) consider(rec.pos.x, rec.pos.y, () => this._takeDogOut(stay));
+    }
+
+    if (best) best();
   }
 
   // ── Per-frame ────────────────────────────────────────────────────────────
@@ -332,14 +588,30 @@ export default class KennelScene extends Phaser.Scene {
 
     this._updateMovement(delta);
     this._updateTint();
+    this._updateNeeds(delta);
+    this._updateMesses(delta);
     this.player.setDepth(this.player.y);
 
+    // interactJustDown() is stateful (edge-triggered) — read it exactly once
+    // per frame and route the single result to whichever action applies.
+    const interactPressed = this.controls.interactJustDown();
     if (this.carrying) {
       this._followCarry();
       this._checkDropoff();
     } else {
-      this._checkPickup();
+      this._checkInteractions(interactPressed);
     }
+    this._followScooper();
+  }
+
+  _followScooper() {
+    if (!this.hasScooper) return;
+    if (!this._scooperVisual) {
+      this._scooperVisual = this.add.image(this.player.x, this.player.y, SCOOPER_KEY).setOrigin(0.5, 1).setDepth(9499);
+    }
+    this._scooperVisual.x = this.player.x - PLAYER_W * 0.6;
+    this._scooperVisual.y = this.player.y - 4;
+    this._scooperVisual.setDepth(this.player.y);
   }
 
   _updateMovement(delta) {
