@@ -4,11 +4,12 @@ import {
   penRects, wallRects, outsideFenceRects,
 } from '../data/sections.js';
 import { TURTLE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT, COMPUTER_SPOT } from '../data/props.js';
-import { createClock, tintForHour, PHASE } from '../data/clock.js';
+import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
 import { findPath } from '../data/path.js';
 import { tickNeeds, clearNeed } from '../data/needs.js';
 import { tickBirth } from '../data/births.js';
+import { pickWakeEvent, WAKE_REASON } from '../data/night.js';
 import { createAnimal } from '../data/animal.js';
 import { randomName } from '../data/names.js';
 import { Controls } from '../input/Controls.js';
@@ -18,7 +19,7 @@ import { buildAnimalTextures, animalTextureKey, EGG_KEY, NAME_TAG_KEY } from '..
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, ISLAND_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY,
+  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY,
 } from '../art/props.js';
 import { createRoster, LOCATION, CARRY_KIND } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
@@ -45,6 +46,14 @@ const DOG_MESS_INTERVAL = () => 25_000 + Math.random() * 25_000;
 const CAT_LITTER_INTERVAL = () => 25_000 + Math.random() * 25_000;
 const TANK_WATER_INTERVAL = () => 30_000 + Math.random() * 25_000; // turtles need "a lot of water"
 const MAX_MESS_PER_SPOT = 2;
+
+// Night sequence timings (issue #11) — the screen fades to black once
+// everyone's tucked in, fades back for each wake-up so the player can act,
+// then fades out again to keep "sleeping" until morning.
+const SLEEP_FADE_MS = 900;
+const WAKE_FADE_MS = 500;
+const RESOLVE_FADE_MS = 700;
+const BAD_DREAM_MS = 2600; // flavor-only wake-up: no fix needed, just settles back down
 
 // Circle-vs-axis-aligned-rect overlap test, used by findPath's `collides` callback.
 function circleRectOverlap(cx, cy, r, rect) {
@@ -113,8 +122,26 @@ export default class KennelScene extends Phaser.Scene {
     this._computerNeedIcon = null;
     this._computerBusy = false;
 
+    // ── Night: tuck-in / staying awake / wake-ups (issue #11) ──────────────
+    this.night = {
+      active: false,       // true from NIGHT phase start until morning resumes
+      allTucked: false,    // fires the "Everyone's asleep!" transition once
+      sleeping: false,     // mid fade-to-black / wake-up / fade-back sequence
+      wakeUpsRemaining: 0,
+      currentWake: null,   // { stay, reason } awaiting player resolution, or null
+    };
+    // Full-screen "asleep" overlay, same oversized-rect trick as tintGfx;
+    // sleepAlpha is a plain tweened number, not a Phaser property, so any
+    // tween can drive it directly.
+    this.sleepGfx = this.add.graphics().setScrollFactor(0).setDepth(10000);
+    this.sleepAlpha = 0;
+
     this.game.events.on(EVENTS.HOUR_CHANGE, this._onHourChange, this);
-    this.events.once('shutdown', () => this.game.events.off(EVENTS.HOUR_CHANGE, this._onHourChange, this));
+    this.game.events.on(EVENTS.PHASE_CHANGE, this._onPhaseChange, this);
+    this.events.once('shutdown', () => {
+      this.game.events.off(EVENTS.HOUR_CHANGE, this._onHourChange, this);
+      this.game.events.off(EVENTS.PHASE_CHANGE, this._onPhaseChange, this);
+    });
 
     // Don't start with an empty kennel — one arrival is already waiting at
     // reception when the shift begins.
@@ -325,13 +352,18 @@ export default class KennelScene extends Phaser.Scene {
       cx += isTurtle ? 9 : 14;
     }
 
-    const rec = { pos: { x, y }, sprite, tag, extras, needIcons: {} };
+    const rec = { pos: { x, y }, sprite, tag, extras, needIcons: {}, blanket: null };
     this._staySprites.set(stay, rec);
     // Re-show any indicator for a need the animal already had before this
     // (re-)render, e.g. after a section dropoff mid-need.
     for (const key of Object.keys(stay.needs || {})) {
       if (stay.needs[key]) this._setNeedIcon(stay, key, true);
     }
+    // Night tuck-in (issue #11) survives a redraw the same way: restore the
+    // blanket if she's already tucked in, otherwise the "needs tucking" icon
+    // if it's night and she isn't.
+    if (stay.tuckedIn) this._setBlanket(stay, true);
+    else if (this.night.active) this._setNeedIcon(stay, 'tuck', true);
   }
 
   _destroyStaySprites(stay) {
@@ -342,6 +374,7 @@ export default class KennelScene extends Phaser.Scene {
     rec.tag.text.destroy();
     rec.extras.forEach((e) => e.destroy());
     Object.values(rec.needIcons).forEach((icon) => icon.destroy());
+    rec.blanket?.destroy();
     this._staySprites.delete(stay);
   }
 
@@ -414,6 +447,10 @@ export default class KennelScene extends Phaser.Scene {
     this._carryVisual = null;
     this.carrying = null;
     stay.location = section.key;
+    // A late dropoff during the night (rare — only if the player was still
+    // mid-carry when night fell) still needs tucking in, same as everyone
+    // else (issue #11).
+    if (this.night.active) stay.tuckedIn = stay.tuckedIn ?? false;
     const already = this.roster.stays.filter((s) => s !== stay && s.location === section.key).length;
     const pos = this._sectionSlot(section, already);
     this._renderStay(stay, pos.x, pos.y);
@@ -518,6 +555,11 @@ export default class KennelScene extends Phaser.Scene {
               clearNeed(stay, 'bathroom');
               this._renderStay(stay, home.x, home.y);
               this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} feels much better!`);
+              // If this was the night's current "needs the bathroom" wake-up
+              // (issue #11), taking her outside resolves it — resume toward morning.
+              if (this.night.currentWake?.stay === stay && this.night.currentWake.reason === WAKE_REASON.BATHROOM) {
+                this._resolveWakeUp();
+              }
             },
           });
         });
@@ -573,6 +615,12 @@ export default class KennelScene extends Phaser.Scene {
     }
 
     if (pos) this._renderStay(stay, pos.x, pos.y);
+
+    // If this birth was the night's current "having babies" wake-up (issue
+    // #11), it's now resolved on its own — resume toward morning.
+    if (this.night.currentWake?.stay === stay && this.night.currentWake.reason === WAKE_REASON.BABIES) {
+      this._resolveWakeUp();
+    }
   }
 
   // ── The computer: baby announcements (issue #10) ─────────────────────────
@@ -618,6 +666,152 @@ export default class KennelScene extends Phaser.Scene {
         this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s owner named the babies: ${list}!`);
       }
     });
+  }
+
+  // ── Night: tuck-in, staying awake, wake-ups (issue #11) ──────────────────
+  // At NIGHT_START every present animal needs tucking in (DESIGN.md's small
+  // fabric sheet); once the last one is tucked, the player "goes to sleep"
+  // too — a fade to black, then either a wake-up (having babies / needs the
+  // bathroom / bad dream / cold) that fades back in for the player to
+  // handle, or a fade back to a fast-forwarded morning if nothing wakes her.
+
+  _presentStays() {
+    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
+    return this.roster.stays.filter((s) => sectionKeys.has(s.location));
+  }
+
+  _onPhaseChange({ isNight }) {
+    if (isNight) this._startNight();
+  }
+
+  _startNight() {
+    this.night.active = true;
+    this.night.allTucked = false;
+    this.night.sleeping = false;
+    this.night.wakeUpsRemaining = 0;
+    this.night.currentWake = null;
+    for (const stay of this._presentStays()) {
+      stay.tuckedIn = false;
+      this._setNeedIcon(stay, 'tuck', true);
+    }
+    this._checkAllTuckedIn(); // covers the (rare) empty-kennel case
+  }
+
+  // Lays (or removes) the small fabric sheet over a stay — one blanket per
+  // stay covers her companions too (eggs/babies "wrapped" with her, per
+  // DESIGN.md), since they share the same cage spot.
+  _setBlanket(stay, show) {
+    const rec = this._staySprites.get(stay);
+    if (!rec) return;
+    if (show) {
+      if (rec.blanket) return;
+      const img = this.add.image(rec.pos.x, rec.pos.y - rec.sprite.height * 0.35, BLANKET_KEY)
+        .setOrigin(0.5, 0.5).setDepth(rec.sprite.depth + 0.3);
+      img.setDisplaySize(rec.sprite.displayWidth * 1.2, rec.sprite.displayHeight * 0.7);
+      rec.blanket = img;
+    } else if (rec.blanket) {
+      rec.blanket.destroy();
+      rec.blanket = null;
+    }
+  }
+
+  _tuckIn(stay) {
+    if (stay.tuckedIn) return;
+    stay.tuckedIn = true;
+    this._setNeedIcon(stay, 'tuck', false);
+    this._setBlanket(stay, true);
+    if (this.night.currentWake?.stay === stay && this.night.currentWake.reason === WAKE_REASON.COLD) {
+      this._resolveWakeUp();
+    }
+    this._checkAllTuckedIn();
+  }
+
+  _checkAllTuckedIn() {
+    if (!this.night.active || this.night.allTucked) return;
+    if (!this._presentStays().every((s) => s.tuckedIn)) return;
+    this.night.allTucked = true;
+    this.game.events.emit(EVENTS.NOTIFY, "Everyone's asleep!");
+    this._beginSleep();
+  }
+
+  _beginSleep() {
+    this.night.sleeping = true;
+    this.tweens.add({
+      targets: this, sleepAlpha: 1, duration: SLEEP_FADE_MS, ease: 'Sine.easeIn',
+      onComplete: () => {
+        // 0-2 wake-ups before morning — plenty for a kid's game (DESIGN.md
+        // doesn't promise one every night).
+        this.night.wakeUpsRemaining = Phaser.Math.Between(0, 2);
+        this._nightTick();
+      },
+    });
+  }
+
+  // Advances the sleep sequence one step: either wraps up to morning, or
+  // rolls + surfaces the next wake-up. Called while the screen is black.
+  _nightTick() {
+    if (this.night.wakeUpsRemaining <= 0) {
+      this.clock.setHour(DAY_START); // the simple "fast-forward" — jump straight there
+      this.tweens.add({
+        targets: this, sleepAlpha: 0, duration: SLEEP_FADE_MS, ease: 'Sine.easeOut',
+        onComplete: () => {
+          this.night.active = false;
+          this.night.sleeping = false;
+          this.night.allTucked = false;
+          this.night.currentWake = null;
+        },
+      });
+      return;
+    }
+    this.night.wakeUpsRemaining -= 1;
+    const event = pickWakeEvent(this._presentStays());
+    if (!event) { this._nightTick(); return; } // nobody present — nothing to wake up
+    this.tweens.add({
+      targets: this, sleepAlpha: 0, duration: WAKE_FADE_MS, ease: 'Sine.easeOut',
+      onComplete: () => this._triggerWakeUp(event),
+    });
+  }
+
+  _triggerWakeUp({ stay, reason }) {
+    this.night.currentWake = { stay, reason };
+    const name = stay.animal.name;
+    if (reason === WAKE_REASON.COLD) {
+      stay.tuckedIn = false;
+      this._setBlanket(stay, false); // fabric slides off
+      this._setNeedIcon(stay, 'tuck', true);
+      this.game.events.emit(EVENTS.NOTIFY, `${name} is cold!`);
+    } else if (reason === WAKE_REASON.BATHROOM) {
+      stay.needs.bathroom = true;
+      this._setNeedIcon(stay, 'bathroom', true);
+      this.game.events.emit(EVENTS.NOTIFY, `${name} needs to go to the bathroom!`);
+    } else if (reason === WAKE_REASON.BABIES) {
+      // Nudge her existing birth timer to fire almost immediately — the
+      // normal birth flow (_updateBirths/_triggerBirth) takes it from here,
+      // including its own "having babies!" notification.
+      stay.birthTimer = 200;
+    } else { // bad dream — flavor only, nothing to fix, settles on its own
+      this.game.events.emit(EVENTS.NOTIFY, `${name} had a bad dream!`);
+      this.time.delayedCall(BAD_DREAM_MS, () => this._resolveWakeUp());
+    }
+  }
+
+  // Called once a wake-up's cause has actually been addressed (re-tucked,
+  // taken outside, or the birth landed) — fades back to black and continues
+  // toward morning.
+  _resolveWakeUp() {
+    if (!this.night.currentWake) return;
+    this.night.currentWake = null;
+    this.tweens.add({
+      targets: this, sleepAlpha: 1, duration: RESOLVE_FADE_MS, ease: 'Sine.easeIn',
+      onComplete: () => this._nightTick(),
+    });
+  }
+
+  _updateSleepOverlay() {
+    this.sleepGfx.clear();
+    if (this.sleepAlpha <= 0.002) return;
+    const sw = logicalW(this), sh = logicalH(this);
+    this.sleepGfx.fillStyle(0x000000, this.sleepAlpha).fillRect(-sw, -sh, sw * 3, sh * 3);
   }
 
   // ── Per-frame need/mess ticking ──────────────────────────────────────────
@@ -715,6 +909,16 @@ export default class KennelScene extends Phaser.Scene {
       consider(COMPUTER_SPOT.x, COMPUTER_SPOT.y, () => this._useComputer());
     }
 
+    // Tucking animals in for the night (issue #11) — walk up to anyone not
+    // yet under their blanket and interact.
+    if (this.night.active) {
+      for (const stay of this._presentStays()) {
+        if (stay.tuckedIn) continue;
+        const rec = this._staySprites.get(stay);
+        if (rec) consider(rec.pos.x, rec.pos.y, () => this._tuckIn(stay));
+      }
+    }
+
     if (best) best();
   }
 
@@ -734,6 +938,7 @@ export default class KennelScene extends Phaser.Scene {
 
     this._updateMovement(delta);
     this._updateTint();
+    this._updateSleepOverlay();
     this._updateNeeds(delta);
     this._updateMesses(delta);
     this._updateBirths(delta);

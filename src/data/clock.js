@@ -76,5 +76,14 @@ export function createClock({ msPerHour = MS_PER_GAME_HOUR, startHour = 8 } = {}
       hourFloat = Math.floor(hourFloat) + 1;
       rollover();
     },
+    // Jump straight to `hour` — the night sequence's morning fast-forward
+    // (issue #11) uses this instead of ticking through every intervening
+    // hour. Always moves forward: if `hour` isn't later than right now in
+    // the current day, it lands on that hour tomorrow instead.
+    setHour(hour) {
+      const target = wrap24(hour);
+      if (target <= hourFloat) day += 1;
+      hourFloat = target;
+    },
   };
 }

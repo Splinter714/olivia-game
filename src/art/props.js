@@ -13,7 +13,8 @@ export const SCOOPER_KEY = 'prop-scooper';
 export const BOWL_KEY = 'prop-bowl';
 export const MESS_KEY = 'prop-mess';
 export const COMPUTER_KEY = 'prop-computer';
-export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail' };
+export const BLANKET_KEY = 'prop-blanket';
+export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck' };
 
 // Water tank with a glass-cover highlight along the top rim.
 function drawTank(g, w, h) {
@@ -93,6 +94,11 @@ function drawNeedBubble(g, w, h, icon) {
     g.fillStyle(0xdd5555, 1).fillRoundedRect(w * 0.2, h * 0.34, w * 0.6, h * 0.4, 2);
     g.fillStyle(0xffe3e3, 1);
     g.fillTriangle(w * 0.2, h * 0.34, w * 0.5, h * 0.58, w * 0.8, h * 0.34);
+  } else if (icon === 'tuck') {
+    // A little folded blanket corner — issue #11's "needs tucking in" icon,
+    // shown above any animal not yet under its fabric sheet for the night.
+    g.fillStyle(0xe0a95e, 1).fillRoundedRect(w * 0.24, h * 0.36, w * 0.52, h * 0.34, 2);
+    g.fillStyle(0xf6cf9a, 1).fillTriangle(w * 0.24, h * 0.36, w * 0.5, h * 0.36, w * 0.24, h * 0.62);
   } else { // water
     g.fillStyle(0x4b9fc4, 1);
     g.fillTriangle(w * 0.5, h * 0.24, w * 0.32, h * 0.62, w * 0.68, h * 0.62);
@@ -111,6 +117,16 @@ function drawComputer(g, w, h) {
   g.fillStyle(0xffffff, 0.5).fillRect(w * 0.16, h * 0.14, w * 0.3, h * 0.07); // glare
 }
 
+// Small soft-fabric sheet — issue #11's tuck-in cover, laid over an animal
+// (or wrapped around its eggs/babies, which share the same stay) at night.
+// Scaled per-animal at placement time (KennelScene), so one plain textured
+// blanket shape covers every species instead of needing per-species art.
+function drawBlanket(g, w, h) {
+  g.fillStyle(0xf2d9a8, 0.95).fillRoundedRect(0, 0, w, h, h * 0.3);
+  g.fillStyle(0xe0c084, 0.75).fillRoundedRect(0, h * 0.55, w, h * 0.45, h * 0.25);
+  g.lineStyle(1.5, 0xc9a15f, 0.85).strokeRoundedRect(1, 1, w - 2, h - 2, h * 0.3);
+}
+
 export function buildPropTextures(scene) {
   gen(scene, TANK_KEY, TURTLE.tank.w, TURTLE.tank.h, (g) => drawTank(g, TURTLE.tank.w, TURTLE.tank.h));
   gen(scene, ISLAND_KEY, TURTLE.island.w, TURTLE.island.h, (g) => drawIsland(g, TURTLE.island.w, TURTLE.island.h));
@@ -123,5 +139,7 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.bathroom, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'bathroom'));
   gen(scene, NEED_KEY.water, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'water'));
   gen(scene, NEED_KEY.mail, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'mail'));
+  gen(scene, NEED_KEY.tuck, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'tuck'));
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
+  gen(scene, BLANKET_KEY, 30, 20, (g) => drawBlanket(g, 30, 20));
 }
