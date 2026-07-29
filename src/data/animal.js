@@ -2,7 +2,8 @@
 // issue #4 (arrivals) should call to spawn a real pet, and issue #9 (moms/babies/
 // eggs) should extend the pregnancy/egg fields on rather than reshape the object.
 import { SPECIES } from './species.js';
-import { randomName } from './names.js';
+import { randomName, registerName } from './names.js';
+import { randomHue } from './looks.js';
 
 let _nextId = 1;
 
@@ -14,7 +15,7 @@ function nextId(speciesKey) {
 
 // Creates a plain-object animal instance for `speciesKey` (must be a key in
 // data/species.js's SPECIES). Options let callers pin any field (arrivals may
-// want a specific name from the owner, a demo may want a fixed colorVariant);
+// want a specific name from the owner, a demo may want a fixed hue);
 // anything omitted is randomized/defaulted sensibly.
 //
 //   createAnimal('dog')
@@ -24,9 +25,13 @@ function nextId(speciesKey) {
 // Shape:
 //   id            stable unique string, e.g. "dog-3"
 //   species       species key
-//   name          kid-friendly name (from data/names.js unless overridden)
+//   name          kid-friendly name (from data/names.js unless overridden) —
+//                 guaranteed unique across every animal (data/names.js)
 //   stage         'baby' | 'adult'
-//   colorVariant  index into the species' art palette (data/species.js)
+//   hue           0-359 hue driving this animal's procedural palette
+//                 (data/looks.js picks it; art/palette.js turns it into
+//                 actual colors) — guaranteed unique + well-spaced per
+//                 species so no two animals of the same species look alike
 //   isPregnant    true if she's expecting but hasn't had babies/eggs yet
 //   hasEggs       true for a turtle mom currently sitting on eggs
 //   eggCount      number of eggs, when hasEggs
@@ -41,14 +46,16 @@ export function createAnimal(speciesKey, opts = {}) {
   const spec = SPECIES[speciesKey];
   if (!spec) throw new Error(`createAnimal: unknown species "${speciesKey}"`);
 
-  const colorVariant = opts.colorVariant ?? Math.floor(Math.random() * spec.palette.length);
+  const hue = opts.hue ?? randomHue(speciesKey);
+  const name = opts.name ?? randomName(speciesKey);
+  registerName(name);
 
   return {
     id: opts.id ?? nextId(speciesKey),
     species: speciesKey,
-    name: opts.name ?? randomName(speciesKey),
+    name,
     stage: opts.stage ?? 'adult',
-    colorVariant,
+    hue,
     isPregnant: opts.isPregnant ?? false,
     hasEggs: opts.hasEggs ?? false,
     eggCount: opts.eggCount ?? 0,

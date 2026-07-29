@@ -1,19 +1,21 @@
 // Procedural sprites for the six kennel species (data/species.js) — simple flat
 // shape language, kid-readable at a glance rather than photorealistic (mirrors
 // the horse game's layered-Graphics technique, simplified: single static pose per
-// stage/color-variant, no walk-cycle frames yet). Also builds the turtle-egg and
-// floating name-tag textures shared by every cage/demo placement.
+// stage/hue, no walk-cycle frames yet). Also builds the turtle-egg and floating
+// name-tag textures shared by every cage/demo placement.
 import { gen } from './_gen.js';
+import { paletteForHue } from './palette.js';
 import { SPECIES, SPECIES_KEYS } from '../data/species.js';
 
 export const EGG_KEY = 'animal-egg';
 export const NAME_TAG_KEY = 'name-tag';
 
-// Texture key for a given species/stage/color-variant, e.g. "animal-dog-adult-0".
+// Texture key for a given species/stage/hue, e.g. "animal-dog-adult-210".
 // Issue #4 (arrivals) and #9 (families) should build sprite keys through this
-// helper rather than hand-assembling the string.
-export function animalTextureKey(speciesKey, stage, colorVariant) {
-  return `animal-${speciesKey}-${stage}-${colorVariant}`;
+// helper (or, better, ensureAnimalTexture() below) rather than hand-assembling
+// the string.
+export function animalTextureKey(speciesKey, stage, hue) {
+  return `animal-${speciesKey}-${stage}-${hue}`;
 }
 
 // ── Per-species draw functions ──────────────────────────────────────────────
@@ -149,23 +151,31 @@ function drawNameTag(g, w, h) {
   g.fillCircle(w - 6, 3, 2);
 }
 
-// Builds every species/stage/color-variant texture, plus the egg and name-tag
-// textures. Call once from KennelScene.create() before placing any animal art.
+// Builds the egg and name-tag textures shared by every placement. Animal
+// textures themselves are no longer pre-built here — since every animal now
+// has its own unique hue (data/looks.js), pre-building every combo up front
+// doesn't make sense; see ensureAnimalTexture() below, which builds a
+// species/stage/hue texture lazily the first time it's needed. Call once
+// from KennelScene.create() before placing any animal art.
 export function buildAnimalTextures(scene) {
-  for (const key of SPECIES_KEYS) {
-    const spec = SPECIES[key];
-    const draw = DRAW[key];
-    spec.palette.forEach((c, variant) => {
-      gen(scene, animalTextureKey(key, 'adult', variant), spec.size.w, spec.size.h,
-        (g) => draw(g, spec.size.w, spec.size.h, c, false));
-
-      const bw = Math.max(8, Math.round(spec.size.w * spec.babyScale));
-      const bh = Math.max(8, Math.round(spec.size.h * spec.babyScale));
-      gen(scene, animalTextureKey(key, 'baby', variant), bw, bh,
-        (g) => draw(g, bw, bh, c, true));
-    });
-  }
-
   gen(scene, EGG_KEY, 10, 8, (g) => drawEgg(g, 10, 8));
   gen(scene, NAME_TAG_KEY, 60, 20, (g) => drawNameTag(g, 60, 20));
+}
+
+// Lazily builds (and caches) the texture for `speciesKey`/`stage`/`hue`,
+// returning its key either way. Call sites should use the returned key
+// immediately, e.g.:
+//   const key = ensureAnimalTexture(this, animal.species, animal.stage, animal.hue);
+export function ensureAnimalTexture(scene, speciesKey, stage, hue) {
+  const key = animalTextureKey(speciesKey, stage, hue);
+  if (scene.textures.exists(key)) return key;
+
+  const spec = SPECIES[speciesKey];
+  const draw = DRAW[speciesKey];
+  const c = paletteForHue(speciesKey, hue);
+  const baby = stage === 'baby';
+  const w = baby ? Math.max(8, Math.round(spec.size.w * spec.babyScale)) : spec.size.w;
+  const h = baby ? Math.max(8, Math.round(spec.size.h * spec.babyScale)) : spec.size.h;
+  gen(scene, key, w, h, (g) => draw(g, w, h, c, baby));
+  return key;
 }

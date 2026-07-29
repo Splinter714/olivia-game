@@ -16,7 +16,7 @@ import { createEconomy, computePayout, upgradeMessage } from '../data/economy.js
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
-import { buildAnimalTextures, animalTextureKey, EGG_KEY, NAME_TAG_KEY } from '../art/animals.js';
+import { buildAnimalTextures, ensureAnimalTexture, EGG_KEY, NAME_TAG_KEY } from '../art/animals.js';
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, ISLAND_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
@@ -31,8 +31,10 @@ import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
 const BABY_PLACEHOLDER = '???';
 
 // A handful of collar colors — cycled across siblings that share the SAME
-// species + colorVariant (they "look the same", DESIGN.md's kitten example)
-// so each one is still tellable apart at a glance.
+// species + hue (they "look the same", DESIGN.md's kitten example) so each
+// one is still tellable apart at a glance. Hues are unique per animal now
+// (data/looks.js), so this is a harmless safety net that should rarely-to-
+// never actually trigger.
 const COLLAR_COLORS = [0xdd5555, 0x4b9fc4, 0xf2c96b, 0x6fae5a, 0x9a6fd6];
 
 const SPEED = 160; // px/s, world (logical) units
@@ -327,7 +329,7 @@ export default class KennelScene extends Phaser.Scene {
   _renderStay(stay, x, y) {
     this._destroyStaySprites(stay);
     const { animal } = stay;
-    const texKey = animalTextureKey(animal.species, animal.stage, animal.colorVariant);
+    const texKey = ensureAnimalTexture(this, animal.species, animal.stage, animal.hue);
     const sprite = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y);
     const tag = this._addNameTag(x, y - sprite.height - 6, animal.name);
 
@@ -344,22 +346,24 @@ export default class KennelScene extends Phaser.Scene {
         cx += isTurtle ? 7 : 10;
       }
     }
-    // Siblings that share a species+colorVariant "look the same" (DESIGN.md's
-    // kitten example) — give each of THOSE a small colored collar so they're
-    // still tellable apart; a baby on its own doesn't need one.
+    // Siblings that share a species+hue "look the same" (DESIGN.md's kitten
+    // example) — give each of THOSE a small colored collar so they're still
+    // tellable apart; a baby on its own doesn't need one. Hues are unique per
+    // animal now (data/looks.js), so this is a harmless safety net that
+    // should rarely-to-never actually trigger.
     const variantCounts = {};
-    for (const b of stay.companions) variantCounts[b.colorVariant] = (variantCounts[b.colorVariant] || 0) + 1;
+    for (const b of stay.companions) variantCounts[b.hue] = (variantCounts[b.hue] || 0) + 1;
     const variantSeen = {};
 
     for (const baby of stay.companions) {
-      const babyKey = animalTextureKey(baby.species, 'baby', baby.colorVariant);
+      const babyKey = ensureAnimalTexture(this, baby.species, 'baby', baby.hue);
       const jitterY = isTurtle ? (Math.random() - 0.5) * 6 : 0;
       const babySprite = this.add.image(cx, y + jitterY, babyKey).setOrigin(0.5, 1).setDepth(y);
       extras.push(babySprite);
 
-      if (variantCounts[baby.colorVariant] > 1) {
-        const seen = variantSeen[baby.colorVariant] || 0;
-        variantSeen[baby.colorVariant] = seen + 1;
+      if (variantCounts[baby.hue] > 1) {
+        const seen = variantSeen[baby.hue] || 0;
+        variantSeen[baby.hue] = seen + 1;
         const collarColor = COLLAR_COLORS[seen % COLLAR_COLORS.length];
         extras.push(this.add.circle(cx, y + jitterY - babySprite.height * 0.5, 3, collarColor).setDepth(y + 0.1));
       }
@@ -456,7 +460,7 @@ export default class KennelScene extends Phaser.Scene {
     stay.location = LOCATION.CARRYING;
     this.carrying = stay;
     const key = stay.carryKind === CARRY_KIND.NONE
-      ? animalTextureKey(stay.animal.species, stay.animal.stage, stay.animal.colorVariant)
+      ? ensureAnimalTexture(this, stay.animal.species, stay.animal.stage, stay.animal.hue)
       : CARRY_KEY[stay.carryKind];
     const obj = this.add.image(this.player.x, this.player.y, key).setOrigin(0.5, 1).setDepth(9500);
     this._carryVisual = { obj };
