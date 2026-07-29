@@ -8,13 +8,19 @@
 // Devices are all first-class and interchangeable: whichever one the player
 // touches next just works, no explicit mode switch needed.
 import Phaser from 'phaser';
-import { dprOf, worldUiOffset } from '../uiUtils.js';
+import { dprOf, worldUiOffset, logicalW, logicalH } from '../uiUtils.js';
 
 const STICK_DEADZONE = 0.25;
 const DRAG_THRESHOLD = 12; // screen px of finger travel before a touch becomes a joystick, not a tap
 
 // On-screen joystick feel — same shape as the mech game's TOUCH_STICK dials.
 const JOY = { radius: 60, deadzone: 0.15, curve: 1.3 };
+
+// Fixed bottom-right "interact" button — touch has no Space/E/pad-A equivalent
+// otherwise, so without this touch-only players could never pick up/drop off/
+// feed/tuck in anything. Always visible (not just mid-drag, unlike the joystick
+// ring) whenever a touch device is detected.
+const INTERACT_BTN = { r: 34, margin: 26 };
 
 export class Controls {
   constructor(scene) {
@@ -46,6 +52,11 @@ export class Controls {
     // there's no fixed on-screen real estate to reserve.
     this._ring = this.touchStickVisible ? scene.add.graphics().setScrollFactor(0).setDepth(9997) : null;
 
+    // One-shot flag set by a tap/click landing on the interact button; consumed
+    // by interactJustDown() alongside Space/E/pad-A.
+    this._touchInteractPending = false;
+    this._interactBtn = this.touchStickVisible ? this._buildInteractButton() : null;
+
     scene.input.on('pointerdown', this._onPointerDown, this);
     scene.input.on('pointermove', this._onPointerMove, this);
     scene.input.on('pointerup', this._onPointerUp, this);
@@ -58,7 +69,43 @@ export class Controls {
     return 'ontouchstart' in window || (navigator.maxTouchPoints ?? 0) > 0;
   }
 
+  _buildInteractButton() {
+    const g = this.scene.add.graphics().setScrollFactor(0).setDepth(9998);
+    const label = this.scene.add.text(0, 0, '✋', { fontSize: '30px' })
+      .setOrigin(0.5).setScrollFactor(0).setDepth(9999);
+    return { g, label, x: 0, y: 0, r: INTERACT_BTN.r };
+  }
+
+  // Re-anchors the button to the bottom-right corner every frame (cheap, and
+  // keeps it correct across a resize/DPR change without a separate listener).
+  _layoutInteractButton() {
+    const btn = this._interactBtn;
+    if (!btn) return;
+    const off = worldUiOffset(this.scene);
+    btn.x = off.x + logicalW(this.scene) - INTERACT_BTN.margin;
+    btn.y = off.y + logicalH(this.scene) - INTERACT_BTN.margin;
+    btn.g.clear();
+    btn.g.fillStyle(0x2a3648, 0.55).fillCircle(btn.x, btn.y, btn.r);
+    btn.g.lineStyle(3, 0xffffff, 0.85).strokeCircle(btn.x, btn.y, btn.r);
+    btn.label.setPosition(btn.x, btn.y);
+  }
+
+  // Same origin/off math as _drawRing's pointer→logical conversion, just
+  // compared against the button's fixed centre instead of a drag origin.
+  _hitInteractButton(p) {
+    const btn = this._interactBtn;
+    if (!btn) return false;
+    const dpr = dprOf(this.scene);
+    const off = worldUiOffset(this.scene);
+    const px = p.x / dpr + off.x, py = p.y / dpr + off.y;
+    return Math.hypot(px - btn.x, py - btn.y) <= btn.r * 1.3; // generous touch target
+  }
+
   _onPointerDown(p) {
+    if (this._hitInteractButton(p)) {
+      this._touchInteractPending = true;
+      return; // never let this also start a joystick drag or a tap-to-move
+    }
     if (p.wasTouch) {
       if (this._touch) return; // one finger drives the stick at a time
       this._touch = { id: p.id, origin: { x: p.x, y: p.y }, point: { x: p.x, y: p.y }, dragging: false };
@@ -104,6 +151,7 @@ export class Controls {
   // nonzero source wins over "no input", and a direct steer cancels a pending
   // tap-to-move walk (handled by the scene reading mag > 0 to drop its nav path).
   getMove() {
+    this._layoutInteractButton();
     const k = this.keys;
     let x = (k.right.isDown || k.rightArrow.isDown ? 1 : 0) - (k.left.isDown || k.leftArrow.isDown ? 1 : 0);
     let y = (k.down.isDown || k.downArrow.isDown ? 1 : 0) - (k.up.isDown || k.upArrow.isDown ? 1 : 0);
@@ -162,13 +210,16 @@ export class Controls {
   }
 
   // One-shot "interact/confirm" trigger (kept simple — Phase B's feeding/tucking-in
-  // interactions will read this). Space/E on keyboard, A on gamepad.
+  // interactions will read this). Space/E on keyboard, A on gamepad, or a tap on
+  // the on-screen touch button.
   interactJustDown() {
     const pad = this._pad();
     const down = this.keys.interact.isDown || this.keys.interact2.isDown || !!pad?.buttons[0]?.pressed;
     const justDown = down && !this._prevInteractDown;
     this._prevInteractDown = down;
-    return justDown;
+    const btnJustDown = this._touchInteractPending;
+    this._touchInteractPending = false;
+    return justDown || btnJustDown;
   }
 
   // Consumes and clears a pending mouse-click/touch-tap "walk here" request.
@@ -190,5 +241,7 @@ export class Controls {
     this.scene.input.off('pointerup', this._onPointerUp, this);
     this.scene.input.off('pointerupoutside', this._onPointerUp, this);
     this._ring?.destroy();
+    this._interactBtn?.g.destroy();
+    this._interactBtn?.label.destroy();
   }
 }

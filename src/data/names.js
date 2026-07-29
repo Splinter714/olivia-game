@@ -5,42 +5,51 @@
 // Names must never repeat across the whole game ("no two animals should ever
 // share a name") — see randomName()/registerName() below for how that's
 // enforced, including once a species' whole pool has been used up.
+// Jackson/Olivia occasionally suggest specific names to add to the pools
+// (not tied to a species) — spread across all six so any of them can turn
+// up on any kind of pet: "Eenie Beanie", "Jelly Bean", "Billie", "Jeanstew".
 export const NAME_POOLS = {
   turtle: [
     'Shelly', 'Speedy', 'Sandy', 'Pebble', 'Myrtle', 'Sheldon',
     'Basil', 'Splash', 'Ziggy', 'Marbles', 'Tortellini', 'Sunny',
     'Turbo', 'Crush', 'Sheila', 'Gravel', 'Mossy', 'Finn',
     'Rocky', 'Coral', 'Slowpoke', 'Puddle', 'Terra', 'Flipper',
+    'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
   ],
   guineaPig: [
     'Peanut', 'Waffles', 'Popcorn', 'Biscuit', 'Squeaky', 'Marshmallow',
     'Nibbles', 'Pudding', 'Clover', 'Truffle', 'Cinnamon', 'Muffin',
     'Cocoa', 'Ginger', 'Pretzel', 'Nutmeg', 'Honey', 'Pumpernickel',
     'Wiggles', 'Snickers', 'Butterscotch', 'Sprout', 'Dumpling', 'Chip',
+    'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
   ],
   hamster: [
     'Pip', 'Nugget', 'Acorn', 'Button', 'Peewee', 'Cheeks',
     'Sprinkles', 'Tater', 'Chestnut', 'Bubbles', 'Squirt', 'Pretzel',
     'Bean', 'Scooter', 'Wobbles', 'Peanut', 'Gizmo', 'Nibbler',
     'Runt', 'Snickerdoodle', 'Tumbles', 'Cricket', 'Sesame', 'Whiskers',
+    'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
   ],
   bunny: [
     'Thumper', 'Clover', 'Cottontail', 'Bramble', 'Snowball', 'Hazel',
     'Fluffy', 'Daisy', 'Buttercup', 'Willow', 'Dandelion', 'Marigold',
     'Rosie', 'Pepper', 'Clementine', 'Bramblewood', 'Fern', 'Juniper',
     'Bounce', 'Cotton', 'Poppy', 'Chestnut', 'Meadow', 'Honeybun',
+    'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
   ],
   cat: [
     'Whiskers', 'Mittens', 'Shadow', 'Tiger', 'Luna', 'Oreo',
     'Patches', 'Biscuit', 'Marmalade', 'Pumpkin', 'Smokey', 'Clementine',
     'Jasper', 'Willow', 'Milo', 'Ziggy', 'Nutmeg', 'Salem',
     'Cleo', 'Boots', 'Tabitha', 'Peanut', 'Dusty', 'Marbles',
+    'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
   ],
   dog: [
     'Cupcake', 'Buddy', 'Bella', 'Max', 'Daisy', 'Rex',
     'Luna', 'Charlie', 'Coco', 'Duke', 'Sadie', 'Biscuit',
     'Rosie', 'Winston', 'Peanut', 'Scout', 'Maple', 'Ranger',
     'Pepper', 'Waffles', 'Gus', 'Honey', 'Bear', 'Olive',
+    'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
   ],
 };
 
