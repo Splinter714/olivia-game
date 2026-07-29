@@ -94,6 +94,20 @@ export default class KennelScene extends Phaser.Scene {
     buildPropTextures(this);
     buildRaccoonTextures(this);
 
+    // ── Yard divider (issue #20) — one movable fence post splitting the
+    // outside yard into a left/right zone at its current x. Set before
+    // _buildProps() below, which places the divider sprite at this position. ──
+    this.yardDividerX = YARD_DIVIDER_DEFAULT_X;
+    this.carryingDivider = false;
+    this._dividerVisual = null;
+
+    // ── Feeding / potty (issues #6, #7, #22 #6) — scooperRestPos must exist
+    // before _buildProps() below, which draws the resting scooper sprite there. ──
+    this.hasScooper = false;
+    this._scooperVisual = null;
+    this._scooperRestSprite = null;
+    this.scooperRestPos = { x: SCOOPER_SPOT.x, y: SCOOPER_SPOT.y };
+
     this._drawWorld();
     this._buildProps();
     this._buildCollision();
@@ -124,17 +138,8 @@ export default class KennelScene extends Phaser.Scene {
     this.leashedDog = null;        // the dog stay currently being walked outside (issue #19), or null
     this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
 
-    // ── Yard divider (issue #20) — one movable fence post splitting the
-    // outside yard into a left/right zone at its current x. ─────────────────
-    this.yardDividerX = YARD_DIVIDER_DEFAULT_X;
-    this.carryingDivider = false;
-    this._dividerVisual = null;
-
-    // ── Feeding / potty (issues #6, #7, #22 #6) ─────────────────────────────
-    this.hasScooper = false;
-    this._scooperVisual = null;
-    this._scooperRestSprite = null;
-    this.scooperRestPos = { x: SCOOPER_SPOT.x, y: SCOOPER_SPOT.y };
+    // (yardDividerX/carryingDivider/_dividerVisual and the scooper-rest state
+    // are set earlier, above _buildProps() — see that comment.)
     this.messes = [];              // { kind: 'cat', x, y, sprite } — issue #20: dogs no longer mess indoors
     this._catLitterTimer = CAT_LITTER_INTERVAL();
     this.turtleTankNeedsWater = false;
