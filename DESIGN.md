@@ -50,7 +50,8 @@ kennel is full of old friends.
 ## Feeding Time
 You **feed** all the animals and give them **water**. The turtles need LOTS of
 water — a turtle's home is a **little tank of water with a glass cover**, with a
-**small sand island in the middle** where the turtles rest.
+**small sand island in the middle** where the turtles rest. The turtles and the
+eggs **share the island together** — and there's plenty of space for everyone!
 
 ## Moms and Babies
 Some pets come as a **family**: a mom with her babies!
@@ -107,15 +108,6 @@ the night**, it means one of these things:
 ## Doing a Great Job ⭐
 When you take really good care of a pet, the **owners give you new stuff** to
 take even BETTER care of the animals next time — tools, a pet's favorite food,
-toys, and more. And **money** can help you get the really good stuff. So every
-time an animal comes back, their stay gets even better than the last one!
-
-
----
-
-## Questions for Olivia (still open)
-
-1. Where does the **money** come from — do the owners pay you for taking care
-   of their pets, or do you find it another way?
-2. Turtles rest on the sand island — do the **eggs and the turtles share the
-   island**, or does it get crowded? (Just so we draw it right!)
+toys, and more. The **owners also pay you money** for taking care of their
+pets, and money can help you get the really good stuff. So every time an animal
+comes back, their stay gets even better than the last one!
