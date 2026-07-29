@@ -9,6 +9,8 @@ import { findPath } from '../data/path.js';
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
+import { buildAnimalTextures, animalTextureKey, EGG_KEY, NAME_TAG_KEY } from '../art/animals.js';
+import { createAnimal } from '../data/animal.js';
 import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
 
 const SPEED = 160; // px/s, world (logical) units
@@ -35,10 +37,12 @@ export default class KennelScene extends Phaser.Scene {
     buildKennelTextures(this);
     for (const s of SECTIONS) buildFloorTile(this, `floor-${s.key}`, s.floor, s.floorDark);
     buildPlayerTexture(this);
+    buildAnimalTextures(this);
 
     this._drawWorld();
     this._buildCollision();
     this._buildPlayer();
+    this._placeDemoAnimals();
 
     this.cameras.main.setBounds(0, 0, WORLD.w, WORLD.h);
     this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
@@ -137,6 +141,50 @@ export default class KennelScene extends Phaser.Scene {
     this.player.setDepth(startY);
 
     this.physics.add.collider(this.player, this.walls);
+  }
+
+  // ── DEMO ANIMAL PLACEMENT (issue #3 only — delete this whole block, and the
+  // _placeDemoAnimals() call in create() above, once issue #4 (arrivals) adds
+  // real spawning via data/animal.js's createAnimal()) ────────────────────────
+  //
+  // One static adult of each species sitting in its own section (proves species
+  // ↔ section ↔ sprite ↔ name-tag all connect), plus one example family: a mom
+  // turtle with a couple of eggs on the (not-yet-built, see #6) sand-island area
+  // of the turtle section.
+  _placeDemoAnimals() {
+    const demoAdult = (speciesKey, x, y, opts) => {
+      const animal = createAnimal(speciesKey, { stage: 'adult', ...opts });
+      const texKey = animalTextureKey(speciesKey, animal.stage, animal.colorVariant);
+      const spr = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y);
+      this._addNameTag(x, y - spr.height - 6, animal.name);
+      return { animal, sprite: spr };
+    };
+
+    // One example of each species, placed inside its own section rect.
+    demoAdult('turtle', 110, 210);
+    demoAdult('guineaPig', 500, 200);
+    demoAdult('hamster', 860, 200);
+    demoAdult('bunny', 140, 560);
+    demoAdult('cat', 100, 850);
+    demoAdult('dog', 1100, 560);
+
+    // Example family: mom turtle + eggs sharing the turtle section (DESIGN.md
+    // "the turtles and the eggs share the island together"). No tank/island prop
+    // yet (#6) — the eggs just sit in the section for now.
+    demoAdult('turtle', 240, 220, { name: 'Myrtle', hasEggs: true, eggCount: 2 });
+    this.add.image(268, 226, EGG_KEY).setOrigin(0.5, 1).setDepth(227);
+    this.add.image(282, 222, EGG_KEY).setOrigin(0.5, 1).setDepth(223);
+  }
+
+  // Floating name-tag texture + centered text, anchored just above (x, y).
+  _addNameTag(x, y, name) {
+    const tag = this.add.image(x, y, NAME_TAG_KEY).setOrigin(0.5, 1).setDepth(9000);
+    this.add.text(x, y - tag.height + 4, name, {
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '10px',
+      fontStyle: 'bold',
+      color: '#4a341c',
+    }).setOrigin(0.5, 0).setDepth(9001);
   }
 
   // ── Per-frame ────────────────────────────────────────────────────────────
