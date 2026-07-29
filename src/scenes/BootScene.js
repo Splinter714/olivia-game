@@ -1,22 +1,15 @@
 import Phaser from 'phaser';
 
-// Placeholder boot scene — replaced once the game exists. Its only job is to prove
-// the Phaser + Vite skeleton runs.
+// Boot step — starts the real gameplay scene + its parallel HUD, then gets out
+// of the way. Kept as its own scene (rather than folded away) in case a later
+// phase needs an actual loading step (e.g. warming up procedural textures).
 export default class BootScene extends Phaser.Scene {
   constructor() {
     super('Boot');
   }
 
   create() {
-    // Camera zoom = DPR keeps coordinates logical while the canvas renders at
-    // physical pixels (see src/main.js).
-    this.cameras.main.setZoom(this.registry.get('dpr') || 1);
-    this.add
-      .text(this.scale.width / 2, this.scale.height / 2, 'olivia-game — skeleton ready', {
-        fontFamily: 'monospace',
-        fontSize: '20px',
-        color: '#9fb4d8'
-      })
-      .setOrigin(0.5);
+    this.scene.start('Kennel');
+    this.scene.launch('Hud');
   }
 }

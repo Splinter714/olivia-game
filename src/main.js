@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import BootScene from './scenes/BootScene.js';
+import KennelScene from './scenes/KennelScene.js';
+import HudScene from './scenes/HudScene.js';
 
 // HiDPI: render the canvas buffer at the device's PHYSICAL pixels so pixel-art and
 // text are crisp on Retina screens, while keeping the on-screen size and all game
@@ -17,12 +19,19 @@ const game = new Phaser.Game({
   parent: 'game',
   backgroundColor: '#1c2330',
   pixelArt: true,
+  physics: {
+    default: 'arcade',
+    arcade: { debug: false },
+  },
+  input: {
+    gamepad: true,
+  },
   scale: {
     mode: Phaser.Scale.NONE,
     width: window.innerWidth * getDpr(),
     height: window.innerHeight * getDpr(),
   },
-  scene: [BootScene]
+  scene: [BootScene, KennelScene, HudScene]
 });
 game.registry.set('dpr', getDpr()); // available to scenes from their first create()
 
