@@ -5,9 +5,9 @@ import {
   penRects, wallRects, backWingWallRects, outsideFenceRects,
 } from '../data/sections.js';
 import {
-  TURTLE, SNAKE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT, COMPUTER_SPOT,
+  TURTLE, SNAKE, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOTS, TURTLE_FEED_SPOT, COMPUTER_SPOT,
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS,
-  CAGES, cageAnimalSpot,
+  CAGES, cageAnimalSpot, YARD_DIVIDER_DEFAULT_X, YARD_DIVIDER_Y0, YARD_DIVIDER_Y1,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
@@ -18,19 +18,21 @@ import { pickWakeEvent, WAKE_REASON } from '../data/night.js';
 import { createAnimal } from '../data/animal.js';
 import { randomName } from '../data/names.js';
 import { createEconomy, computePayout, upgradeMessage } from '../data/economy.js';
+import { pickWanderInterval, wanderAmplitude } from '../data/wander.js';
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
 import {
-  buildAnimalTextures, ensureAnimalTextures, ANIMAL_DISPLAY_SCALE, EGG_KEY, NAME_TAG_KEY,
+  buildAnimalTextures, ensureAnimalTextures, ANIMAL_DISPLAY_SCALE, EGG_KEY,
 } from '../art/animals.js';
 import { resolveTieBreakers, effectiveLook } from '../data/distinguish.js';
 import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
-  buildPropTextures, TANK_KEY, ISLAND_KEY, SNAKE_TANK_KEY, SNAKE_PERCH_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
+  buildPropTextures, TANK_KEY, SNAKE_TANK_KEY, LITTER_BOX_KEY,
   SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY,
+  LETTUCE_KEY, YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
 import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
@@ -46,13 +48,11 @@ const BABY_PLACEHOLDER = '???';
 
 const SPEED = 160; // px/s, world (logical) units
 const PICKUP_RADIUS = 50; // px, how close the player must be to interact with anything
+const NAME_TAG_RADIUS = 80; // px, how close the player must be to read a name tag (issue #22 #2)
 
-// Sections that get their own smaller "corral" for placement instead of the
-// full section rect (cat/dog playpens, turtle sand island). Anything else
-// falls back to the plain section-rect grid.
-const PLAYPEN_RECT = { cat: CAT_PLAYPEN, dog: DOG_PLAYPEN };
-
-const DOG_MESS_INTERVAL = () => 25_000 + Math.random() * 25_000;
+// Issue #20: cats/dogs no longer have an indoor mess of their own — their
+// only potty pathway is the leash walk outside (needs.bathroom). Only the
+// cat litter box still spawns periodic messes indoors.
 const CAT_LITTER_INTERVAL = () => 25_000 + Math.random() * 25_000;
 const TANK_WATER_INTERVAL = () => 30_000 + Math.random() * 25_000; // turtles need "a lot of water"
 const MAX_MESS_PER_SPOT = 2;
@@ -115,23 +115,32 @@ export default class KennelScene extends Phaser.Scene {
 
     this.navPath = null;
 
-    // ── Roster / arrivals / carrying (issues #4, #5) ──────────────────────
+    // ── Roster / arrivals / carrying (issues #4, #5, #20) ──────────────────
     this.roster = createRoster();
-    this._staySprites = new Map(); // stay -> { pos, sprite, tag:{bg,text}, extras:[...], needIcons:{} }
+    this._staySprites = new Map(); // stay -> { pos, sprite, tag:{container,width,height}, extras:[...], babyLabels:[...], needIcons:{}, wanderBounds }
     this.carrying = null;          // the stay currently in the player's hands, or null
+    this._carryOrigin = null;      // where `carrying` was picked up from: 'reception' | sectionKey | LOCATION.YARD
     this._carryVisual = null;      // { obj } following the player while carrying
     this.leashedDog = null;        // the dog stay currently being walked outside (issue #19), or null
     this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
 
-    // ── Feeding / potty / playpens (issues #6, #7, #8) ─────────────────────
+    // ── Yard divider (issue #20) — one movable fence post splitting the
+    // outside yard into a left/right zone at its current x. ─────────────────
+    this.yardDividerX = YARD_DIVIDER_DEFAULT_X;
+    this.carryingDivider = false;
+    this._dividerVisual = null;
+
+    // ── Feeding / potty (issues #6, #7, #22 #6) ─────────────────────────────
     this.hasScooper = false;
     this._scooperVisual = null;
-    this.messes = [];              // { kind: 'dog'|'cat', x, y, sprite }
-    this._dogMessTimer = DOG_MESS_INTERVAL();
+    this._scooperRestSprite = null;
+    this.scooperRestPos = { x: SCOOPER_SPOT.x, y: SCOOPER_SPOT.y };
+    this.messes = [];              // { kind: 'cat', x, y, sprite } — issue #20: dogs no longer mess indoors
     this._catLitterTimer = CAT_LITTER_INTERVAL();
     this.turtleTankNeedsWater = false;
     this._tankTimer = TANK_WATER_INTERVAL();
     this._tankNeedIcon = null;
+    this._turtleFeeding = false;   // mid lettuce-feeding animation (issue #20 follow-up)
 
     // ── Births / computer announcements (issues #9, #10) ──────────────────
     this._computerNeedIcon = null;
@@ -253,38 +262,43 @@ export default class KennelScene extends Phaser.Scene {
     doorGfx.fillStyle(0xe8c68f, 1).fillRect(divX - WALL / 2, WING_DOOR.y0, WALL, WING_DOOR.y1 - WING_DOOR.y0);
   }
 
-  // Furniture added by issues #6/#7/#8 — turtle tank + sand island, cat/dog
-  // playpen fences, litter box, scooper, and one food/water bowl per section
-  // (turtles get the tank instead). All positions come from data/props.js so
-  // interaction code below reads the exact same rects.
+  // Furniture added by issues #6/#7/#8/#13/#14/#18/#20 — turtle/snake tanks
+  // with individual islands/perches per cage slot, litter box, scooper,
+  // per-cage bowls, the reception computer, the back wing (oven/storage
+  // dressing), and the yard divider. All positions come from data/props.js
+  // so interaction code below reads the exact same rects.
   _buildProps() {
     this.add.image(TURTLE.tank.x, TURTLE.tank.y, TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
-    this.add.image(TURTLE.island.x, TURTLE.island.y, ISLAND_KEY).setOrigin(0, 0).setDepth(-1.2);
+    // Water-topping marker (section-level resource) stays separate from the
+    // lettuce-feeding marker below — different chores, different spots.
     this._tankMarker = { x: TURTLE.tank.x + TURTLE.tank.w / 2, y: TURTLE.tank.y + TURTLE.tank.h - 6 };
 
-    // Snake tank + resting perch (issue #14) — same tank silhouette as the
-    // turtle's, no water-topping chore (snakes just get a bowl like everyone
-    // else — see BOWL_SPOT below).
+    // Snake tank (issue #14) — same tank silhouette as the turtle's, no
+    // water-topping chore. Both tanks' individual islands/perches are drawn
+    // below alongside every other section's cage grid (CAGE_KEY covers all
+    // three art styles now — see art/props.js).
     this.add.image(SNAKE.tank.x, SNAKE.tank.y, SNAKE_TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
-    this.add.image(SNAKE.perch.x, SNAKE.perch.y, SNAKE_PERCH_KEY).setOrigin(0, 0).setDepth(-1.2);
-
-    this.add.image(CAT_PLAYPEN.x, CAT_PLAYPEN.y, PLAYPEN_FENCE_KEY).setOrigin(0, 0).setDepth(0.5);
-    this.add.image(DOG_PLAYPEN.x, DOG_PLAYPEN.y, PLAYPEN_FENCE_KEY).setOrigin(0, 0).setDepth(0.5);
 
     this.add.image(LITTER_BOX.x, LITTER_BOX.y, LITTER_BOX_KEY).setOrigin(0, 0).setDepth(-1);
 
-    this.add.image(SCOOPER_SPOT.x, SCOOPER_SPOT.y, SCOOPER_KEY).setOrigin(0.5, 1).setDepth(SCOOPER_SPOT.y);
+    this._rebuildScooperRestSprite();
 
-    for (const key of Object.keys(BOWL_SPOT)) {
-      const { x, y } = BOWL_SPOT[key];
-      this.add.image(x, y, BOWL_KEY).setOrigin(0.5, 1).setDepth(y - 1);
+    // One bowl per individual cage slot (issue #22 #6) — turtles are fed via
+    // lettuce dropped in the tank instead (see TURTLE_FEED_SPOT below).
+    for (const key of Object.keys(BOWL_SPOTS)) {
+      for (const { x, y } of BOWL_SPOTS[key]) {
+        this.add.image(x, y, BOWL_KEY).setOrigin(0.5, 1).setDepth(y - 1);
+      }
     }
+
+    // Turtle lettuce-feeding marker (issue #20 follow-up).
+    this.add.image(TURTLE_FEED_SPOT.x, TURTLE_FEED_SPOT.y, LETTUCE_KEY).setOrigin(0.5, 0.5).setDepth(TURTLE.tank.y - 1);
 
     // Reception computer (issue #10) — baby-announcement messages to owners.
     this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
 
-    // Individual cages (issue #18) — 6 per non-turtle section; turtles keep
-    // their shared tank + sand island instead (drawn above).
+    // Individual cages (issue #18) — 6 per section, including turtles/snakes
+    // as of issue #20 (styled as islands/perches instead of wire pens).
     for (const key of Object.keys(CAGES)) {
       for (const cage of CAGES[key]) {
         this.add.image(cage.x, cage.y, CAGE_KEY[key]).setOrigin(0, 0).setDepth(cage.y - 2);
@@ -299,14 +313,30 @@ export default class KennelScene extends Phaser.Scene {
     for (const p of STORAGE_PROPS) {
       this.add.image(p.x, p.y, dressingKey[p.key]).setOrigin(0.5, 1).setDepth(p.y);
     }
+
+    // Yard divider (issue #20) — a movable fence line + post splitting the
+    // outside yard into a left/right zone.
+    this.dividerLineImg = this.add.image(this.yardDividerX, YARD_DIVIDER_Y0, YARD_DIVIDER_LINE_KEY)
+      .setOrigin(0.5, 0).setDepth(0.4);
+    this.dividerPostImg = this.add.image(this.yardDividerX, (YARD_DIVIDER_Y0 + YARD_DIVIDER_Y1) / 2, YARD_DIVIDER_POST_KEY)
+      .setOrigin(0.5, 0.5).setDepth((YARD_DIVIDER_Y0 + YARD_DIVIDER_Y1) / 2);
+  }
+
+  // (Re)creates the resting scooper sprite at its current rest spot — called
+  // once at build time and again whenever the scooper is set back down
+  // (issue #22 #5).
+  _rebuildScooperRestSprite() {
+    this._scooperRestSprite?.destroy();
+    const { x, y } = this.scooperRestPos;
+    this._scooperRestSprite = this.add.image(x, y, SCOOPER_KEY).setOrigin(0.5, 1).setDepth(y);
   }
 
   _buildCollision() {
     // Every rect a body can't walk through — feeds both the arcade static
-    // colliders below and findPath's obstacle-aware routing. Playpen fences,
-    // the litter box, scooper, and bowls stay non-solid on purpose — they're
-    // small furniture, not walls, and keeping them out of pathfinding avoids
-    // extra routing complexity for a first pass.
+    // colliders below and findPath's obstacle-aware routing. The litter box,
+    // scooper, and bowls stay non-solid on purpose — they're small
+    // furniture, not walls, and keeping them out of pathfinding avoids extra
+    // routing complexity for a first pass.
     this.obstacleRects = [
       ...wallRects(),
       ...SECTIONS.flatMap((s) => penRects(s)),
@@ -466,25 +496,39 @@ export default class KennelScene extends Phaser.Scene {
   // Draws (or redraws) a stay's standing sprite + name tag + companions (baby
   // sprites, or eggs for a turtle mom with hasEggs) at a fixed world position —
   // used for both reception-waiting and section-placed stays.
-  _renderStay(stay, x, y) {
+  _renderStay(stay, x, y, opts = {}) {
     this._destroyStaySprites(stay);
     const { animal } = stay;
     const tb = this._tieBreakers();
     const sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
     const tag = this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
 
-    // Turtle/snake eggs/babies sit tucked close to mom on the shared
-    // island/perch (small space, plenty of animals to share it) — tighter
-    // spacing + a little jitter instead of the wider spread used for cat/dog
-    // companions.
+    // Issue #22 #3: scale family spacing to the actual cage/island/yard-zone
+    // size available, so a family "reads as together but with breathing
+    // room" without spilling out of a small individual cage. `spread` is a
+    // multiplier around a ~90px baseline cage width; opts.yardBounds covers
+    // the yard-play case (no cage lookup, but still bounded).
+    const cage = CAGES[stay.location]?.[stay.cageSlot];
+    // A yard-placed stay can be redrawn (tie-breaker sync, a birth landing,
+    // the computer flow) without going through _dropOffToYard again — derive
+    // her zone rect from stay.yardZone whenever opts.yardBounds isn't passed,
+    // so she doesn't silently lose her wander/spread bounds on a redraw.
+    const yardBounds = stay.location === LOCATION.YARD ? (opts.yardBounds || this._yardZoneRect(stay.yardZone || 'left')) : null;
+    const bounds = cage || yardBounds || null;
+    const spread = Math.min(1.7, Math.max(0.9, (bounds?.w ?? 90) / 90));
+
+    // Turtle/snake eggs/babies sit tucked close to mom on her own individual
+    // island/perch (small space, plenty of room to share) — tighter spacing
+    // than the wider spread used for cat/dog companions.
     const sharesHome = animal.species === 'turtle' || animal.species === 'snake';
     const extras = [];
+    const babyLabels = [];
     let cx = x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);
     if (animal.hasEggs) {
       for (let i = 0; i < animal.eggCount; i++) {
-        const jitterY = (Math.random() - 0.5) * 6;
+        const jitterY = (Math.random() - 0.5) * (sharesHome ? 10 : 14) * spread;
         extras.push(this.add.image(cx, y - 1 + jitterY, EGG_KEY).setOrigin(0.5, 1).setDepth(y - 1));
-        cx += sharesHome ? 7 : 10;
+        cx += (sharesHome ? 10 : 16) * spread;
       }
     }
 
@@ -493,21 +537,24 @@ export default class KennelScene extends Phaser.Scene {
     // ID tattoo once the collars run out — drawn straight into their art by
     // the tie-breaker resolution above (data/distinguish.js).
     for (const baby of stay.companions) {
-      const jitterY = sharesHome ? (Math.random() - 0.5) * 6 : 0;
+      const jitterY = (sharesHome ? (Math.random() - 0.5) * 10 : (Math.random() - 0.5) * 8) * spread;
       extras.push(this._addAnimalSprite(cx, y + jitterY, baby, 'baby', tb));
 
       // Tiny label under each baby — "???" until the owner names it via the
-      // reception computer (issue #10), then its real name.
-      extras.push(this.add.text(cx, y + jitterY + 2, baby.name || BABY_PLACEHOLDER, {
+      // reception computer (issue #10), then its real name. Proximity-gated
+      // like every other name tag (issue #22 #2).
+      const label = this.add.text(cx, y + jitterY + 2, baby.name || BABY_PLACEHOLDER, {
         fontFamily: 'system-ui, sans-serif',
         fontSize: '8px',
         fontStyle: 'bold',
         color: '#4a341c',
         backgroundColor: '#ffffffb0',
         padding: { x: 2, y: 0 },
-      }).setOrigin(0.5, 0).setDepth(y + 0.2));
+      }).setOrigin(0.5, 0).setDepth(y + 0.2).setVisible(false);
+      extras.push(label);
+      babyLabels.push(label);
 
-      cx += sharesHome ? 9 : 14;
+      cx += (sharesHome ? 13 : 20) * spread;
     }
 
     // Issue #12: a small gold sparkle per upgrade this specific animal has
@@ -521,8 +568,14 @@ export default class KennelScene extends Phaser.Scene {
       extras.push(this.add.image(sx, sy, UPGRADE_KEY).setOrigin(0.5, 0.5).setDepth(y + 0.1));
     });
 
+    // Issue #22 #4: a small periodic wander target within the cage/island
+    // (or yard zone, while out playing) — reception/carrying stays get no
+    // bounds, so they simply don't wander.
+    const wanderBounds = bounds ? { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h } : null;
+
     const rec = {
-      pos: { x, y }, sprite, tag, extras, needIcons: {}, blanket: null,
+      pos: { x, y }, sprite, tag, extras, babyLabels, needIcons: {}, blanket: null,
+      wanderBounds, wander: null,
       // What this render assumed about tie-breakers, so _syncTieBreakers can
       // tell when an arrival/checkout has changed who needs a collar.
       lookSig: this._lookSignature(stay, tb),
@@ -547,25 +600,52 @@ export default class KennelScene extends Phaser.Scene {
     const rec = this._staySprites.get(stay);
     if (!rec) return;
     rec.sprite.destroy();
-    rec.tag.bg.destroy();
-    rec.tag.text.destroy();
+    rec.tag.container.destroy();
     rec.extras.forEach((e) => e.destroy());
     Object.values(rec.needIcons).forEach((icon) => icon.destroy());
     rec.blanket?.destroy();
     this._staySprites.delete(stay);
   }
 
-  // Floating name-tag texture + centered text, anchored just above (x, y).
-  // Returns the two display objects so callers can destroy them later.
+  // Small hanging name placard, sized to fit `name` (issue #22 #1 — long
+  // names like "Snickerdoodle" must not clip), anchored so its bottom sits
+  // at (x, y). Hidden by default; toggled per-frame by proximity to the
+  // player (issue #22 #2 — see _updateNameTagVisibility). Returns
+  // {container, width, height} so callers can destroy/reposition it.
   _addNameTag(x, y, name) {
-    const bg = this.add.image(x, y, NAME_TAG_KEY).setOrigin(0.5, 1).setDepth(9000);
-    const text = this.add.text(x, y - bg.height + 4, name, {
+    const text = this.add.text(0, 3, name, {
       fontFamily: 'system-ui, sans-serif',
       fontSize: '10px',
       fontStyle: 'bold',
       color: '#4a341c',
-    }).setOrigin(0.5, 0).setDepth(9001);
-    return { bg, text };
+    }).setOrigin(0.5, 0);
+    const width = Math.max(34, Math.ceil(text.width) + 16);
+    const height = 20;
+    const bg = this.add.graphics();
+    bg.fillStyle(0xead9b3, 1).fillRoundedRect(-width / 2, 0, width, height - 2, 4);
+    bg.lineStyle(2, 0xa9824a, 1).strokeRoundedRect(-width / 2 + 1, 1, width - 2, height - 4, 4);
+    bg.fillStyle(0x8a6a3e, 1);
+    bg.fillCircle(-width / 2 + 6, 3, 2);
+    bg.fillCircle(width / 2 - 6, 3, 2);
+    const container = this.add.container(x, y - height, [bg, text]).setDepth(9000).setVisible(false);
+    return { container, width, height };
+  }
+
+  // Every frame: shows a name tag only while the player is close enough to
+  // read it (issue #22 #2), and hides it again otherwise. Applies to every
+  // stay's tag + baby labels, and the leashed-dog walk tag.
+  _updateNameTagVisibility() {
+    const px = this.player.x, py = this.player.y;
+    for (const rec of this._staySprites.values()) {
+      const within = Phaser.Math.Distance.Between(px, py, rec.pos.x, rec.pos.y) <= NAME_TAG_RADIUS;
+      rec.tag.container.setVisible(within);
+      for (const label of rec.babyLabels) label.setVisible(within);
+    }
+    if (this._walkVisual) {
+      const wv = this._walkVisual;
+      const within = Phaser.Math.Distance.Between(px, py, wv.sprite.x, wv.sprite.y) <= NAME_TAG_RADIUS;
+      wv.tag.container.setVisible(within);
+    }
   }
 
   // Small floating icon above a stay's name tag showing it needs food/water/
@@ -577,7 +657,7 @@ export default class KennelScene extends Phaser.Scene {
       if (rec.needIcons[key]) return;
       const already = Object.keys(rec.needIcons).length;
       const x = rec.pos.x - 10 + already * 16;
-      const y = rec.tag.bg.y - rec.tag.bg.height - 2;
+      const y = rec.tag.container.y - 2;
       rec.needIcons[key] = this.add.image(x, y, NEED_KEY[key]).setOrigin(0.5, 1).setDepth(9002);
     } else if (rec.needIcons[key]) {
       rec.needIcons[key].destroy();
@@ -585,23 +665,29 @@ export default class KennelScene extends Phaser.Scene {
     }
   }
 
-  // ── Carrying (issue #5) ──────────────────────────────────────────────────
-  // Press interact near a waiting reception arrival to pick it up; the carry
-  // prop (leash/cage/box/basket — or the bare animal for the small pets) then
-  // follows the player. Walking into the animal's own section auto-drops it off
-  // — simpler for a kid player than requiring a second interact press.
+  // ── Carrying (issue #5, extended by issue #20) ───────────────────────────
+  // Press interact near a waiting reception arrival to pick it up (the carry
+  // prop — leash/cage/box/basket, or the bare animal for the small pets —
+  // then follows the player), OR near any settled/yard animal to pick her up
+  // for play (always carried bare — this is a casual take-out, not the
+  // formal arrival). Where she can be dropped off depends on where she was
+  // picked up from (_carryOrigin): a reception pickup drops into her section
+  // (cage assignment, as before); a cage pickup can only be dropped in the
+  // yard; a yard pickup can only be dropped back into her section.
 
   _pickUp(stay) {
+    this._carryOrigin = stay.location;
     this._destroyStaySprites(stay);
     stay.location = LOCATION.CARRYING;
     this.carrying = stay;
-    // The small pets are carried bare in the player's hands, so their own
-    // animated sprite rides along; everything else gets its carry prop.
+    // Arrivals with a carry prop (leash/cage/box/basket) ride in that prop;
+    // everything else (small pets, or any settled animal taken out to play)
+    // is carried bare, so its own animated sprite rides along.
     let obj;
-    if (stay.carryKind === CARRY_KIND.NONE) {
-      obj = this._addAnimalSprite(this.player.x, this.player.y, stay.animal, stay.animal.stage, this._tieBreakers());
-    } else {
+    if (this._carryOrigin === LOCATION.RECEPTION && stay.carryKind !== CARRY_KIND.NONE) {
       obj = this.add.image(this.player.x, this.player.y, CARRY_KEY[stay.carryKind]).setOrigin(0.5, 1);
+    } else {
+      obj = this._addAnimalSprite(this.player.x, this.player.y, stay.animal, stay.animal.stage, this._tieBreakers());
     }
     obj.setDepth(9500);
     this._carryVisual = { obj };
@@ -617,11 +703,30 @@ export default class KennelScene extends Phaser.Scene {
 
   _checkDropoff() {
     const stay = this.carrying;
-    const section = SECTIONS.find((s) => s.key === stay.animal.species);
-    if (!section) return;
-    const { x, y, w, h } = section.rect;
-    if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
-    this._dropOff(stay, section);
+    if (this._carryOrigin === LOCATION.YARD) {
+      // Bringing her back inside — only her own section (cage) will accept her.
+      const section = SECTIONS.find((s) => s.key === stay.animal.species);
+      if (!section) return;
+      const { x, y, w, h } = section.rect;
+      if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
+      this._dropOff(stay, section);
+      this._carryOrigin = null;
+    } else if (this._carryOrigin === LOCATION.RECEPTION) {
+      // A fresh arrival — walking into her own section settles her into a cage.
+      const section = SECTIONS.find((s) => s.key === stay.animal.species);
+      if (!section) return;
+      const { x, y, w, h } = section.rect;
+      if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
+      this._dropOff(stay, section);
+      this._carryOrigin = null;
+    } else {
+      // Picked up from her own cage to take out to play — only the yard
+      // will accept her (so picking her up doesn't instantly re-drop her
+      // right back where she stood).
+      if (this.player.x < OUTSIDE.x + 8) return;
+      this._dropOffToYard(stay);
+      this._carryOrigin = null;
+    }
   }
 
   _dropOff(stay, section) {
@@ -636,28 +741,45 @@ export default class KennelScene extends Phaser.Scene {
     // Issue #18: auto-assign her into the first open individual cage in this
     // section (companions/babies share it, same as today's "near mom" render).
     stay.cageSlot = assignCageSlot(this.roster.stays, section.key);
-    const already = this.roster.stays.filter((s) => s !== stay && s.location === section.key).length;
-    const pos = this._sectionSlot(section, already, stay);
+    const pos = this._sectionSlot(section, stay);
     this._renderStay(stay, pos.x, pos.y);
   }
 
-  // Placement spot for the `index`-th stay already in a section (for the
-  // turtle island / snake perch's spiral spread and the cat/dog playpen's
-  // day-time grid). Turtles/snakes place on their shared island/perch
-  // (golden-angle spiral so multiples don't stack exactly, per DESIGN.md's
-  // "plenty of space for everyone"). Cats/dogs play in their shared playpen
-  // by day; at night KennelScene moves them into their own individual cage
-  // instead (see _moveCatsDogsToCages). Everyone else always uses their
-  // assigned individual cage (issue #18).
-  _sectionSlot(section, index, stay) {
-    if (section.key === 'turtle') return this._islandSlot(index, TURTLE.island);
-    if (section.key === 'snake') return this._islandSlot(index, SNAKE.perch);
-    const playpen = PLAYPEN_RECT[section.key];
-    if (playpen && !this.night.active) return this._gridSlot(playpen, index, 20, 42, 56);
+  // Places a carried stay out in the yard to play (issue #20). Zone is
+  // decided by which side of the movable divider the player is standing on
+  // when they drop her off; multiple occupants of the same zone are spread
+  // in a simple grid so they don't stack.
+  _dropOffToYard(stay) {
+    this._carryVisual?.obj.destroy();
+    this._carryVisual = null;
+    this.carrying = null;
+    stay.location = LOCATION.YARD;
+    const zoneKey = this.player.x < this.yardDividerX ? 'left' : 'right';
+    stay.yardZone = zoneKey;
+    const rect = this._yardZoneRect(zoneKey);
+    const already = this.roster.stays.filter((s) => s !== stay && s.location === LOCATION.YARD && s.yardZone === zoneKey).length;
+    const pos = this._gridSlot(rect, already, 20, 44, 52);
+    this._renderStay(stay, pos.x, pos.y, { yardBounds: rect });
+  }
+
+  // Left/right yard rect split at the divider's current x, with a little
+  // margin on either side of the fence line itself.
+  _yardZoneRect(zoneKey) {
+    const top = YARD_DIVIDER_Y0, bottom = YARD_DIVIDER_Y1;
+    const left = OUTSIDE.x + 14, right = OUTSIDE.x + OUTSIDE.w - 14;
+    if (zoneKey === 'left') return { x: left, y: top, w: Math.max(40, this.yardDividerX - 10 - left), h: bottom - top };
+    return { x: this.yardDividerX + 10, y: top, w: Math.max(40, right - (this.yardDividerX + 10)), h: bottom - top };
+  }
+
+  // Placement spot for a stay settling into `section` — her assigned
+  // individual cage (issue #18), including turtles/snakes as of issue #20
+  // (their "cage" is a small island/perch inside the shared tank). Falls
+  // back to a plain grid spot if every cage is somehow taken.
+  _sectionSlot(section, stay) {
     const cage = CAGES[section.key]?.[stay?.cageSlot];
     if (cage) return cageAnimalSpot(cage);
-    if (playpen) return this._gridSlot(playpen, index, 20, 42, 56); // fallback: no free cage
-    return this._gridSlot(section.rect, index, 30, 46, 60);
+    const already = this.roster.stays.filter((s) => s !== stay && s.location === section.key).length;
+    return this._gridSlot(section.rect, already, 30, 46, 60);
   }
 
   _gridSlot(rect, index, margin, rowH, colW) {
@@ -671,34 +793,77 @@ export default class KennelScene extends Phaser.Scene {
     };
   }
 
-  // Spreads points across the sand island/perch using the golden angle, so
-  // successive turtles/snakes/eggs land at visibly different spots rather
-  // than clustering — "plenty of space for everyone" (DESIGN.md). `rect` is
-  // TURTLE.island for turtles, SNAKE.perch for snakes.
-  _islandSlot(index, rect) {
-    const { x, y, w, h } = rect;
-    const cx = x + w / 2, cy = y + h / 2;
-    const GOLDEN_ANGLE = 2.399963;
-    const ring = Math.floor(Math.sqrt(index + 0.5));
-    const angle = index * GOLDEN_ANGLE;
-    const rx = (w / 2 - 6) * Math.min(1, (ring + 1) / 3);
-    const ry = (h / 2 - 6) * Math.min(1, (ring + 1) / 3);
-    return { x: cx + Math.cos(angle) * rx * 0.7, y: cy + Math.sin(angle) * ry * 0.7 };
+  // ── Yard divider (issue #20) ─────────────────────────────────────────────
+  // A single movable fence post the player can carry and set back down
+  // anywhere in the yard to re-split it into two zones at its new x.
+
+  _pickUpDivider() {
+    this.carryingDivider = true;
+    this.dividerPostImg.setVisible(false);
+    this._dividerVisual = this.add.image(this.player.x, this.player.y, YARD_DIVIDER_POST_KEY)
+      .setOrigin(0.5, 1).setDepth(9500);
+    this.game.events.emit(EVENTS.NOTIFY, 'Picked up the fence!');
   }
 
-  // ── Feeding / water (issue #6) ────────────────────────────────────────────
+  _followDividerCarry() {
+    if (!this._dividerVisual) return;
+    this._dividerVisual.x = this.player.x;
+    this._dividerVisual.y = this.player.y;
+    this._dividerVisual.setDepth(this.player.y + 1);
+  }
 
-  _feedSection(sectionKey) {
-    let fedAny = false;
-    for (const stay of this.roster.stays) {
-      if (stay.location !== sectionKey) continue;
-      if (!stay.needs.food) continue;
-      clearNeed(stay, 'food');
-      this._setNeedIcon(stay, 'food', false);
-      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} got fed!`);
-      fedAny = true;
+  _dropDivider() {
+    this.carryingDivider = false;
+    this._dividerVisual?.destroy();
+    this._dividerVisual = null;
+    this.yardDividerX = Phaser.Math.Clamp(this.player.x, OUTSIDE.x + 40, OUTSIDE.x + OUTSIDE.w - 40);
+    this.dividerLineImg.setX(this.yardDividerX);
+    this.dividerPostImg.setPosition(this.yardDividerX, (YARD_DIVIDER_Y0 + YARD_DIVIDER_Y1) / 2).setVisible(true);
+    this.game.events.emit(EVENTS.NOTIFY, 'Moved the yard fence!');
+  }
+
+  // ── Feeding / water (issue #6, extended by #20 and #22 #6) ──────────────
+
+  // Feeds the one stay in this cage slot, if she's hungry (issue #22 #6 —
+  // one bowl per cage instead of one shared bowl per section).
+  _feedCage(sectionKey, cageSlot) {
+    const stay = this.roster.stays.find((s) => s.location === sectionKey && s.cageSlot === cageSlot);
+    if (!stay || !stay.needs.food) return false;
+    clearNeed(stay, 'food');
+    this._setNeedIcon(stay, 'food', false);
+    this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} got fed!`);
+    return true;
+  }
+
+  // Turtles can't reach a regular bowl from their water-tank island, so
+  // feeding them means dropping a piece of lettuce into the tank instead
+  // (issue #20 follow-up): every hungry turtle in the section drifts toward
+  // it, "eats", and the need clears — one lettuce feeds the whole tank, same
+  // as any other multi-occupant cage.
+  _feedTurtleTank() {
+    if (this._turtleFeeding) return false;
+    const hungry = this.roster.stays.filter((s) => s.location === 'turtle' && s.needs.food);
+    if (!hungry.length) return false;
+    this._turtleFeeding = true;
+    const { x, y } = TURTLE_FEED_SPOT;
+    const lettuce = this.add.image(x, y, LETTUCE_KEY).setDepth(9001);
+    for (const stay of hungry) {
+      const rec = this._staySprites.get(stay);
+      if (!rec) continue;
+      this.tweens.add({
+        targets: rec.sprite, x, y: y + 6, duration: 500, hold: 300, yoyo: true, ease: 'Sine.easeInOut',
+      });
     }
-    return fedAny;
+    this.time.delayedCall(1400, () => {
+      lettuce.destroy();
+      for (const stay of hungry) {
+        clearNeed(stay, 'food');
+        this._setNeedIcon(stay, 'food', false);
+      }
+      this._turtleFeeding = false;
+      this.game.events.emit(EVENTS.NOTIFY, hungry.length > 1 ? 'The turtles got fed!' : `${hungry[0].animal.name} got fed!`);
+    });
+    return true;
   }
 
   _topOffTank() {
@@ -708,17 +873,34 @@ export default class KennelScene extends Phaser.Scene {
     this.game.events.emit(EVENTS.NOTIFY, 'Topped off the turtle tank!');
   }
 
-  // ── Potty: scooper / litter box / dogs outside (issue #7) ────────────────
+  // ── Potty: scooper / litter box / dogs outside (issue #7, #20, #22 #5) ──
+  // Issue #20: dogs no longer have an indoor mess of their own — the leash
+  // walk (needs.bathroom, below) is their only potty pathway now, entirely
+  // outside. Only the cat litter box still needs the scooper.
 
   _pickUpScooper() {
     this.hasScooper = true;
+    this._scooperRestSprite?.destroy();
+    this._scooperRestSprite = null;
     this.game.events.emit(EVENTS.NOTIFY, 'Got the scooper!');
+  }
+
+  // Sets the scooper back down at the player's current spot (issue #22 #5) —
+  // triggered as a fallback when the player interacts with nothing else
+  // nearby while holding it (see _checkInteractions).
+  _dropScooper() {
+    this.hasScooper = false;
+    this._scooperVisual?.destroy();
+    this._scooperVisual = null;
+    this.scooperRestPos = { x: this.player.x, y: this.player.y };
+    this._rebuildScooperRestSprite();
+    this.game.events.emit(EVENTS.NOTIFY, 'Set the scooper down!');
   }
 
   _cleanMess(mess) {
     mess.sprite.destroy();
     this.messes = this.messes.filter((m) => m !== mess);
-    this.game.events.emit(EVENTS.NOTIFY, mess.kind === 'cat' ? 'Litter box cleaned!' : 'All cleaned up!');
+    this.game.events.emit(EVENTS.NOTIFY, 'Litter box cleaned!');
   }
 
   // ── Leashed dog walks (issue #19) ─────────────────────────────────────────
@@ -761,8 +943,7 @@ export default class KennelScene extends Phaser.Scene {
     wv.sprite.x += (targetX - wv.sprite.x) * 0.25;
     wv.sprite.y += (targetY - wv.sprite.y) * 0.25;
     wv.sprite.setDepth(wv.sprite.y);
-    wv.tag.bg.setPosition(wv.sprite.x, wv.sprite.y - wv.sprite.displayHeight - 6);
-    wv.tag.text.setPosition(wv.tag.bg.x, wv.tag.bg.y - wv.tag.bg.height + 4);
+    wv.tag.container.setPosition(wv.sprite.x, wv.sprite.y - wv.sprite.displayHeight - 6 - wv.tag.height);
 
     const moving = this.player.body.velocity.length() > 5;
     const animKey = moving ? `${wv.base}_walk` : `${wv.base}_idle`;
@@ -785,20 +966,18 @@ export default class KennelScene extends Phaser.Scene {
     }
   }
 
-  // Ends the walk: unleashes the dog and settles her back into her normal
-  // section placement (cage or playpen slot), clearing the bathroom need.
+  // Ends the walk: unleashes the dog and settles her back into her own cage,
+  // clearing the bathroom need.
   _finishWalk() {
     const stay = this.leashedDog;
     this._walkVisual.sprite.destroy();
-    this._walkVisual.tag.bg.destroy();
-    this._walkVisual.tag.text.destroy();
+    this._walkVisual.tag.container.destroy();
     this._walkVisual = null;
     this.leashedDog = null;
 
     clearNeed(stay, 'bathroom');
-    const already = this.roster.stays.filter((s) => s !== stay && s.location === 'dog').length;
     const section = SECTIONS.find((s) => s.key === 'dog');
-    const pos = this._sectionSlot(section, already, stay);
+    const pos = this._sectionSlot(section, stay);
     this._renderStay(stay, pos.x, pos.y);
     this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} feels much better!`);
     // If this was the night's current "needs the bathroom" wake-up (issue
@@ -816,10 +995,16 @@ export default class KennelScene extends Phaser.Scene {
   // the eggs (see _checkInteractions). Reception/carrying stays don't accrue
   // this — matches _updateNeeds' "only settled stays" rule.
 
-  _updateBirths(delta) {
+  // Every stay considered "settled at the kennel" for need/birth ticking —
+  // in a section OR out playing in the yard (issue #20); only reception and
+  // mid-carry stays are excluded.
+  _settledStays() {
     const sectionKeys = new Set(SECTIONS.map((s) => s.key));
-    for (const stay of this.roster.stays) {
-      if (!sectionKeys.has(stay.location)) continue;
+    return this.roster.stays.filter((s) => sectionKeys.has(s.location) || s.location === LOCATION.YARD);
+  }
+
+  _updateBirths(delta) {
+    for (const stay of this._settledStays()) {
       if (stay.birthTimer == null) continue;
       if (tickBirth(stay, delta)) this._markBirthReady(stay);
     }
@@ -1144,10 +1329,11 @@ export default class KennelScene extends Phaser.Scene {
     this.night.sleeping = false;
     this.night.wakeUpsRemaining = 0;
     this.night.currentWake = null;
-    // Issue #18 ("cage to sleep, playpen to play"): cats/dogs move from their
-    // shared playpen into their own individual cage for the night, before
-    // tuck-in starts.
-    this._moveCatsDogsToCages();
+    // Issue #20: cats/dogs already live in their own individual cage full
+    // time now (no more playpen↔cage toggle) — the only thing that still
+    // needs recalling before tuck-in is anyone currently out playing in the
+    // yard, regardless of species.
+    this._recallYardToCages();
     for (const stay of this._presentStays()) {
       stay.tuckedIn = false;
       this._setNeedIcon(stay, 'tuck', true);
@@ -1155,41 +1341,33 @@ export default class KennelScene extends Phaser.Scene {
     this._checkAllTuckedIn(); // covers the (rare) empty-kennel case
   }
 
-  // Relocates every present cat/dog stay to its assigned individual cage
-  // (issue #18) — called once at the start of the night, before tuck-in.
-  _moveCatsDogsToCages() {
-    for (const stay of this._presentStays()) {
-      if (stay.location !== 'cat' && stay.location !== 'dog') continue;
-      const cage = CAGES[stay.location]?.[stay.cageSlot];
-      if (!cage) continue;
-      const spot = cageAnimalSpot(cage);
-      this._renderStay(stay, spot.x, spot.y);
-    }
-  }
-
-  // Relocates every present cat/dog stay back to its section's shared playpen
-  // (issue #18) — called once morning resumes, undoing _moveCatsDogsToCages.
-  _moveCatsDogsToPlaypens() {
-    const counts = { cat: 0, dog: 0 };
-    for (const stay of this._presentStays()) {
-      if (stay.location !== 'cat' && stay.location !== 'dog') continue;
-      const idx = counts[stay.location]++;
-      const pos = this._gridSlot(PLAYPEN_RECT[stay.location], idx, 20, 42, 56);
+  // Brings anyone still out in the yard back inside to her own cage before
+  // tuck-in starts (issue #20) — "you stay awake until every single animal
+  // is asleep" (DESIGN.md) applies to yard playtime too.
+  _recallYardToCages() {
+    for (const stay of this.roster.stays) {
+      if (stay.location !== LOCATION.YARD) continue;
+      const section = SECTIONS.find((s) => s.key === stay.animal.species);
+      if (!section) continue;
+      stay.cageSlot = assignCageSlot(this.roster.stays, section.key);
+      stay.location = section.key;
+      const pos = this._sectionSlot(section, stay);
       this._renderStay(stay, pos.x, pos.y);
     }
   }
 
   // Lays (or removes) the small fabric sheet over a stay — one blanket per
   // stay covers her companions too (eggs/babies "wrapped" with her, per
-  // DESIGN.md), since they share the same cage spot.
+  // DESIGN.md), since they share the same cage spot. Sized to drape fairly
+  // fully over her body so it reads as a cozy cover, not a small patch.
   _setBlanket(stay, show) {
     const rec = this._staySprites.get(stay);
     if (!rec) return;
     if (show) {
       if (rec.blanket) return;
-      const img = this.add.image(rec.pos.x, rec.pos.y - rec.sprite.displayHeight * 0.35, BLANKET_KEY)
+      const img = this.add.image(rec.pos.x, rec.pos.y - rec.sprite.displayHeight * 0.32, BLANKET_KEY)
         .setOrigin(0.5, 0.5).setDepth(rec.sprite.depth + 0.3);
-      img.setDisplaySize(rec.sprite.displayWidth * 1.2, rec.sprite.displayHeight * 0.7);
+      img.setDisplaySize(rec.sprite.displayWidth * 1.3, rec.sprite.displayHeight * 0.85);
       rec.blanket = img;
     } else if (rec.blanket) {
       rec.blanket.destroy();
@@ -1241,7 +1419,6 @@ export default class KennelScene extends Phaser.Scene {
           this.night.sleeping = false;
           this.night.allTucked = false;
           this.night.currentWake = null;
-          this._moveCatsDogsToPlaypens(); // morning: back out of the cage, into the playpen
         },
       });
       return;
@@ -1303,9 +1480,7 @@ export default class KennelScene extends Phaser.Scene {
   // ── Per-frame need/mess ticking ──────────────────────────────────────────
 
   _updateNeeds(delta) {
-    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
-    for (const stay of this.roster.stays) {
-      if (!sectionKeys.has(stay.location)) continue; // only settled stays accrue needs
+    for (const stay of this._settledStays()) { // only settled stays accrue needs
       const flipped = tickNeeds(stay, delta);
       for (const key of flipped) {
         this._setNeedIcon(stay, key, true);
@@ -1323,15 +1498,10 @@ export default class KennelScene extends Phaser.Scene {
     }
   }
 
+  // Issue #20: dogs have no indoor mess of their own anymore — their potty
+  // pathway is entirely the outside leash walk (needs.bathroom). Only the
+  // cat litter box still spawns a periodic indoor mess.
   _updateMesses(delta) {
-    this._dogMessTimer -= delta;
-    if (this._dogMessTimer <= 0) {
-      this._dogMessTimer = DOG_MESS_INTERVAL();
-      const dogsPresent = this.roster.stays.some((s) => s.location === 'dog');
-      const count = this.messes.filter((m) => m.kind === 'dog').length;
-      if (dogsPresent && count < MAX_MESS_PER_SPOT) this._spawnMess('dog', DOG_PLAYPEN);
-    }
-
     this._catLitterTimer -= delta;
     if (this._catLitterTimer <= 0) {
       this._catLitterTimer = CAT_LITTER_INTERVAL();
@@ -1348,11 +1518,14 @@ export default class KennelScene extends Phaser.Scene {
     this.messes.push({ kind, x, y, sprite });
   }
 
-  // ── Unified interaction (issues #5, #6, #7, #8) ──────────────────────────
+  // ── Unified interaction (issues #5, #6, #7, #8, #20, #22) ────────────────
   // A single interact press resolves to whichever nearby thing makes sense —
-  // picking up an arrival, feeding a section, topping off the tank, grabbing
-  // the scooper, scooping a mess, or taking a dog out — whichever is closest,
-  // so the same button works everywhere without stepping on itself.
+  // picking up an arrival, taking a settled animal out to play, feeding a
+  // cage, topping off the tank, feeding the turtles, grabbing/dropping the
+  // scooper, scooping a mess, taking a dog out, baking a treat, or moving
+  // the yard divider — whichever is closest, so the same button works
+  // everywhere without stepping on itself. If nothing is in range and the
+  // scooper is equipped, interacting just sets it back down (issue #22 #5).
 
   _checkInteractions(interactPressed) {
     if (!interactPressed) return;
@@ -1371,17 +1544,33 @@ export default class KennelScene extends Phaser.Scene {
       if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
     }
 
-    for (const key of Object.keys(BOWL_SPOT)) {
-      const { x, y } = BOWL_SPOT[key];
-      consider(x, y, () => this._feedSection(key));
+    // Issue #20: pick up any settled or yard-placed animal to take her out
+    // to play (or bring her back in). Skipped at night (everyone should be
+    // in her cage for tuck-in) and for a dog currently needing the bathroom
+    // (the dedicated leash flow below takes priority for her).
+    if (!this.night.active) {
+      const sectionKeys = new Set(SECTIONS.map((s) => s.key));
+      for (const stay of this.roster.stays) {
+        const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
+        if (!settled) continue;
+        if (stay.location === 'dog' && stay.needs.bathroom) continue;
+        const rec = this._staySprites.get(stay);
+        if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
+      }
+    }
+
+    for (const key of Object.keys(BOWL_SPOTS)) {
+      BOWL_SPOTS[key].forEach((spot, slot) => {
+        consider(spot.x, spot.y, () => this._feedCage(key, slot));
+      });
     }
 
     consider(this._tankMarker.x, this._tankMarker.y, () => this._topOffTank());
+    consider(TURTLE_FEED_SPOT.x, TURTLE_FEED_SPOT.y, () => this._feedTurtleTank());
 
-    if (!this.hasScooper) consider(SCOOPER_SPOT.x, SCOOPER_SPOT.y, () => this._pickUpScooper());
+    if (!this.hasScooper) consider(this.scooperRestPos.x, this.scooperRestPos.y, () => this._pickUpScooper());
 
     for (const mess of this.messes) {
-      if (mess.kind === 'dog' && !this.hasScooper) continue; // dog messes need the scooper equipped
       consider(mess.x, mess.y, () => this._cleanMess(mess));
     }
 
@@ -1417,6 +1606,9 @@ export default class KennelScene extends Phaser.Scene {
       consider(this._raccoon.sprite.x, this._raccoon.sprite.y, () => this._scareRaccoon());
     }
 
+    // Yard divider (issue #20) — pick it up from its current post position.
+    consider(this.yardDividerX, (YARD_DIVIDER_Y0 + YARD_DIVIDER_Y1) / 2, () => this._pickUpDivider());
+
     // Tucking animals in for the night (issue #11) — walk up to anyone not
     // yet under their blanket and interact.
     if (this.night.active) {
@@ -1428,6 +1620,7 @@ export default class KennelScene extends Phaser.Scene {
     }
 
     if (best) best();
+    else if (this.hasScooper) this._dropScooper(); // nothing nearby — set it down (issue #22 #5)
   }
 
   // ── Per-frame ────────────────────────────────────────────────────────────
@@ -1452,6 +1645,8 @@ export default class KennelScene extends Phaser.Scene {
     this._updateBirths(delta);
     this._updateComputerIcon();
     this._updateRaccoon(delta);
+    this._updateWander(delta);
+    this._updateNameTagVisibility();
     this.player.setDepth(this.player.y);
 
     // interactJustDown() is stateful (edge-triggered) — read it exactly once
@@ -1462,10 +1657,45 @@ export default class KennelScene extends Phaser.Scene {
       this._checkDropoff();
     } else if (this.leashedDog) {
       this._updateLeashedDog();
+    } else if (this.carryingDivider) {
+      this._followDividerCarry();
+      if (interactPressed) this._dropDivider();
     } else {
       this._checkInteractions(interactPressed);
     }
     this._followScooper();
+  }
+
+  // ── Wander (issue #22 #4) ─────────────────────────────────────────────────
+  // Every settled/yard-placed stay's sprite drifts toward a small periodic
+  // target point within its cage/island (or yard zone) bounds — species-tuned
+  // interval/amplitude from data/wander.js. Paused while she's tucked in
+  // (asleep) or the screen is asleep, so nobody wanders under their blanket.
+  _updateWander(delta) {
+    if (this.night.sleeping) return;
+    for (const [stay, rec] of this._staySprites) {
+      if (!rec.wanderBounds || stay.tuckedIn) continue;
+      if (!rec.wander) {
+        rec.wander = { tx: rec.sprite.x, ty: rec.sprite.y, t: pickWanderInterval(stay.animal.species) };
+      }
+      rec.wander.t -= delta;
+      if (rec.wander.t <= 0) {
+        const b = rec.wanderBounds;
+        const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+        const inYard = stay.location === LOCATION.YARD;
+        const amp = wanderAmplitude(stay.animal.species, inYard);
+        const maxX = Math.max(2, Math.min(amp, b.w / 2 - 6));
+        const maxY = Math.max(2, Math.min(amp, b.h / 2 - 6));
+        rec.wander.tx = Phaser.Math.Clamp(cx + (Math.random() * 2 - 1) * maxX, b.x + 4, b.x + b.w - 4);
+        rec.wander.ty = Phaser.Math.Clamp(cy + (Math.random() * 2 - 1) * maxY, b.y + 4, b.y + b.h - 4);
+        rec.wander.t = pickWanderInterval(stay.animal.species);
+      }
+      rec.sprite.x += (rec.wander.tx - rec.sprite.x) * 0.03;
+      rec.sprite.y += (rec.wander.ty - rec.sprite.y) * 0.03;
+      rec.sprite.setDepth(rec.sprite.y);
+      // The name tag rides along just above her current (wandering) position.
+      rec.tag.container.setPosition(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight - 6 - rec.tag.height);
+    }
   }
 
   _followScooper() {

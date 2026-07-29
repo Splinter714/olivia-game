@@ -16,6 +16,7 @@ import { CAGES_PER_SECTION } from './sections.js';
 export const LOCATION = {
   RECEPTION: 'reception', // waiting at the front desk, not yet picked up
   CARRYING: 'carrying',   // in the player's hands, following them
+  YARD: 'yard',           // out playing in the outside yard (issue #20)
 };
 
 // What the player carries an arrival in/as (DESIGN.md "Pets Checking In").
@@ -228,7 +229,9 @@ export function createRoster() {
     const due = [];
     for (let i = stays.length - 1; i >= 0; i--) {
       const stay = stays[i];
-      if (stay.location === LOCATION.RECEPTION || stay.location === LOCATION.CARRYING) continue;
+      // A stay out playing in the yard hasn't "settled" back into her section
+      // yet either — skip her until the player brings her back inside (issue #20).
+      if (stay.location === LOCATION.RECEPTION || stay.location === LOCATION.CARRYING || stay.location === LOCATION.YARD) continue;
       if (day < stay.checkoutDay) continue;
       stays.splice(i, 1);
       due.push(stay);

@@ -1,15 +1,15 @@
-// Procedural textures for kennel furniture added by issues #6/#7/#8: the
-// turtle tank + sand island, cat/dog playpen fences, litter box, scooper,
-// food/water bowls, potty messes, and the small "needs attention" bubbles.
-// Same gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
+// Procedural textures for kennel furniture added by issues #6/#7/#8/#13/#14/
+// #20: the turtle/snake tanks + individual islands/perches, litter box,
+// scooper, food/water bowls, potty messes, the yard divider, the back-wing
+// kitchen/storage dressing, and the small "needs attention" bubbles. Same
+// gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
 import { gen } from './_gen.js';
-import { TURTLE, SNAKE, CAT_PLAYPEN, LITTER_BOX, CAGES, OVEN } from '../data/props.js';
+import {
+  TURTLE, SNAKE, LITTER_BOX, CAGES, OVEN, YARD_DIVIDER_Y1, YARD_DIVIDER_Y0,
+} from '../data/props.js';
 
 export const TANK_KEY = 'prop-tank';
-export const ISLAND_KEY = 'prop-island';
 export const SNAKE_TANK_KEY = 'prop-snake-tank';
-export const SNAKE_PERCH_KEY = 'prop-snake-perch';
-export const PLAYPEN_FENCE_KEY = 'prop-playpen-fence';
 export const LITTER_BOX_KEY = 'prop-litter-box';
 export const SCOOPER_KEY = 'prop-scooper';
 export const BOWL_KEY = 'prop-bowl';
@@ -22,11 +22,14 @@ export const TREAT_TRAY_KEY = 'prop-treat-tray';
 export const SHELF_KEY = 'prop-shelf';
 export const BOX_KEY = 'prop-boxes';
 export const BAG_KEY = 'prop-bag';
+export const LETTUCE_KEY = 'prop-lettuce';
+export const YARD_DIVIDER_POST_KEY = 'prop-yard-divider-post';
+export const YARD_DIVIDER_LINE_KEY = 'prop-yard-divider-line';
 export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck', babies: 'need-babies' };
 
-// One individual-cage texture key per (non-turtle) section (issue #18) — every
-// cage in a section is the same size (data/props.js's CAGES grid), so one
-// texture per section covers all 6.
+// One individual-cage texture key per section (issue #18, extended to
+// turtle/snake by issue #20) — every cage in a section is the same size
+// (data/props.js's CAGES grid), so one texture per section covers all 6.
 export const CAGE_KEY = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-${key}`]));
 
 // Water tank with a glass-cover highlight along the top rim.
@@ -36,17 +39,6 @@ function drawTank(g, w, h) {
   // Glass-cover highlight: a lighter streak across the top.
   g.fillStyle(0xdff3fb, 0.55).fillRoundedRect(6, 4, w - 12, h * 0.14, 6);
   g.lineStyle(3, 0xcfe9f2, 0.8).strokeRoundedRect(1.5, 1.5, w - 3, h - 3, 9);
-}
-
-// Sand island, sitting inside the tank — a soft tan ellipse with a darker
-// outline and a couple of pebble specks.
-function drawIsland(g, w, h) {
-  g.fillStyle(0xcfa15e, 1).fillEllipse(w / 2, h / 2, w, h);
-  g.fillStyle(0xe0bd85, 1).fillEllipse(w / 2, h * 0.44, w * 0.86, h * 0.8);
-  g.fillStyle(0xb9884b, 1);
-  g.fillCircle(w * 0.3, h * 0.4, 2);
-  g.fillCircle(w * 0.68, h * 0.6, 1.6);
-  g.fillCircle(w * 0.5, h * 0.7, 1.4);
 }
 
 // Snake tank (issue #14): same glass-covered-tank silhouette as the turtle
@@ -59,21 +51,24 @@ function drawSnakeTank(g, w, h) {
   g.lineStyle(3, 0xcfe9f2, 0.55).strokeRoundedRect(1.5, 1.5, w - 3, h - 3, 9); // glass sheen
 }
 
-// A simple resting branch the snakes (and their eggs) coil around, sitting
-// inside the tank — the snake-section equivalent of the turtle's sand island.
-function drawSnakePerch(g, w, h) {
-  g.fillStyle(0x6b4426, 1).fillRoundedRect(0, h * 0.3, w, h * 0.44, h * 0.2);
-  g.fillStyle(0x8a5a34, 1).fillRoundedRect(0, h * 0.3, w, h * 0.18, h * 0.12);
-  g.fillStyle(0x4f3018, 1);
-  g.fillCircle(w * 0.08, h * 0.52, h * 0.28);
-  g.fillCircle(w * 0.92, h * 0.52, h * 0.24);
+// A small individual sand island (issue #20) — one per turtle cage slot,
+// sized to fit inside the shared tank. Smaller sibling of the old single
+// shared island, same soft-tan-ellipse styling.
+function drawIslandSlot(g, w, h) {
+  g.fillStyle(0xcfa15e, 1).fillEllipse(w / 2, h * 0.6, w * 0.9, h * 0.56);
+  g.fillStyle(0xe0bd85, 1).fillEllipse(w / 2, h * 0.5, w * 0.72, h * 0.4);
+  g.fillStyle(0xb9884b, 1);
+  g.fillCircle(w * 0.35, h * 0.52, 1.3);
+  g.fillCircle(w * 0.62, h * 0.6, 1.1);
 }
 
-// Low playpen corral — a friendlier, rounder fence than the section's own
-// square pen walls, so it visually reads as "a play area" not "a room wall".
-function drawPlaypenFence(g, w, h) {
-  g.lineStyle(5, 0xe0a95e, 1).strokeRoundedRect(2.5, 2.5, w - 5, h - 5, 18);
-  g.lineStyle(2, 0xf6cf9a, 0.9).strokeRoundedRect(2.5, 2.5, w - 5, h - 5, 18);
+// A small individual resting perch (issue #20) — one per snake cage slot,
+// a short branch stub sized to fit inside the shared tank.
+function drawPerchSlot(g, w, h) {
+  g.fillStyle(0x6b4426, 1).fillRoundedRect(w * 0.08, h * 0.42, w * 0.84, h * 0.22, h * 0.1);
+  g.fillStyle(0x4f3018, 1);
+  g.fillCircle(w * 0.14, h * 0.53, h * 0.15);
+  g.fillCircle(w * 0.86, h * 0.53, h * 0.13);
 }
 
 function drawLitterBox(g, w, h) {
@@ -97,8 +92,8 @@ function drawBowl(g, w, h) {
   g.fillStyle(0xc08a3e, 1).fillEllipse(w / 2, h * 0.5, w * 0.6, h * 0.34);
 }
 
-// Small brown "mess" blob — used for both dog-playpen messes and litter-box
-// messes (the litter box's sandy background already tells them apart).
+// Small brown "mess" blob — used for litter-box messes (the sandy background
+// already tells it apart from anything else).
 function drawMess(g, w, h) {
   g.fillStyle(0x6b4a2c, 1);
   g.fillEllipse(w * 0.5, h * 0.6, w * 0.7, h * 0.5);
@@ -161,12 +156,31 @@ function drawComputer(g, w, h) {
 
 // Small soft-fabric sheet — issue #11's tuck-in cover, laid over an animal
 // (or wrapped around its eggs/babies, which share the same stay) at night.
-// Scaled per-animal at placement time (KennelScene), so one plain textured
-// blanket shape covers every species instead of needing per-species art.
+// Redrawn per an owner note mid-build to actually read as a cozy draped
+// blanket rather than a flat tinted overlay: a rounded cloth body, a
+// contrasting trim band along the top hem, a couple of soft fold/wrinkle
+// highlights, a shadowed center crease, and a scalloped bottom edge. Scaled
+// per-animal at placement time (KennelScene), so one plain blanket shape
+// covers every species instead of needing per-species art.
 function drawBlanket(g, w, h) {
-  g.fillStyle(0xf2d9a8, 0.95).fillRoundedRect(0, 0, w, h, h * 0.3);
-  g.fillStyle(0xe0c084, 0.75).fillRoundedRect(0, h * 0.55, w, h * 0.45, h * 0.25);
-  g.lineStyle(1.5, 0xc9a15f, 0.85).strokeRoundedRect(1, 1, w - 2, h - 2, h * 0.3);
+  // Base cloth body.
+  g.fillStyle(0xf2d9a8, 0.97).fillRoundedRect(0, h * 0.14, w, h * 0.72, h * 0.26);
+  // Trim band along the top hem.
+  g.fillStyle(0xdca25a, 1).fillRoundedRect(0, h * 0.14, w, h * 0.16, h * 0.14);
+  // Soft fold/wrinkle highlights.
+  g.fillStyle(0xffe9c2, 0.55);
+  g.fillRoundedRect(w * 0.1, h * 0.4, w * 0.3, h * 0.14, h * 0.07);
+  g.fillRoundedRect(w * 0.56, h * 0.5, w * 0.32, h * 0.14, h * 0.07);
+  // Shadowed center crease.
+  g.fillStyle(0xc9a15f, 0.55).fillRoundedRect(w * 0.47, h * 0.32, w * 0.05, h * 0.5, h * 0.05);
+  // Scalloped bottom hem.
+  g.fillStyle(0xf2d9a8, 0.97);
+  const scallops = 5;
+  for (let i = 0; i < scallops; i++) {
+    const cx = (w / scallops) * (i + 0.5);
+    g.fillCircle(cx, h * 0.86, w / scallops / 2 + 1);
+  }
+  g.lineStyle(1.4, 0xc9a15f, 0.9).strokeRoundedRect(1, h * 0.14, w - 2, h * 0.72, h * 0.24);
 }
 
 // Small gold sparkle/star — issue #12's "she's a well-cared-for regular"
@@ -248,16 +262,41 @@ function drawBag(g, w, h) {
   g.fillStyle(0x8a5a34, 1).fillCircle(w * 0.5, h * 0.44, w * 0.18);
 }
 
+// A small floating lettuce leaf — dropped into the turtle tank as food
+// (issue #20 follow-up: turtles can't reach a regular bowl on their island,
+// so feeding them means tossing lettuce into the water instead).
+function drawLettuce(g, w, h) {
+  g.fillStyle(0x6fae4a, 1).fillEllipse(w / 2, h / 2, w, h);
+  g.fillStyle(0x8bcf68, 1).fillEllipse(w * 0.42, h * 0.42, w * 0.6, h * 0.6);
+  g.lineStyle(1, 0x4f8a34, 0.8).lineBetween(w * 0.2, h * 0.5, w * 0.8, h * 0.5);
+}
+
+// Yard divider post (issue #20): a small movable fence post the player can
+// carry around and set back down to re-split the yard into zones.
+function drawDividerPost(g, w, h) {
+  g.fillStyle(0x8a5a34, 1).fillRoundedRect(w * 0.4, 0, w * 0.2, h, 3);
+  g.fillStyle(0xc79a63, 1).fillRoundedRect(w * 0.08, h * 0.16, w * 0.84, h * 0.16, 2);
+  g.fillStyle(0xc79a63, 1).fillRoundedRect(w * 0.08, h * 0.56, w * 0.84, h * 0.16, 2);
+}
+
+// The divider's full-height fence line, redrawn only when the divider moves
+// (KennelScene just repositions this image's x — the line's own art never
+// changes).
+function drawDividerLine(g, w, h) {
+  g.fillStyle(0xc79a63, 0.92);
+  for (let y = 0; y < h; y += 26) g.fillRect(0, y, w, 16);
+  g.lineStyle(1.5, 0x8a5a34, 0.9);
+  for (let y = 0; y < h; y += 26) g.strokeRect(0.5, y + 0.5, w - 1, 15);
+}
+
 export function buildPropTextures(scene) {
   gen(scene, TANK_KEY, TURTLE.tank.w, TURTLE.tank.h, (g) => drawTank(g, TURTLE.tank.w, TURTLE.tank.h));
-  gen(scene, ISLAND_KEY, TURTLE.island.w, TURTLE.island.h, (g) => drawIsland(g, TURTLE.island.w, TURTLE.island.h));
   gen(scene, SNAKE_TANK_KEY, SNAKE.tank.w, SNAKE.tank.h, (g) => drawSnakeTank(g, SNAKE.tank.w, SNAKE.tank.h));
-  gen(scene, SNAKE_PERCH_KEY, SNAKE.perch.w, SNAKE.perch.h, (g) => drawSnakePerch(g, SNAKE.perch.w, SNAKE.perch.h));
-  gen(scene, PLAYPEN_FENCE_KEY, CAT_PLAYPEN.w, CAT_PLAYPEN.h, (g) => drawPlaypenFence(g, CAT_PLAYPEN.w, CAT_PLAYPEN.h));
   gen(scene, LITTER_BOX_KEY, LITTER_BOX.w, LITTER_BOX.h, (g) => drawLitterBox(g, LITTER_BOX.w, LITTER_BOX.h));
   gen(scene, SCOOPER_KEY, 26, 32, (g) => drawScooper(g, 26, 32));
   gen(scene, BOWL_KEY, 24, 18, (g) => drawBowl(g, 24, 18));
   gen(scene, MESS_KEY, 16, 12, (g) => drawMess(g, 16, 12));
+  gen(scene, LETTUCE_KEY, 16, 12, (g) => drawLettuce(g, 16, 12));
   gen(scene, NEED_KEY.food, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'food'));
   gen(scene, NEED_KEY.bathroom, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'bathroom'));
   gen(scene, NEED_KEY.water, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'water'));
@@ -265,16 +304,20 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.tuck, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'tuck'));
   gen(scene, NEED_KEY.babies, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'babies'));
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
-  gen(scene, BLANKET_KEY, 30, 20, (g) => drawBlanket(g, 30, 20));
+  gen(scene, BLANKET_KEY, 36, 26, (g) => drawBlanket(g, 36, 26));
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));
   gen(scene, OVEN_KEY, OVEN.w, OVEN.h, (g) => drawOven(g, OVEN.w, OVEN.h));
   gen(scene, TREAT_TRAY_KEY, 26, 16, (g) => drawTreatTray(g, 26, 16));
   gen(scene, SHELF_KEY, 40, 70, (g) => drawShelf(g, 40, 70));
   gen(scene, BOX_KEY, 34, 30, (g) => drawBoxStack(g, 34, 30));
   gen(scene, BAG_KEY, 22, 30, (g) => drawBag(g, 22, 30));
+  gen(scene, YARD_DIVIDER_POST_KEY, 14, 28, (g) => drawDividerPost(g, 14, 28));
+  gen(scene, YARD_DIVIDER_LINE_KEY, 8, YARD_DIVIDER_Y1 - YARD_DIVIDER_Y0, (g) => drawDividerLine(g, 8, YARD_DIVIDER_Y1 - YARD_DIVIDER_Y0));
 
   for (const key of Object.keys(CAGES)) {
     const { w, h } = CAGES[key][0]; // every cage in a section shares one size
-    gen(scene, CAGE_KEY[key], w, h, (g) => drawCagePen(g, w, h));
+    if (key === 'turtle') gen(scene, CAGE_KEY[key], w, h, (g) => drawIslandSlot(g, w, h));
+    else if (key === 'snake') gen(scene, CAGE_KEY[key], w, h, (g) => drawPerchSlot(g, w, h));
+    else gen(scene, CAGE_KEY[key], w, h, (g) => drawCagePen(g, w, h));
   }
 }

@@ -25,7 +25,6 @@ import { SPECIES } from '../data/species.js';
 import { coatDef, lookId } from '../data/coats.js';
 
 export const EGG_KEY = 'animal-egg';
-export const NAME_TAG_KEY = 'name-tag';
 
 // Animal sprites are super-sampled, so scenes must scale them down by this much
 // (each design-grid px becomes 2 logical px on screen). Anything measuring a
@@ -986,22 +985,13 @@ function drawEgg(g, w, h) {
   g.fillEllipse(w * 0.62, h * 0.6, 1.2, 1.2);
 }
 
-// Small hanging placard — "each cage has a name tag on top" (DESIGN.md). The
-// scene draws the animal's name as text over this background.
-function drawNameTag(g, w, h) {
-  g.fillStyle(0xead9b3, 1).fillRoundedRect(0, 2, w, h - 2, 4);
-  g.lineStyle(2, 0xa9824a, 1).strokeRoundedRect(1, 3, w - 2, h - 4, 4);
-  g.fillStyle(0x8a6a3e, 1);
-  g.fillCircle(6, 3, 2);
-  g.fillCircle(w - 6, 3, 2);
-}
-
-// Builds the egg and name-tag textures shared by every placement. Animal sheets
-// themselves are built lazily per species/stage/look — see
+// Builds the egg texture shared by every placement. Name tags (issue #22 #1)
+// are now sized procedurally per-name at render time in KennelScene, rather
+// than stamped from a fixed-size texture — see KennelScene._addNameTag.
+// Animal sheets themselves are built lazily per species/stage/look — see
 // ensureAnimalTextures(). Call once from KennelScene.create().
 export function buildAnimalTextures(scene) {
   gen(scene, EGG_KEY, 10, 8, (g) => drawEgg(g, 10, 8));
-  gen(scene, NAME_TAG_KEY, 60, 20, (g) => drawNameTag(g, 60, 20));
 
   // Cheap guard: data/species.js `size` is the design grid the art is authored
   // at, and KennelScene uses it for placement maths — warn loudly if they drift.
