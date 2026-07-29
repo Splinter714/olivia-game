@@ -12,7 +12,8 @@ export const LITTER_BOX_KEY = 'prop-litter-box';
 export const SCOOPER_KEY = 'prop-scooper';
 export const BOWL_KEY = 'prop-bowl';
 export const MESS_KEY = 'prop-mess';
-export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water' };
+export const COMPUTER_KEY = 'prop-computer';
+export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail' };
 
 // Water tank with a glass-cover highlight along the top rim.
 function drawTank(g, w, h) {
@@ -71,9 +72,9 @@ function drawMess(g, w, h) {
   g.fillEllipse(w * 0.65, h * 0.38, w * 0.36, h * 0.3);
 }
 
-// A tiny floating "needs attention" bubble — a bowl icon, a paw print, or a
-// water droplet, each on a soft white speech-bubble backing so it's readable
-// against any section floor color.
+// A tiny floating "needs attention" bubble — a bowl icon, a paw print, a
+// water droplet, or a little envelope, each on a soft white speech-bubble
+// backing so it's readable against any section floor color.
 function drawNeedBubble(g, w, h, icon) {
   g.fillStyle(0xffffff, 0.92).fillCircle(w / 2, h / 2 - 1, w / 2 - 1);
   g.lineStyle(1.5, 0x333333, 0.5).strokeCircle(w / 2, h / 2 - 1, w / 2 - 1);
@@ -86,11 +87,28 @@ function drawNeedBubble(g, w, h, icon) {
     g.fillCircle(w * 0.36, h * 0.5, w * 0.08);
     g.fillCircle(w * 0.64, h * 0.5, w * 0.08);
     g.fillEllipse(w * 0.5, h * 0.62, w * 0.28, w * 0.2);
+  } else if (icon === 'mail') {
+    // A tiny envelope — the reception computer's "needs attention" icon
+    // (issue #10: an un-announced birth waiting to be sent to the owner).
+    g.fillStyle(0xdd5555, 1).fillRoundedRect(w * 0.2, h * 0.34, w * 0.6, h * 0.4, 2);
+    g.fillStyle(0xffe3e3, 1);
+    g.fillTriangle(w * 0.2, h * 0.34, w * 0.5, h * 0.58, w * 0.8, h * 0.34);
   } else { // water
     g.fillStyle(0x4b9fc4, 1);
     g.fillTriangle(w * 0.5, h * 0.24, w * 0.32, h * 0.62, w * 0.68, h * 0.62);
     g.fillCircle(w * 0.5, h * 0.62, w * 0.18);
   }
+}
+
+// Simple desk computer — a monitor with a glowing screen and a small stand,
+// sitting at the reception desk (issue #10: sending baby-picture messages to
+// owners). Deliberately toylike/flat, not a real device.
+function drawComputer(g, w, h) {
+  g.fillStyle(0x5b5b63, 1).fillRoundedRect(w * 0.4, h * 0.7, w * 0.2, h * 0.26, 2); // stand
+  g.fillStyle(0x6b6b76, 1).fillRoundedRect(w * 0.22, h * 0.92, w * 0.56, h * 0.08, 2); // base
+  g.fillStyle(0x3a3f52, 1).fillRoundedRect(w * 0.04, h * 0.02, w * 0.92, h * 0.64, 4); // bezel
+  g.fillStyle(0x8fd6f2, 1).fillRoundedRect(w * 0.11, h * 0.09, w * 0.78, h * 0.48, 2); // screen
+  g.fillStyle(0xffffff, 0.5).fillRect(w * 0.16, h * 0.14, w * 0.3, h * 0.07); // glare
 }
 
 export function buildPropTextures(scene) {
@@ -104,4 +122,6 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.food, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'food'));
   gen(scene, NEED_KEY.bathroom, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'bathroom'));
   gen(scene, NEED_KEY.water, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'water'));
+  gen(scene, NEED_KEY.mail, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'mail'));
+  gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
 }

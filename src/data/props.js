@@ -2,7 +2,7 @@
 // data/sections.js's SECTIONS the same way penRects()/wallRects() are: plain
 // rects that both KennelScene's rendering and its interaction/collision code
 // can share, so the numbers only live in one place.
-import { SECTIONS } from './sections.js';
+import { SECTIONS, RECEPTION } from './sections.js';
 
 const sectionByKey = (key) => SECTIONS.find((s) => s.key === key);
 
@@ -63,3 +63,11 @@ export const BOWL_SPOT = {
 function cornerOf(rect) {
   return { x: rect.x + rect.w - 24, y: rect.y + rect.h - 20 };
 }
+
+// The reception computer (issue #10) — "the player has a computer... to send
+// a message with a picture of the babies to the owners" (DESIGN.md). Sits on
+// the right side of the reception desk, clear of the desk's own graphics.
+export const COMPUTER_SPOT = {
+  x: RECEPTION.desk.x + RECEPTION.desk.w - 22,
+  y: RECEPTION.desk.y + 6,
+};

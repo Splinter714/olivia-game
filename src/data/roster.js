@@ -7,6 +7,7 @@
 import { createAnimal } from './animal.js';
 import { SPECIES_KEYS } from './species.js';
 import { createNeeds } from './needs.js';
+import { attachBirthTimer } from './births.js';
 
 // Where a stay currently is. Any SECTIONS[].key (data/sections.js) is also a
 // valid `location` once an animal has been carried to its section.
@@ -114,7 +115,13 @@ export function createRoster() {
       // section; KennelScene ticks them.
       needs,
       timers,
+      // Births (issue #9) — set below if the primary is pregnant/has eggs.
+      // Announcement (issue #10) — flips true the moment babies/hatchlings
+      // appear, until the player uses the reception computer to tell the
+      // owner; KennelScene shows a "needs attention" icon there while true.
+      needsAnnouncement: false,
     };
+    attachBirthTimer(stay);
     stays.push(stay);
     return stay;
   }

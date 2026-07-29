@@ -3,11 +3,14 @@ import {
   WALL, ROOM, OUTSIDE, WORLD, BACK_DOOR, FRONT_DOOR, RECEPTION, SECTIONS,
   penRects, wallRects, outsideFenceRects,
 } from '../data/sections.js';
-import { TURTLE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT } from '../data/props.js';
+import { TURTLE, CAT_PLAYPEN, DOG_PLAYPEN, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOT, COMPUTER_SPOT } from '../data/props.js';
 import { createClock, tintForHour, PHASE } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
 import { findPath } from '../data/path.js';
 import { tickNeeds, clearNeed } from '../data/needs.js';
+import { tickBirth } from '../data/births.js';
+import { createAnimal } from '../data/animal.js';
+import { randomName } from '../data/names.js';
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
@@ -15,10 +18,20 @@ import { buildAnimalTextures, animalTextureKey, EGG_KEY, NAME_TAG_KEY } from '..
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, ISLAND_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY,
+  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY,
 } from '../art/props.js';
 import { createRoster, LOCATION, CARRY_KIND } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
+
+// Placeholder name shown on a baby's tiny label until the owner names it via
+// the reception computer (issue #10). Matches data/animal.js's opts.name
+// override convention — createAnimal({ name: BABY_PLACEHOLDER }).
+const BABY_PLACEHOLDER = '???';
+
+// A handful of collar colors — cycled across siblings that share the SAME
+// species + colorVariant (they "look the same", DESIGN.md's kitten example)
+// so each one is still tellable apart at a glance.
+const COLLAR_COLORS = [0xdd5555, 0x4b9fc4, 0xf2c96b, 0x6fae5a, 0x9a6fd6];
 
 const SPEED = 160; // px/s, world (logical) units
 const PICKUP_RADIUS = 50; // px, how close the player must be to interact with anything
@@ -95,6 +108,10 @@ export default class KennelScene extends Phaser.Scene {
     this.turtleTankNeedsWater = false;
     this._tankTimer = TANK_WATER_INTERVAL();
     this._tankNeedIcon = null;
+
+    // ── Births / computer announcements (issues #9, #10) ──────────────────
+    this._computerNeedIcon = null;
+    this._computerBusy = false;
 
     this.game.events.on(EVENTS.HOUR_CHANGE, this._onHourChange, this);
     this.events.once('shutdown', () => this.game.events.off(EVENTS.HOUR_CHANGE, this._onHourChange, this));
@@ -173,6 +190,9 @@ export default class KennelScene extends Phaser.Scene {
       const { x, y } = BOWL_SPOT[key];
       this.add.image(x, y, BOWL_KEY).setOrigin(0.5, 1).setDepth(y - 1);
     }
+
+    // Reception computer (issue #10) — baby-announcement messages to owners.
+    this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
   }
 
   _buildCollision() {
@@ -271,10 +291,37 @@ export default class KennelScene extends Phaser.Scene {
         cx += isTurtle ? 7 : 10;
       }
     }
+    // Siblings that share a species+colorVariant "look the same" (DESIGN.md's
+    // kitten example) — give each of THOSE a small colored collar so they're
+    // still tellable apart; a baby on its own doesn't need one.
+    const variantCounts = {};
+    for (const b of stay.companions) variantCounts[b.colorVariant] = (variantCounts[b.colorVariant] || 0) + 1;
+    const variantSeen = {};
+
     for (const baby of stay.companions) {
       const babyKey = animalTextureKey(baby.species, 'baby', baby.colorVariant);
       const jitterY = isTurtle ? (Math.random() - 0.5) * 6 : 0;
-      extras.push(this.add.image(cx, y + jitterY, babyKey).setOrigin(0.5, 1).setDepth(y));
+      const babySprite = this.add.image(cx, y + jitterY, babyKey).setOrigin(0.5, 1).setDepth(y);
+      extras.push(babySprite);
+
+      if (variantCounts[baby.colorVariant] > 1) {
+        const seen = variantSeen[baby.colorVariant] || 0;
+        variantSeen[baby.colorVariant] = seen + 1;
+        const collarColor = COLLAR_COLORS[seen % COLLAR_COLORS.length];
+        extras.push(this.add.circle(cx, y + jitterY - babySprite.height * 0.5, 3, collarColor).setDepth(y + 0.1));
+      }
+
+      // Tiny label under each baby — "???" until the owner names it via the
+      // reception computer (issue #10), then its real name.
+      extras.push(this.add.text(cx, y + jitterY + 2, baby.name || BABY_PLACEHOLDER, {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: '8px',
+        fontStyle: 'bold',
+        color: '#4a341c',
+        backgroundColor: '#ffffffb0',
+        padding: { x: 2, y: 0 },
+      }).setOrigin(0.5, 0).setDepth(y + 0.2));
+
       cx += isTurtle ? 9 : 14;
     }
 
@@ -478,6 +525,101 @@ export default class KennelScene extends Phaser.Scene {
     });
   }
 
+  // ── Births: pregnancy/eggs → babies (issue #9) ───────────────────────────
+
+  // Ticks every settled stay's birth timer (data/births.js); the moment one
+  // fires, hands off to _triggerBirth. Reception/carrying stays don't accrue
+  // this — matches _updateNeeds' "only settled stays" rule.
+  _updateBirths(delta) {
+    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
+    for (const stay of this.roster.stays) {
+      if (!sectionKeys.has(stay.location)) continue;
+      if (stay.birthTimer == null) continue;
+      if (tickBirth(stay, delta)) this._triggerBirth(stay);
+    }
+  }
+
+  // Turns a turtle mom's eggs into hatchlings, or gives a pregnant mom (any
+  // species) 1-2 babies — either way the new babies start unnamed
+  // (BABY_PLACEHOLDER) until the player sends the owner an announcement via
+  // the reception computer (issue #10), and the stay is flagged so the
+  // computer's "needs attention" icon picks it up.
+  _triggerBirth(stay) {
+    stay.birthTimer = null;
+    const rec = this._staySprites.get(stay);
+    const pos = rec ? { ...rec.pos } : null;
+
+    if (stay.animal.species === 'turtle' && stay.animal.hasEggs) {
+      const count = stay.animal.eggCount;
+      stay.animal.hasEggs = false;
+      stay.animal.eggCount = 0;
+      // "Then you take out the shells!" (DESIGN.md) — the egg extras are
+      // simply gone once _renderStay redraws below; no separate pickup step.
+      const babies = Array.from({ length: count }, () =>
+        createAnimal('turtle', { stage: 'baby', name: BABY_PLACEHOLDER }));
+      stay.companions = [...stay.companions, ...babies];
+      stay.needsAnnouncement = true;
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s eggs are hatching!`);
+    } else if (stay.animal.isPregnant) {
+      stay.animal.isPregnant = false;
+      const n = 1 + Math.floor(Math.random() * 2); // 1-2 babies
+      const babies = Array.from({ length: n }, () =>
+        createAnimal(stay.animal.species, { stage: 'baby', name: BABY_PLACEHOLDER }));
+      stay.companions = [...stay.companions, ...babies];
+      stay.needsAnnouncement = true;
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} is having babies!`);
+    } else {
+      return; // shouldn't happen — birthTimer only attaches when expecting
+    }
+
+    if (pos) this._renderStay(stay, pos.x, pos.y);
+  }
+
+  // ── The computer: baby announcements (issue #10) ─────────────────────────
+  // A simple scripted flow, not a real chat client: interact near the
+  // computer while a stay has un-announced babies to send a picture, then a
+  // moment later the owner "writes back" with names — auto-picked from
+  // data/names.js same as any other arrival — which get applied for real.
+
+  _updateComputerIcon() {
+    const anyPending = !this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement);
+    if (anyPending && !this._computerNeedIcon) {
+      this._computerNeedIcon = this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y - 40, NEED_KEY.mail).setDepth(9002);
+    } else if (!anyPending && this._computerNeedIcon) {
+      this._computerNeedIcon.destroy();
+      this._computerNeedIcon = null;
+    }
+  }
+
+  _useComputer() {
+    if (this._computerBusy) return;
+    const stay = this.roster.stays.find((s) => s.needsAnnouncement);
+    if (!stay) return;
+    this._computerBusy = true;
+    this._updateComputerIcon(); // hide the icon immediately — it's being handled
+
+    this.game.events.emit(EVENTS.NOTIFY, `📷 Sent a picture of the babies to ${stay.animal.name}'s owner!`);
+    this.time.delayedCall(1800, () => {
+      const unnamed = stay.companions.filter((b) => b.name === BABY_PLACEHOLDER);
+      const names = unnamed.map((baby) => {
+        baby.name = randomName(baby.species);
+        return baby.name;
+      });
+      stay.needsAnnouncement = false;
+      this._computerBusy = false;
+
+      const rec = this._staySprites.get(stay);
+      if (rec) this._renderStay(stay, rec.pos.x, rec.pos.y); // redraw with real names + collars
+
+      if (names.length) {
+        const list = names.length > 1
+          ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+          : names[0];
+        this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s owner named the babies: ${list}!`);
+      }
+    });
+  }
+
   // ── Per-frame need/mess ticking ──────────────────────────────────────────
 
   _updateNeeds(delta) {
@@ -569,6 +711,10 @@ export default class KennelScene extends Phaser.Scene {
       if (rec) consider(rec.pos.x, rec.pos.y, () => this._takeDogOut(stay));
     }
 
+    if (!this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement)) {
+      consider(COMPUTER_SPOT.x, COMPUTER_SPOT.y, () => this._useComputer());
+    }
+
     if (best) best();
   }
 
@@ -590,6 +736,8 @@ export default class KennelScene extends Phaser.Scene {
     this._updateTint();
     this._updateNeeds(delta);
     this._updateMesses(delta);
+    this._updateBirths(delta);
+    this._updateComputerIcon();
     this.player.setDepth(this.player.y);
 
     // interactJustDown() is stateful (edge-triggered) — read it exactly once
