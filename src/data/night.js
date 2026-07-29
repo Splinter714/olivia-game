@@ -22,7 +22,10 @@ const ALL_REASONS = Object.values(WAKE_REASON);
 // tucked in so the fabric has something to fall off of).
 export function candidateReasons(stay) {
   const out = [];
-  if (isExpecting(stay)) out.push(WAKE_REASON.BABIES);
+  // A mom already flagged as "ready and needing the player's help" (issue
+  // #9 refinement) doesn't need a fresh wake-up for it — she just waits,
+  // no-failure-state style, until the player gets to her.
+  if (isExpecting(stay) && !stay.birthReady) out.push(WAKE_REASON.BABIES);
   if ('bathroom' in (stay.needs || {})) out.push(WAKE_REASON.BATHROOM);
   if (stay.tuckedIn) out.push(WAKE_REASON.COLD);
   out.push(WAKE_REASON.BAD_DREAM);

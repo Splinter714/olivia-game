@@ -17,7 +17,7 @@ export const MESS_KEY = 'prop-mess';
 export const COMPUTER_KEY = 'prop-computer';
 export const BLANKET_KEY = 'prop-blanket';
 export const UPGRADE_KEY = 'prop-upgrade-star';
-export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck' };
+export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck', babies: 'need-babies' };
 
 // One individual-cage texture key per (non-turtle) section (issue #18) — every
 // cage in a section is the same size (data/props.js's CAGES grid), so one
@@ -127,6 +127,15 @@ function drawNeedBubble(g, w, h, icon) {
     // shown above any animal not yet under its fabric sheet for the night.
     g.fillStyle(0xe0a95e, 1).fillRoundedRect(w * 0.24, h * 0.36, w * 0.52, h * 0.34, 2);
     g.fillStyle(0xf6cf9a, 1).fillTriangle(w * 0.24, h * 0.36, w * 0.5, h * 0.36, w * 0.24, h * 0.62);
+  } else if (icon === 'babies') {
+    // A small pink heart — issue #9 refinement's "ready and needs your
+    // help" icon, shown above a mom whose birth timer has expired (or who
+    // was flagged during a night wake-up) until the player walks over and
+    // interacts to actually have the babies/hatch the eggs.
+    g.fillStyle(0xe8779c, 1);
+    g.fillCircle(w * 0.38, h * 0.44, w * 0.15);
+    g.fillCircle(w * 0.62, h * 0.44, w * 0.15);
+    g.fillTriangle(w * 0.24, h * 0.48, w * 0.76, h * 0.48, w * 0.5, h * 0.74);
   } else { // water
     g.fillStyle(0x4b9fc4, 1);
     g.fillTriangle(w * 0.5, h * 0.24, w * 0.32, h * 0.62, w * 0.68, h * 0.62);
@@ -196,6 +205,7 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.water, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'water'));
   gen(scene, NEED_KEY.mail, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'mail'));
   gen(scene, NEED_KEY.tuck, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'tuck'));
+  gen(scene, NEED_KEY.babies, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'babies'));
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
   gen(scene, BLANKET_KEY, 30, 20, (g) => drawBlanket(g, 30, 20));
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));

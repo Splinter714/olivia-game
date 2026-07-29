@@ -479,6 +479,9 @@ export default class KennelScene extends Phaser.Scene {
     // if it's night and she isn't.
     if (stay.tuckedIn) this._setBlanket(stay, true);
     else if (this.night.active) this._setNeedIcon(stay, 'tuck', true);
+    // Issue #9 refinement: a mom flagged "ready, needs your help" keeps her
+    // heart icon across a redraw too.
+    if (stay.birthReady) this._setNeedIcon(stay, 'babies', true);
   }
 
   _destroyStaySprites(stay) {
@@ -747,26 +750,51 @@ export default class KennelScene extends Phaser.Scene {
   }
 
   // ── Births: pregnancy/eggs → babies (issue #9) ───────────────────────────
-
-  // Ticks every settled stay's birth timer (data/births.js); the moment one
-  // fires, hands off to _triggerBirth. Reception/carrying stays don't accrue
+  // Refinement: the timer expiring no longer completes the birth on its own —
+  // it just flags the mom as ready and waiting on the player (a small heart
+  // icon, same convention as the food/bathroom/tuck-in bubbles), and the
+  // player has to walk over and interact to actually have the babies/hatch
+  // the eggs (see _checkInteractions). Reception/carrying stays don't accrue
   // this — matches _updateNeeds' "only settled stays" rule.
+
   _updateBirths(delta) {
     const sectionKeys = new Set(SECTIONS.map((s) => s.key));
     for (const stay of this.roster.stays) {
       if (!sectionKeys.has(stay.location)) continue;
       if (stay.birthTimer == null) continue;
-      if (tickBirth(stay, delta)) this._triggerBirth(stay);
+      if (tickBirth(stay, delta)) this._markBirthReady(stay);
     }
+  }
+
+  // Flags a stay as ready-and-waiting: her birth timer is done (or a night
+  // "having babies" wake-up flagged her early, per DESIGN.md's "sitting
+  // alone at night is the secret sign"), but nothing happens until the
+  // player walks over and interacts. Idempotent — calling it again while
+  // she's already flagged is a no-op, so a repeat night wake-up pick can't
+  // re-notify/re-icon her.
+  _markBirthReady(stay) {
+    if (stay.birthReady) return;
+    stay.birthTimer = null;
+    stay.birthReady = true;
+    this._setNeedIcon(stay, 'babies', true);
+    const msg = stay.animal.hasEggs
+      ? `${stay.animal.name}'s eggs need your help hatching!`
+      : `${stay.animal.name} needs your help — her babies are on the way!`;
+    this.game.events.emit(EVENTS.NOTIFY, msg);
   }
 
   // Turns a turtle/snake mom's eggs into hatchlings, or gives a pregnant mom
   // (any species) 1-2 babies — either way the new babies start unnamed
   // (BABY_PLACEHOLDER) until the player sends the owner an announcement via
   // the reception computer (issue #10), and the stay is flagged so the
-  // computer's "needs attention" icon picks it up.
+  // computer's "needs attention" icon picks it up. Called from
+  // _checkInteractions once the player walks up to a birth-ready stay and
+  // interacts — no longer automatic.
   _triggerBirth(stay) {
+    if (!stay.birthReady) return;
+    stay.birthReady = false;
     stay.birthTimer = null;
+    this._setNeedIcon(stay, 'babies', false);
     const rec = this._staySprites.get(stay);
     const pos = rec ? { ...rec.pos } : null;
 
@@ -993,10 +1021,13 @@ export default class KennelScene extends Phaser.Scene {
       this._setNeedIcon(stay, 'bathroom', true);
       this.game.events.emit(EVENTS.NOTIFY, `${name} needs to go to the bathroom!`);
     } else if (reason === WAKE_REASON.BABIES) {
-      // Nudge her existing birth timer to fire almost immediately — the
-      // normal birth flow (_updateBirths/_triggerBirth) takes it from here,
-      // including its own "having babies!" notification.
-      stay.birthTimer = 200;
+      // Refinement: flags her ready-and-waiting the same as a daytime timer
+      // expiry — the player resolves this wake-up the same way as any
+      // other, by walking over and interacting (_checkInteractions calls
+      // _triggerBirth, which resolves the current wake). If morning comes
+      // first, that's fine — no forced auto-resolution, she just stays
+      // flagged into the next day.
+      this._markBirthReady(stay);
     } else { // bad dream — flavor only, nothing to fix, settles on its own
       this.game.events.emit(EVENTS.NOTIFY, `${name} had a bad dream!`);
       this.time.delayedCall(BAD_DREAM_MS, () => this._resolveWakeUp());
@@ -1117,6 +1148,15 @@ export default class KennelScene extends Phaser.Scene {
 
     if (!this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement)) {
       consider(COMPUTER_SPOT.x, COMPUTER_SPOT.y, () => this._useComputer());
+    }
+
+    // Issue #9 refinement: a mom flagged ready-and-waiting needs the player
+    // to walk over and interact to actually have her babies/hatch her eggs —
+    // same pattern as grabbing a dog's leash for a bathroom need.
+    for (const stay of this.roster.stays) {
+      if (!stay.birthReady) continue;
+      const rec = this._staySprites.get(stay);
+      if (rec) consider(rec.pos.x, rec.pos.y, () => this._triggerBirth(stay));
     }
 
     // Tucking animals in for the night (issue #11) — walk up to anyone not
