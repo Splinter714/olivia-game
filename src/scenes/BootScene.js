@@ -11,5 +11,6 @@ export default class BootScene extends Phaser.Scene {
   create() {
     this.scene.start('Kennel');
     this.scene.launch('Hud');
+    this.scene.launch('Notification');
   }
 }

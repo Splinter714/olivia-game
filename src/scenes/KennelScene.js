@@ -10,10 +10,12 @@ import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
 import { buildAnimalTextures, animalTextureKey, EGG_KEY, NAME_TAG_KEY } from '../art/animals.js';
-import { createAnimal } from '../data/animal.js';
+import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
+import { createRoster, LOCATION, CARRY_KIND } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
 
 const SPEED = 160; // px/s, world (logical) units
+const PICKUP_RADIUS = 50; // px, how close the player must be to interact-pick-up a waiting arrival
 
 // Circle-vs-axis-aligned-rect overlap test, used by findPath's `collides` callback.
 function circleRectOverlap(cx, cy, r, rect) {
@@ -38,11 +40,11 @@ export default class KennelScene extends Phaser.Scene {
     for (const s of SECTIONS) buildFloorTile(this, `floor-${s.key}`, s.floor, s.floorDark);
     buildPlayerTexture(this);
     buildAnimalTextures(this);
+    buildCarryTextures(this);
 
     this._drawWorld();
     this._buildCollision();
     this._buildPlayer();
-    this._placeDemoAnimals();
 
     this.cameras.main.setBounds(0, 0, WORLD.w, WORLD.h);
     this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
@@ -59,6 +61,19 @@ export default class KennelScene extends Phaser.Scene {
     this.tintGfx = this.add.graphics().setScrollFactor(0).setDepth(9999);
 
     this.navPath = null;
+
+    // ── Roster / arrivals / carrying (issues #4, #5) ──────────────────────
+    this.roster = createRoster();
+    this._staySprites = new Map(); // stay -> { sprite, tag:{bg,text}, extras:[...] }
+    this.carrying = null;          // the stay currently in the player's hands, or null
+    this._carryVisual = null;      // { obj } following the player while carrying
+
+    this.game.events.on(EVENTS.HOUR_CHANGE, this._onHourChange, this);
+    this.events.once('shutdown', () => this.game.events.off(EVENTS.HOUR_CHANGE, this._onHourChange, this));
+
+    // Don't start with an empty kennel — one arrival is already waiting at
+    // reception when the shift begins.
+    this._spawnArrival(this.clock.day, this.clock.hour);
   }
 
   // ── World geometry ──────────────────────────────────────────────────────
@@ -143,48 +158,162 @@ export default class KennelScene extends Phaser.Scene {
     this.physics.add.collider(this.player, this.walls);
   }
 
-  // ── DEMO ANIMAL PLACEMENT (issue #3 only — delete this whole block, and the
-  // _placeDemoAnimals() call in create() above, once issue #4 (arrivals) adds
-  // real spawning via data/animal.js's createAnimal()) ────────────────────────
+  // ── Roster rendering (issues #4 arrivals, #5 carrying) ──────────────────────
   //
-  // One static adult of each species sitting in its own section (proves species
-  // ↔ section ↔ sprite ↔ name-tag all connect), plus one example family: a mom
-  // turtle with a couple of eggs on the (not-yet-built, see #6) sand-island area
-  // of the turtle section.
-  _placeDemoAnimals() {
-    const demoAdult = (speciesKey, x, y, opts) => {
-      const animal = createAnimal(speciesKey, { stage: 'adult', ...opts });
-      const texKey = animalTextureKey(speciesKey, animal.stage, animal.colorVariant);
-      const spr = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y);
-      this._addNameTag(x, y - spr.height - 6, animal.name);
-      return { animal, sprite: spr };
-    };
+  // A "stay" (data/roster.js) is the source of truth for where an animal is;
+  // these methods are the only place that turns a stay into on-screen sprites.
+  // Every render call destroys any previous sprites for that stay first, so a
+  // stay can move between reception → carrying → a section without leaking art.
 
-    // One example of each species, placed inside its own section rect.
-    demoAdult('turtle', 110, 210);
-    demoAdult('guineaPig', 500, 200);
-    demoAdult('hamster', 860, 200);
-    demoAdult('bunny', 140, 560);
-    demoAdult('cat', 100, 850);
-    demoAdult('dog', 1100, 560);
+  _onHourChange({ hour, phase, day }) {
+    if (phase === PHASE.DAY || phase === PHASE.EVENING) {
+      this._spawnArrival(day, hour);
+      if (Math.random() < 0.25) this._spawnArrival(day, hour); // "occasionally two" for variety
+    }
+    this._processCheckouts(day);
+  }
 
-    // Example family: mom turtle + eggs sharing the turtle section (DESIGN.md
-    // "the turtles and the eggs share the island together"). No tank/island prop
-    // yet (#6) — the eggs just sit in the section for now.
-    demoAdult('turtle', 240, 220, { name: 'Myrtle', hasEggs: true, eggCount: 2 });
-    this.add.image(268, 226, EGG_KEY).setOrigin(0.5, 1).setDepth(227);
-    this.add.image(282, 222, EGG_KEY).setOrigin(0.5, 1).setDepth(223);
+  _spawnArrival(day, hour) {
+    const stay = this.roster.spawnArrival({ day, hour });
+    this._placeAtReception(stay);
+    this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived!`);
+  }
+
+  _placeAtReception(stay) {
+    const waiting = this.roster.stays.filter((s) => s !== stay && s.location === LOCATION.RECEPTION).length;
+    const { rug } = RECEPTION;
+    const x = rug.x + 30 + (waiting % 3) * 55;
+    const y = rug.y + 24 + Math.floor(waiting / 3) * 42;
+    this._renderStay(stay, x, y);
+  }
+
+  _processCheckouts(day) {
+    for (const stay of this.roster.checkoutDue(day)) {
+      this._destroyStaySprites(stay);
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} went home!`);
+    }
+  }
+
+  // Draws (or redraws) a stay's standing sprite + name tag + companions (baby
+  // sprites, or eggs for a turtle mom with hasEggs) at a fixed world position —
+  // used for both reception-waiting and section-placed stays.
+  _renderStay(stay, x, y) {
+    this._destroyStaySprites(stay);
+    const { animal } = stay;
+    const texKey = animalTextureKey(animal.species, animal.stage, animal.colorVariant);
+    const sprite = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y);
+    const tag = this._addNameTag(x, y - sprite.height - 6, animal.name);
+
+    const extras = [];
+    let cx = x + sprite.width * 0.55;
+    if (animal.hasEggs) {
+      for (let i = 0; i < animal.eggCount; i++) {
+        extras.push(this.add.image(cx, y - 1, EGG_KEY).setOrigin(0.5, 1).setDepth(y - 1));
+        cx += 10;
+      }
+    }
+    for (const baby of stay.companions) {
+      const babyKey = animalTextureKey(baby.species, 'baby', baby.colorVariant);
+      extras.push(this.add.image(cx, y, babyKey).setOrigin(0.5, 1).setDepth(y));
+      cx += 14;
+    }
+
+    this._staySprites.set(stay, { pos: { x, y }, sprite, tag, extras });
+  }
+
+  _destroyStaySprites(stay) {
+    const rec = this._staySprites.get(stay);
+    if (!rec) return;
+    rec.sprite.destroy();
+    rec.tag.bg.destroy();
+    rec.tag.text.destroy();
+    rec.extras.forEach((e) => e.destroy());
+    this._staySprites.delete(stay);
   }
 
   // Floating name-tag texture + centered text, anchored just above (x, y).
+  // Returns the two display objects so callers can destroy them later.
   _addNameTag(x, y, name) {
-    const tag = this.add.image(x, y, NAME_TAG_KEY).setOrigin(0.5, 1).setDepth(9000);
-    this.add.text(x, y - tag.height + 4, name, {
+    const bg = this.add.image(x, y, NAME_TAG_KEY).setOrigin(0.5, 1).setDepth(9000);
+    const text = this.add.text(x, y - bg.height + 4, name, {
       fontFamily: 'system-ui, sans-serif',
       fontSize: '10px',
       fontStyle: 'bold',
       color: '#4a341c',
     }).setOrigin(0.5, 0).setDepth(9001);
+    return { bg, text };
+  }
+
+  // ── Carrying (issue #5) ──────────────────────────────────────────────────
+  // Press interact near a waiting reception arrival to pick it up; the carry
+  // prop (leash/cage/box/basket — or the bare animal for the small pets) then
+  // follows the player. Walking into the animal's own section auto-drops it off
+  // — simpler for a kid player than requiring a second interact press.
+
+  _checkPickup() {
+    if (!this.controls.interactJustDown()) return;
+    let nearest = null, nearestD = Infinity;
+    for (const stay of this.roster.stays) {
+      if (stay.location !== LOCATION.RECEPTION) continue;
+      const rec = this._staySprites.get(stay);
+      if (!rec) continue;
+      const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, rec.pos.x, rec.pos.y);
+      if (d < PICKUP_RADIUS && d < nearestD) { nearest = stay; nearestD = d; }
+    }
+    if (nearest) this._pickUp(nearest);
+  }
+
+  _pickUp(stay) {
+    this._destroyStaySprites(stay);
+    stay.location = LOCATION.CARRYING;
+    this.carrying = stay;
+    const key = stay.carryKind === CARRY_KIND.NONE
+      ? animalTextureKey(stay.animal.species, stay.animal.stage, stay.animal.colorVariant)
+      : CARRY_KEY[stay.carryKind];
+    const obj = this.add.image(this.player.x, this.player.y, key).setOrigin(0.5, 1).setDepth(9500);
+    this._carryVisual = { obj };
+  }
+
+  _followCarry() {
+    if (!this._carryVisual) return;
+    const { obj } = this._carryVisual;
+    obj.x = this.player.x;
+    obj.y = this.player.y - PLAYER_H * 0.55;
+    obj.setDepth(this.player.y + 1);
+  }
+
+  _checkDropoff() {
+    const stay = this.carrying;
+    const section = SECTIONS.find((s) => s.key === stay.animal.species);
+    if (!section) return;
+    const { x, y, w, h } = section.rect;
+    if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
+    this._dropOff(stay, section);
+  }
+
+  _dropOff(stay, section) {
+    this._carryVisual?.obj.destroy();
+    this._carryVisual = null;
+    this.carrying = null;
+    stay.location = section.key;
+    const already = this.roster.stays.filter((s) => s !== stay && s.location === section.key).length;
+    const pos = this._sectionSlot(section, already);
+    this._renderStay(stay, pos.x, pos.y);
+  }
+
+  // Simple wrapping grid of standing spots inside a section's rect, indexed by
+  // how many other stays are already placed there — good enough for a handful
+  // of animals per section without needing real cage furniture yet.
+  _sectionSlot(section, index) {
+    const { x, y, w, h } = section.rect;
+    const margin = 30;
+    const cols = Math.max(1, Math.floor((w - margin * 2) / 60));
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    return {
+      x: x + margin + col * 60,
+      y: Math.min(y + h - margin, y + margin + 40 + row * 46),
+    };
   }
 
   // ── Per-frame ────────────────────────────────────────────────────────────
@@ -204,6 +333,13 @@ export default class KennelScene extends Phaser.Scene {
     this._updateMovement(delta);
     this._updateTint();
     this.player.setDepth(this.player.y);
+
+    if (this.carrying) {
+      this._followCarry();
+      this._checkDropoff();
+    } else {
+      this._checkPickup();
+    }
   }
 
   _updateMovement(delta) {

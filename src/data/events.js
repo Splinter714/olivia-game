@@ -8,4 +8,10 @@ export const EVENTS = {
 
   // Day phase changed: payload { phase, isNight }.
   PHASE_CHANGE: 'phase-change',
+
+  // A short kid-readable line to show bottom-left for a few seconds, e.g.
+  // "Cupcake arrived!" (DESIGN.md's recurring bottom-left message pattern —
+  // arrivals/checkouts today, "having babies"/potty call-outs in later issues).
+  // Payload: a plain string, the message text. Handled by NotificationScene.
+  NOTIFY: 'notify',
 };
