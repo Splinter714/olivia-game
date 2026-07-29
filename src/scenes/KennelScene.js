@@ -32,8 +32,10 @@ import {
   SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY,
 } from '../art/props.js';
-import { buildRaccoonTextures, RACCOON_KEYS, CRUMB_KEY } from '../art/raccoon.js';
-import { RACCOON_CHECK_INTERVAL, SCAMPER_VISIBLE_CHANCE, randomTreat } from '../data/raccoon.js';
+import {
+  buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
+} from '../art/raccoon.js';
+import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
 import { createRoster, LOCATION, CARRY_KIND, assignCageSlot } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 
@@ -936,8 +938,17 @@ export default class KennelScene extends Phaser.Scene {
   // Interact at the oven to bake a random treat — no ingredients/recipe, just
   // a satisfying "you baked ___!" and a tray on the counter. Every so often,
   // "not very often" per DESIGN.md, a raccoon check rolls; if a tray is
-  // actually out when it fires, she steals it — pure surprise, no cost, no
-  // way to stop her.
+  // actually out when it fires, she sneaks in to steal it.
+  //
+  // Owner feedback (2026-07-29), two changes from the original #13 build:
+  //  1. She's now ALWAYS visible sneaking in, grabbing the tray, and
+  //     scampering off with it (no more 55% "was she seen" roll) — always
+  //     carrying the treat and leaving a clear crumb trail.
+  //  2. She CAN be scared off now (reversing the original "purely a
+  //     surprise, unstoppable" call) — interacting while she's nearby
+  //     startles her into fleeing immediately. Catch her before she's grabbed
+  //     the tray and the treats are saved outright; scare her mid-getaway and
+  //     she drops what she stole.
 
   _bakeTreat() {
     const treat = randomTreat();
@@ -954,14 +965,133 @@ export default class KennelScene extends Phaser.Scene {
     if (this.treatTray && !this._raccoon) this._triggerRaccoon();
   }
 
+  // Where she sneaks in from and flees back out to — the storage-room
+  // doorway, same "her way out" point the old scamper used.
+  _raccoonExitPoint() {
+    const divX = BACK_WING.x + BACK_WING.w / 2;
+    return { x: divX, y: (WING_DOOR.y0 + WING_DOOR.y1) / 2 };
+  }
+
+  // Phase 1: she sneaks in toward the tray. Nothing's stolen yet — if the
+  // player interacts near her during this window (_checkInteractions),
+  // _scareRaccoon() cancels the theft outright.
   _triggerRaccoon() {
+    const from = this._raccoonExitPoint();
+    const to = { x: TREAT_TRAY_SPOT.x, y: TREAT_TRAY_SPOT.y };
+
+    const sprite = this.add.sprite(from.x, from.y, RACCOON_KEYS[0])
+      .setOrigin(0.5, 1).setScale(RACCOON_DISPLAY_SCALE).setDepth(20001).setFlipX(to.x < from.x);
+    const raccoon = { sprite, phase: 'approach', scared: false, frame: 0, treatIcon: null };
+    this._raccoon = raccoon;
+    raccoon.frameTimer = this.time.addEvent({
+      delay: 110, loop: true,
+      callback: () => {
+        raccoon.frame = (raccoon.frame + 1) % RACCOON_KEYS.length;
+        sprite.setTexture(RACCOON_KEYS[raccoon.frame]);
+        if (raccoon.treatIcon) this._positionHeldTreat(raccoon);
+      },
+    });
+
+    raccoon.moveTween = this.tweens.add({
+      targets: sprite, x: to.x, y: to.y, duration: RACCOON_APPROACH_MS, ease: 'Sine.easeIn',
+      onComplete: () => { if (!raccoon.scared) this._raccoonGrabsTreat(raccoon); },
+    });
+  }
+
+  // Phase 2: she reaches the tray, actually takes it, and scampers back out
+  // — always visibly, holding the treat and dropping crumbs the whole way.
+  _raccoonGrabsTreat(raccoon) {
     const tray = this.treatTray;
     this.treatTray = null;
     tray.sprite.destroy();
 
     this.game.events.emit(EVENTS.NOTIFY, 'A raccoon stole your treats!');
     this._showNooo();
-    if (Math.random() < SCAMPER_VISIBLE_CHANCE) this._spawnScamperingRaccoon();
+
+    raccoon.phase = 'scamper';
+    raccoon.treatIcon = this.add.image(raccoon.sprite.x, raccoon.sprite.y, HELD_TREAT_KEY)
+      .setScale(2).setDepth(raccoon.sprite.depth + 1);
+    this._positionHeldTreat(raccoon);
+
+    const exit = this._raccoonExitPoint();
+    raccoon.sprite.setFlipX(exit.x < raccoon.sprite.x);
+    raccoon.crumbTimer = this.time.addEvent({ delay: 120, loop: true, callback: () => this._dropCrumb(raccoon) });
+
+    raccoon.moveTween = this.tweens.add({
+      targets: raccoon.sprite, x: exit.x, y: exit.y, duration: RACCOON_SCAMPER_MS, ease: 'Sine.easeIn',
+      onUpdate: () => { if (raccoon.treatIcon) this._positionHeldTreat(raccoon); },
+      onComplete: () => this._cleanupRaccoon(raccoon),
+    });
+  }
+
+  // Issue #13 follow-up: scare her off. Called from _checkInteractions when
+  // the player is near her and interacts, at any point while she's present.
+  _scareRaccoon() {
+    const raccoon = this._raccoon;
+    if (!raccoon || raccoon.scared) return;
+    raccoon.scared = true;
+    raccoon.moveTween?.stop();
+
+    const treatsSaved = raccoon.phase === 'approach';
+    const sprite = raccoon.sprite;
+
+    // A quick startled flash — the wide-eyed pose with a little pop — before
+    // she bolts, so the "you scared her" beat actually reads.
+    sprite.setTexture(RACCOON_SCARED_KEY);
+    this.tweens.add({ targets: sprite, scale: sprite.scale * 1.25, duration: 90, yoyo: true, ease: 'Quad.easeOut' });
+
+    if (!treatsSaved) this._dropHeldTreat(raccoon);
+
+    this.game.events.emit(EVENTS.NOTIFY,
+      treatsSaved ? 'You scared the raccoon away — the treats are safe!' : 'You scared the raccoon away!');
+
+    const exit = this._raccoonExitPoint();
+    sprite.setFlipX(exit.x < sprite.x);
+    this.time.delayedCall(140, () => {
+      if (!this._raccoon) return;
+      raccoon.moveTween = this.tweens.add({
+        targets: sprite, x: exit.x, y: exit.y, duration: RACCOON_SCARE_DASH_MS, ease: 'Sine.easeIn',
+        onComplete: () => this._cleanupRaccoon(raccoon),
+      });
+    });
+  }
+
+  // She drops what she'd already grabbed mid-getaway — it tumbles out of her
+  // paws and settles where she was standing, visible proof the player caught
+  // her, then fades.
+  _dropHeldTreat(raccoon) {
+    const icon = raccoon.treatIcon;
+    if (!icon) return;
+    raccoon.treatIcon = null;
+    this.tweens.add({
+      targets: icon, y: icon.y + 14, duration: 320, ease: 'Bounce.easeOut',
+      onComplete: () => {
+        this.tweens.add({ targets: icon, alpha: 0, delay: 500, duration: 500, onComplete: () => icon.destroy() });
+      },
+    });
+  }
+
+  _positionHeldTreat(raccoon) {
+    const s = raccoon.sprite;
+    const dx = s.flipX ? -1 : 1;
+    raccoon.treatIcon.setPosition(s.x + dx * 9, s.y - s.displayHeight * 0.55).setFlipX(s.flipX);
+  }
+
+  // Owner feedback (2026-07-29): make the crumb trail read clearly — bigger,
+  // more numerous (a shorter drop interval than before), and slower to fade.
+  _dropCrumb(raccoon) {
+    const s = raccoon.sprite;
+    const c = this.add.image(s.x + (Math.random() - 0.5) * 10, s.y - 2, CRUMB_KEY)
+      .setScale(0.9 + Math.random() * 0.5).setDepth(s.depth - 1);
+    this.tweens.add({ targets: c, alpha: 0, duration: 1400, delay: 500, onComplete: () => c.destroy() });
+  }
+
+  _cleanupRaccoon(raccoon) {
+    raccoon.frameTimer?.remove();
+    raccoon.crumbTimer?.remove();
+    raccoon.sprite.destroy();
+    raccoon.treatIcon?.destroy();
+    if (this._raccoon === raccoon) this._raccoon = null;
   }
 
   // A big, silly, brief center-screen pop — deliberately more dramatic than
@@ -988,45 +1118,6 @@ export default class KennelScene extends Phaser.Scene {
           targets: text, scale: 1.35, alpha: 0, duration: 900, delay: 450, ease: 'Sine.easeIn',
           onComplete: () => text.destroy(),
         });
-      },
-    });
-  }
-
-  // Sometimes visible: the raccoon herself scampers from the counter toward
-  // the storage-room doorway (her way out), leaving a fading crumb trail —
-  // "sometimes you see the raccoon scampering away... leaving a trail of
-  // crumbs and getting crumbs on himself" (DESIGN.md). No interaction stops
-  // her; she just runs the path and disappears.
-  _spawnScamperingRaccoon() {
-    const from = { x: TREAT_TRAY_SPOT.x, y: TREAT_TRAY_SPOT.y };
-    const divX = BACK_WING.x + BACK_WING.w / 2;
-    const exit = { x: divX, y: (WING_DOOR.y0 + WING_DOOR.y1) / 2 };
-
-    const sprite = this.add.sprite(from.x, from.y, RACCOON_KEYS[0])
-      .setOrigin(0.5, 1).setScale(1.6).setDepth(20001).setFlipX(exit.x < from.x);
-    this._raccoon = { sprite };
-
-    let frame = 0;
-    const frameTimer = this.time.addEvent({
-      delay: 120, loop: true,
-      callback: () => { frame = 1 - frame; sprite.setTexture(RACCOON_KEYS[frame]); },
-    });
-    const crumbTimer = this.time.addEvent({
-      delay: 150, loop: true,
-      callback: () => {
-        const c = this.add.image(sprite.x + (Math.random() - 0.5) * 6, sprite.y - 2, CRUMB_KEY)
-          .setDepth(sprite.depth - 1);
-        this.tweens.add({ targets: c, alpha: 0, duration: 700, delay: 250, onComplete: () => c.destroy() });
-      },
-    });
-
-    this.tweens.add({
-      targets: sprite, x: exit.x, y: exit.y, duration: 1400, ease: 'Sine.easeIn',
-      onComplete: () => {
-        frameTimer.remove();
-        crumbTimer.remove();
-        sprite.destroy();
-        this._raccoon = null;
       },
     });
   }
@@ -1318,6 +1409,13 @@ export default class KennelScene extends Phaser.Scene {
     // Issue #13: bake a treat at the kitchen oven — only while the counter's
     // clear, so there's always at most one tray out for the raccoon to steal.
     if (!this.treatTray) consider(OVEN_SPOT.x, OVEN_SPOT.y, () => this._bakeTreat());
+
+    // Issue #13 follow-up: scare the raccoon off if she's around and the
+    // player walks up and interacts — same proximity convention as
+    // everything else here.
+    if (this._raccoon && !this._raccoon.scared) {
+      consider(this._raccoon.sprite.x, this._raccoon.sprite.y, () => this._scareRaccoon());
+    }
 
     // Tucking animals in for the night (issue #11) — walk up to anyone not
     // yet under their blanket and interact.
