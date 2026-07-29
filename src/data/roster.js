@@ -8,6 +8,7 @@ import { createAnimal } from './animal.js';
 import { SPECIES_KEYS } from './species.js';
 import { createNeeds } from './needs.js';
 import { attachBirthTimer } from './births.js';
+import { pickUpgradeKind } from './economy.js';
 
 // Where a stay currently is. Any SECTIONS[].key (data/sections.js) is also a
 // valid `location` once an animal has been carried to its section.
@@ -52,7 +53,7 @@ export function createRoster() {
   const pool = [];
   for (const key of SPECIES_KEYS) {
     const n = RETURNING_POOL_SIZE[key] ?? 2;
-    for (let i = 0; i < n; i++) pool.push({ animal: createAnimal(key), available: true });
+    for (let i = 0; i < n; i++) pool.push({ animal: createAnimal(key), available: true, visits: 0 });
   }
 
   function pickSpecies(rng) {
@@ -132,6 +133,16 @@ export function createRoster() {
   // returning-guest pool (or adds it fresh) so it's eligible to arrive again
   // later this session, matching DESIGN.md's "always comes back" without needing
   // cross-session persistence yet.
+  //
+  // Issue #12 ("Doing a Great Job"): a pool entry's `visits` counts how many
+  // times THIS animal has checked out before. From her second checkout on,
+  // she's a genuine returning guest, so her owner gives her a bit of new
+  // stuff — pushed onto `stay.animal.upgrades` (the same object the pool and
+  // any future stay for her share, so it accumulates correctly across
+  // repeat visits) and flagged as `stay.newUpgrade` for this checkout so
+  // KennelScene can flavor-announce it. Money payout itself is computed by
+  // KennelScene from data/economy.js at checkout time, not here — it doesn't
+  // need any roster-side bookkeeping.
   function checkoutDue(day) {
     const due = [];
     for (let i = stays.length - 1; i >= 0; i--) {
@@ -141,8 +152,17 @@ export function createRoster() {
       stays.splice(i, 1);
       due.push(stay);
       const existing = pool.find((p) => p.animal.id === stay.animal.id);
-      if (existing) existing.available = true;
-      else pool.push({ animal: stay.animal, available: true });
+      if (existing) {
+        if (existing.visits >= 1) {
+          const kind = pickUpgradeKind(stay.animal);
+          stay.animal.upgrades = [...(stay.animal.upgrades || []), kind];
+          stay.newUpgrade = kind;
+        }
+        existing.visits += 1;
+        existing.available = true;
+      } else {
+        pool.push({ animal: stay.animal, available: true, visits: 1 });
+      }
     }
     return due;
   }

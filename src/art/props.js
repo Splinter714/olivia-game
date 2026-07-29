@@ -14,6 +14,7 @@ export const BOWL_KEY = 'prop-bowl';
 export const MESS_KEY = 'prop-mess';
 export const COMPUTER_KEY = 'prop-computer';
 export const BLANKET_KEY = 'prop-blanket';
+export const UPGRADE_KEY = 'prop-upgrade-star';
 export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck' };
 
 // Water tank with a glass-cover highlight along the top rim.
@@ -127,6 +128,20 @@ function drawBlanket(g, w, h) {
   g.lineStyle(1.5, 0xc9a15f, 0.85).strokeRoundedRect(1, 1, w - 2, h - 2, h * 0.3);
 }
 
+// Small gold sparkle/star — issue #12's "she's a well-cared-for regular"
+// badge. One is rendered per upgrade a returning animal has earned, so they
+// visibly stack up next to her sprite across repeat visits (DESIGN.md's
+// "every time an animal comes back, their stay gets even better").
+function drawUpgradeStar(g, w, h) {
+  const cx = w / 2, cy = h / 2;
+  g.fillStyle(0xf2c96b, 1);
+  g.fillTriangle(cx, 0, cx - w * 0.16, cy, cx + w * 0.16, cy);
+  g.fillTriangle(cx, h, cx - w * 0.16, cy, cx + w * 0.16, cy);
+  g.fillTriangle(0, cy, cx, cy - h * 0.16, cx, cy + h * 0.16);
+  g.fillTriangle(w, cy, cx, cy - h * 0.16, cx, cy + h * 0.16);
+  g.fillStyle(0xfff3c9, 1).fillCircle(cx, cy, w * 0.2);
+}
+
 export function buildPropTextures(scene) {
   gen(scene, TANK_KEY, TURTLE.tank.w, TURTLE.tank.h, (g) => drawTank(g, TURTLE.tank.w, TURTLE.tank.h));
   gen(scene, ISLAND_KEY, TURTLE.island.w, TURTLE.island.h, (g) => drawIsland(g, TURTLE.island.w, TURTLE.island.h));
@@ -142,4 +157,5 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.tuck, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'tuck'));
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
   gen(scene, BLANKET_KEY, 30, 20, (g) => drawBlanket(g, 30, 20));
+  gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));
 }

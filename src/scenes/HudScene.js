@@ -23,13 +23,17 @@ export default class HudScene extends Phaser.Scene {
     }).setScrollFactor(0).setDepth(9999);
 
     this._hour = 8; // matches createClock()'s default startHour in KennelScene
-    this._render(this._hour, PHASE.DAY);
+    this._phase = PHASE.DAY;
+    this._money = 0; // issue #12's running kennel-earnings total, session-only
+    this._render();
 
     this.game.events.on(EVENTS.HOUR_CHANGE, this._onHourChange, this);
     this.game.events.on(EVENTS.PHASE_CHANGE, this._onPhaseChange, this);
+    this.game.events.on(EVENTS.MONEY_CHANGE, this._onMoneyChange, this);
     this.events.once('shutdown', () => {
       this.game.events.off(EVENTS.HOUR_CHANGE, this._onHourChange, this);
       this.game.events.off(EVENTS.PHASE_CHANGE, this._onPhaseChange, this);
+      this.game.events.off(EVENTS.MONEY_CHANGE, this._onMoneyChange, this);
     });
 
     // Re-anchor the top-left zoom whenever the physical/logical size changes.
@@ -37,16 +41,23 @@ export default class HudScene extends Phaser.Scene {
   }
 
   _onHourChange({ hour, phase }) {
-    this._render(hour, phase);
+    this._hour = hour;
+    this._phase = phase;
+    this._render();
   }
 
   _onPhaseChange({ phase }) {
-    this._render(this._hour, phase);
+    this._phase = phase;
+    this._render();
   }
 
-  _render(hour, phase) {
-    this._hour = hour;
-    const icon = phase === PHASE.NIGHT ? '🌙' : phase === PHASE.EVENING ? '🌇' : '☀️';
-    this.panel.setText(`${icon}  ${formatHour(hour)}`);
+  _onMoneyChange({ total }) {
+    this._money = total;
+    this._render();
+  }
+
+  _render() {
+    const icon = this._phase === PHASE.NIGHT ? '🌙' : this._phase === PHASE.EVENING ? '🌇' : '☀️';
+    this.panel.setText(`${icon}  ${formatHour(this._hour)}   🪙 ${this._money}`);
   }
 }

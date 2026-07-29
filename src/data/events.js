@@ -14,4 +14,9 @@ export const EVENTS = {
   // arrivals/checkouts today, "having babies"/potty call-outs in later issues).
   // Payload: a plain string, the message text. Handled by NotificationScene.
   NOTIFY: 'notify',
+
+  // The running kennel-earnings total changed (issue #12): payload
+  // { total }. HudScene's coin readout listens for this the same way it
+  // listens for HOUR_CHANGE.
+  MONEY_CHANGE: 'money-change',
 };

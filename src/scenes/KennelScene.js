@@ -12,6 +12,7 @@ import { tickBirth } from '../data/births.js';
 import { pickWakeEvent, WAKE_REASON } from '../data/night.js';
 import { createAnimal } from '../data/animal.js';
 import { randomName } from '../data/names.js';
+import { createEconomy, computePayout, upgradeMessage } from '../data/economy.js';
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
@@ -19,7 +20,7 @@ import { buildAnimalTextures, animalTextureKey, EGG_KEY, NAME_TAG_KEY } from '..
 import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, ISLAND_KEY, PLAYPEN_FENCE_KEY, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY,
+  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY,
 } from '../art/props.js';
 import { createRoster, LOCATION, CARRY_KIND } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
@@ -121,6 +122,9 @@ export default class KennelScene extends Phaser.Scene {
     // ── Births / computer announcements (issues #9, #10) ──────────────────
     this._computerNeedIcon = null;
     this._computerBusy = false;
+
+    // ── Economy: payouts + returning-guest upgrades (issue #12) ────────────
+    this.economy = createEconomy();
 
     // ── Night: tuck-in / staying awake / wake-ups (issue #11) ──────────────
     this.night = {
@@ -292,7 +296,29 @@ export default class KennelScene extends Phaser.Scene {
     for (const stay of this.roster.checkoutDue(day)) {
       this._destroyStaySprites(stay);
       this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} went home!`);
+      this._payOutForCheckout(stay);
     }
+  }
+
+  // Issue #12 ("Doing a Great Job"): the owner pays for the stay a moment
+  // after she goes home, and — if roster.checkoutDue flagged her as a
+  // returning guest earning new stuff this time — a follow-up flavor line
+  // about the upgrade. Same delayed-notify chaining as the reception
+  // computer's baby-announcement flow (_useComputer): no lock is needed here
+  // since nothing else waits on this stay once she's checked out.
+  _payOutForCheckout(stay) {
+    const amount = computePayout(stay);
+    const kind = stay.newUpgrade;
+    this.time.delayedCall(1000, () => {
+      this.economy.earn(amount);
+      this.game.events.emit(EVENTS.MONEY_CHANGE, { total: this.economy.total });
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s owner paid you $${amount}!`);
+      if (kind) {
+        this.time.delayedCall(1200, () => {
+          this.game.events.emit(EVENTS.NOTIFY, upgradeMessage(stay.animal.name, kind));
+        });
+      }
+    });
   }
 
   // Draws (or redraws) a stay's standing sprite + name tag + companions (baby
@@ -351,6 +377,17 @@ export default class KennelScene extends Phaser.Scene {
 
       cx += isTurtle ? 9 : 14;
     }
+
+    // Issue #12: a small gold sparkle per upgrade this specific animal has
+    // earned across her repeat visits, stacked to the left of her sprite so
+    // it doesn't collide with the name tag/need icons above or the
+    // egg/baby companions to the right — a returning regular visibly has a
+    // little more "stuff" each time she's back (DESIGN.md).
+    (animal.upgrades || []).forEach((_kind, i) => {
+      const sx = x - sprite.width * 0.55 - 4;
+      const sy = y - sprite.height * 0.35 - i * 11;
+      extras.push(this.add.image(sx, sy, UPGRADE_KEY).setOrigin(0.5, 0.5).setDepth(y + 0.1));
+    });
 
     const rec = { pos: { x, y }, sprite, tag, extras, needIcons: {}, blanket: null };
     this._staySprites.set(stay, rec);

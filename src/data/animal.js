@@ -32,6 +32,11 @@ function nextId(speciesKey) {
 //   eggCount      number of eggs, when hasEggs
 //   babies        array of child animal objects/ids (kittens/puppies/etc. that
 //                 stay with mom) — empty unless a family instance sets it
+//   upgrades      array of upgrade-kind strings (data/economy.js's
+//                 UPGRADE_KINDS) this specific animal has earned across her
+//                 repeat visits (issue #12, "Doing a Great Job") — empty for
+//                 a brand-new arrival; roster.js grows this on the SAME
+//                 animal instance as she cycles through the returning pool.
 export function createAnimal(speciesKey, opts = {}) {
   const spec = SPECIES[speciesKey];
   if (!spec) throw new Error(`createAnimal: unknown species "${speciesKey}"`);
@@ -48,5 +53,6 @@ export function createAnimal(speciesKey, opts = {}) {
     hasEggs: opts.hasEggs ?? false,
     eggCount: opts.eggCount ?? 0,
     babies: opts.babies ?? [],
+    upgrades: opts.upgrades ?? [],
   };
 }
