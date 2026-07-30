@@ -2189,6 +2189,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         this._setNeedIcon(stay, key, true);
         if (key === 'bathroom') {
           this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} needs to go to the bathroom!`);
+        } else if ((key === 'food' || key === 'water') && !stay.bowl?.[key]) {
+          // Owner note 2026-07-29: "we don't need notifications every time an
+          // animal eats or drinks, only if they are thirsty or hungry and
+          // their bowl is empty" — only worth a heads-up when there's
+          // actually nothing there for her; if the bowl's already stocked
+          // she resolves it silently the same tick (_autoResolveBowlNeeds).
+          this.game.events.emit(EVENTS.NOTIFY,
+            key === 'food' ? `${stay.animal.name} is hungry — her bowl is empty!` : `${stay.animal.name} is thirsty — her bowl is empty!`);
         }
       }
       // Owner note 2026-07-29: eating/drinking is decoupled from filling —
@@ -2220,18 +2228,20 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _autoResolveBowlNeeds(stay) {
     if (!stay.bowl) return false;
     let changed = false;
+    // Owner note 2026-07-29: "we don't need notifications every time an
+    // animal eats or drinks" — this happens silently and often (it's a
+    // background tick, not a player action); the only thing worth a
+    // notification is the "hungry AND bowl empty" case above, in _updateNeeds.
     if (stay.needs.food && stay.bowl.food) {
       clearNeed(stay, 'food');
       stay.bowl.food = false;
       this._setNeedIcon(stay, 'food', false);
-      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} got fed!`);
       changed = true;
     }
     if (stay.needs.water && stay.bowl.water) {
       clearNeed(stay, 'water');
       stay.bowl.water = false;
       this._setNeedIcon(stay, 'water', false);
-      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} got a drink!`);
       changed = true;
     }
     return changed;
