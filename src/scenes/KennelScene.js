@@ -55,6 +55,10 @@ import { WithSecretDragon } from '../dev/secretDragon.js';
 // override convention — createAnimal({ name: BABY_PLACEHOLDER }).
 const BABY_PLACEHOLDER = '???';
 
+// TEMP DEBUG (owner request 2026-07-29, bowl-visibility investigation) —
+// flip off and delete once the actual bowl-visibility bug is root-caused.
+const BOWL_DEBUG = true;
+
 const SPEED = 160; // px/s, world (logical) units
 const PICKUP_RADIUS = 50; // px, how close the player must be to interact with anything
 const NAME_TAG_RADIUS = 80; // px, how close the player must be to read a name tag (issue #22 #2)
@@ -871,6 +875,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
         existing?.destroy();
         const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
+        // TEMP DEBUG (owner request 2026-07-29, bowl-visibility investigation
+        // — remove once root-caused): neon tint + depth maxed out, so a bowl
+        // that's actually being created is unmistakable regardless of
+        // z-order/occlusion, distinguishing that from "never created at all".
+        if (BOWL_DEBUG) bowl.setTint(0xff0000).setDepth(999999);
         this._bowlImgs[key][slot] = bowl;
         this._snapCagePop(bowl);
       });
@@ -888,6 +897,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
         existing?.destroy();
         const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
+        if (BOWL_DEBUG) bowl.setTint(0x00ff00).setDepth(999999); // TEMP DEBUG — see food-bowl comment above
         this._waterBowlImgs[key][slot] = bowl;
         this._snapCagePop(bowl);
       });
