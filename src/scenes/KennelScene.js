@@ -2311,8 +2311,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
         if (!settled) continue;
         if (stay.location === 'dog' && stay.needs.bathroom) continue;
+        // Owner note 2026-07-29: "the interact location for an animal that
+        // is outside playing doesn't move with their visual... it should
+        // move with them" — she wanders within her bounds (_updateWander),
+        // so the pickup target must track her live sprite position, not her
+        // original fixed drop-off spot (rec.pos).
         const rec = this._staySprites.get(stay);
-        if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
+        if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._pickUp(stay));
       }
     }
 
@@ -2345,7 +2350,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     for (const stay of this.roster.stays) {
       if (stay.location !== 'dog' || !stay.needs.bathroom) continue;
       const rec = this._staySprites.get(stay);
-      if (rec) consider(rec.pos.x, rec.pos.y, () => this._grabLeash(stay));
+      if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._grabLeash(stay));
     }
 
     if (!this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement)) {
@@ -2358,7 +2363,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     for (const stay of this.roster.stays) {
       if (!stay.birthReady) continue;
       const rec = this._staySprites.get(stay);
-      if (rec) consider(rec.pos.x, rec.pos.y, () => this._triggerBirth(stay));
+      if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._triggerBirth(stay));
     }
 
     // Issue #13: bake a treat at the kitchen oven — only while the counter's
@@ -2381,7 +2386,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       for (const stay of this._presentStays()) {
         if (stay.tuckedIn) continue;
         const rec = this._staySprites.get(stay);
-        if (rec) consider(rec.pos.x, rec.pos.y, () => this._tuckIn(stay));
+        if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._tuckIn(stay));
       }
     }
 
