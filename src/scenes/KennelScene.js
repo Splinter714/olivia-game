@@ -93,11 +93,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // below, so the registry can't drift from the real world.
     this._devRegistry = [];
 
-    // Issue #27: "generalized cages" toggle — off by default (species-locked
-    // sections, exactly today's behavior). See _buildModeToggle for the
+    // Issue #27: "generalized cages" toggle — ON by default (owner request,
+    // 2026-07-29: "make mixed cages default"). See _buildModeToggle for the
     // on-screen button and _applyCageMode/_refreshCageArt for the live
-    // visual + placement-logic switch.
-    this.generalizedCages = false;
+    // visual + placement-logic switch — _buildModeToggle also applies the
+    // matching visuals once at boot, since world/collision is always built
+    // in normal-mode form first and only _applyCageMode() neutralizes it.
+    this.generalizedCages = true;
 
     buildKennelTextures(this);
     for (const s of SECTIONS) buildFloorTile(this, `floor-${s.key}`, s.floor, s.floorDark);
@@ -454,6 +456,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Re-anchor on resize, same convention as HudScene's top-left panel and
     // Controls' bottom-right interact button.
     this.scale.on('resize', () => this._layoutModeToggle());
+    // World/collision is always built in normal-mode form first (_drawWorld/
+    // _buildCollision draw themed floors + solid pen walls unconditionally);
+    // since generalizedCages now defaults to true, apply its visuals once
+    // here so boot state actually matches the flag instead of only updating
+    // on the button's first press.
+    this._applyCageMode();
   }
 
   _layoutModeToggle() {
@@ -1193,12 +1201,26 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
       if (this._dropOff(stay, section, { fromReception: true })) this._carryOrigin = null;
     } else {
-      // Picked up from her own cage to take out to play — only the yard
-      // will accept her (so picking her up doesn't instantly re-drop her
-      // right back where she stood).
-      if (this.player.x < OUTSIDE.x + 8) return;
-      this._dropOffToYard(stay);
-      this._carryOrigin = null;
+      // Picked up from her own cage — she can go out to the yard to play, OR
+      // right back into a cage (change your mind / just put her back). Only
+      // the yard branch existed before, so there was no way to set her back
+      // down without a pointless round trip through the yard first.
+      if (this.player.x >= OUTSIDE.x + 8) {
+        this._dropOffToYard(stay);
+        this._carryOrigin = null;
+        return;
+      }
+      if (this.generalizedCages) {
+        const found = this._findOpenCageNear(this.player.x, this.player.y);
+        if (!found || !interactPressed) return;
+        if (this._dropOff(stay, found.section, { cageSlot: found.slot })) this._carryOrigin = null;
+        return;
+      }
+      const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.animal.species));
+      if (!section) return;
+      const { x, y, w, h } = section.rect;
+      if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
+      if (this._dropOff(stay, section)) this._carryOrigin = null;
     }
   }
 
