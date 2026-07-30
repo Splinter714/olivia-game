@@ -1499,14 +1499,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _fillBowl(sectionKey, cageSlot, kind) {
     const stay = this.roster.stays.find((s) => s.location === sectionKey && s.cageSlot === cageSlot);
     if (!stay || !stay.bowl) return false;
-    if (stay.bowl[kind]) {
-      // Already full — a light, non-naggy flavor line, no state change.
-      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s ${kind} bowl is already full!`);
-      return true;
-    }
+    // Owner note 2026-07-29: "we really only want notifications for animal
+    // needs, not for actions we've taken" — filling (whether it worked or the
+    // bowl was already full) is a player action, not a need, so no
+    // notification either way; the bowl's own full/empty art is the feedback.
+    if (stay.bowl[kind]) return true;
     stay.bowl[kind] = true;
     this._refreshBowls();
-    this.game.events.emit(EVENTS.NOTIFY, `Filled ${stay.animal.name}'s ${kind} bowl!`);
     return true;
   }
 
