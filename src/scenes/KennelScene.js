@@ -1833,6 +1833,18 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.game.events.emit(EVENTS.NOTIFY, `You baked ${treat.label}!`);
   }
 
+  // Owner note 2026-07-29: "you should be able to pick them up and eat them,
+  // not just have them sit on the floor forever" — the counter's only other
+  // fate for a tray was the raccoon stealing it. Eating clears the counter
+  // (so a fresh batch can be baked) and is purely a fun flavor beat.
+  _eatTreat() {
+    const tray = this.treatTray;
+    if (!tray) return;
+    tray.sprite.destroy();
+    this.treatTray = null;
+    this.game.events.emit(EVENTS.NOTIFY, `Yum! You ate ${tray.treat.label}!`);
+  }
+
   _updateRaccoon(delta) {
     this._raccoonTimer -= delta;
     if (this._raccoonTimer > 0) return;
@@ -1877,6 +1889,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // — always visibly, holding the treat and dropping crumbs the whole way.
   _raccoonGrabsTreat(raccoon) {
     const tray = this.treatTray;
+    if (!tray) {
+      // The player ate the treats before she reached the counter — she just
+      // finds an empty tray and leaves without a scamper/steal beat.
+      raccoon.frameTimer?.remove();
+      raccoon.sprite.destroy();
+      this._raccoon = null;
+      return;
+    }
     this.treatTray = null;
     tray.sprite.destroy();
 
@@ -2369,6 +2389,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Issue #13: bake a treat at the kitchen oven — only while the counter's
     // clear, so there's always at most one tray out for the raccoon to steal.
     if (!this.treatTray) consider(OVEN_SPOT.x, OVEN_SPOT.y, () => this._bakeTreat());
+    else consider(TREAT_TRAY_SPOT.x, TREAT_TRAY_SPOT.y, () => this._eatTreat());
 
     // Issue #13 follow-up: scare the raccoon off if she's around and the
     // player walks up and interacts — same proximity convention as
