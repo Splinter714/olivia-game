@@ -43,7 +43,7 @@ import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
 } from '../art/raccoon.js';
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
-import { createRoster, LOCATION, CARRY_KIND, assignCageSlot, isCageSlotOpen, anyOpenCageAnywhere } from '../data/roster.js';
+import { createRoster, LOCATION, CARRY_KIND, assignCageSlot, isCageSlotOpen, anyOpenCageAnywhere, belongsToSection } from '../data/roster.js';
 import { loadGame, saveGame, clearSave, seedGlobalNameState } from '../data/persistence.js';
 import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
@@ -635,7 +635,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (!this._cageImgs) return;
     for (const key of Object.keys(this._cageImgs)) {
       this._cageImgs[key].forEach((img, slot) => {
-        const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
+        // Bug fix (owner note 2026-07-29: "keep it visually occupied if
+        // it's occupied"): this used to check s.location === key, which
+        // misses a stay currently out playing in the yard — her `location`
+        // reads LOCATION.YARD while she's out there, even though the slot
+        // is still hers (belongsToSection/assignCageSlot already treat a
+        // yard trip as still occupying it). The cage visually flipped back
+        // to "empty" the instant she went out to play, even though trying
+        // to drop a new animal there correctly got rejected as full —
+        // confusing since it LOOKED open. belongsToSection is the same
+        // check the actual occupancy bookkeeping already uses.
+        const occupant = this.roster.stays.find((s) => belongsToSection(s, key) && s.cageSlot === slot);
         const texKey = occupant ? (CAGE_KEY[occupant.animal.species] ?? CAGE_KEY[key]) : EMPTY_CAGE_KEY;
         const changed = img.texture.key !== texKey;
         if (changed) img.setTexture(texKey);

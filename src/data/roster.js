@@ -58,7 +58,7 @@ const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 // (any section, via KennelScene's generalized-cages placement path) her
 // `cageSection` is set exactly like anyone else's, so this needs no special
 // case for her either.
-function belongsToSection(stay, sectionKey) {
+export function belongsToSection(stay, sectionKey) {
   if (stay.location === sectionKey) return true;
   return stay.location === LOCATION.YARD && stay.cageSection === sectionKey;
 }
