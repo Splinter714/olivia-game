@@ -58,10 +58,16 @@ const SPEED = 160; // px/s, world (logical) units
 const PICKUP_RADIUS = 50; // px, how close the player must be to interact with anything
 const NAME_TAG_RADIUS = 80; // px, how close the player must be to read a name tag (issue #22 #2)
 
-// Issue #20: cats/dogs no longer have an indoor mess of their own — their
-// only potty pathway is the leash walk outside (needs.bathroom). Only the
-// cat litter box still spawns periodic messes indoors.
+// Issue #20: cats no longer have an indoor mess of their own — the litter
+// box still spawns periodic messes.
 const CAT_LITTER_INTERVAL = () => 25_000 + Math.random() * 25_000;
+// Issue #38: a dog's only potty pathway is being out in the yard — no more
+// dedicated leash-walk minigame ("taking a dog for a poop walk shouldn't be
+// different from taking them out to play"). Any dog currently playing in
+// the yard who needs the bathroom does her business right where she is
+// after a short while, leaving a mess to scoop (same as cat litter), and
+// her need clears — same interval family as the cat's litter timer.
+const DOG_YARD_INTERVAL = () => 8_000 + Math.random() * 7_000;
 
 // Night sequence timings (issue #11) — the screen fades to black once
 // everyone's tucked in, fades back for each wake-up so the player can act,
@@ -164,8 +170,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.carrying = null;          // the stay currently in the player's hands, or null
     this._carryOrigin = null;      // where `carrying` was picked up from: 'reception' | sectionKey | LOCATION.YARD
     this._carryVisual = null;      // { parts: [{obj, dx, dy}, ...] } following the player while carrying
-    this.leashedDog = null;        // the dog stay currently being walked outside (issue #19), or null
-    this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
     this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment she starts walking in until her pet is picked up (issue #25)
     this._checkoutOwners = new Map();  // stay -> { sprite, arrived } — a waiting checkout owner (issue #36), from the moment she starts walking in until the player delivers her pet
 
@@ -194,8 +198,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     // (yardDividerY/carryingDivider/_dividerVisual and the scooper-rest state
     // are set earlier, above _buildProps() — see that comment.)
-    this.messes = [];              // { kind: 'cat', x, y, sprite } — issue #20: dogs no longer mess indoors
+    this.messes = [];              // { kind: 'cat'|'dog', x, y, sprite, stay }
     this._catLitterTimer = CAT_LITTER_INTERVAL();
+    this._dogYardTimer = DOG_YARD_INTERVAL(); // issue #38
     // Issue #32 follow-up: shared per-zone yard bowls (top/bottom) — high
     // capacity, unlike a per-cage bowl (see _autoResolveYardBowls).
     this.yardBowls = { top: createBowlState(), bottom: createBowlState() };
@@ -1345,11 +1350,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       const babiesWithin = Phaser.Math.Distance.Between(px, py, rec.pos.x, rec.pos.y) <= NAME_TAG_RADIUS;
       for (const label of rec.babyLabels) label.setVisible(babiesWithin);
     }
-    if (this._walkVisual) {
-      const wv = this._walkVisual;
-      const within = Phaser.Math.Distance.Between(px, py, wv.sprite.x, wv.sprite.y) <= NAME_TAG_RADIUS;
-      wv.tag.container.setVisible(within);
-    }
   }
 
   // Small floating icon above a stay's name tag showing it needs food/water/
@@ -1808,103 +1808,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _cleanMess(mess) {
     mess.sprite.destroy();
     this.messes = this.messes.filter((m) => m !== mess);
-  }
-
-  // ── Leashed dog walks (issue #19) ─────────────────────────────────────────
-  // A dog who "needs to go" (data/needs.js's bathroom need) has to be walked
-  // outside for real: the player grabs her leash, she follows at the player's
-  // side (not carried above the head, like an arrival), out through the back
-  // door onto the grass, does her business, and gets walked back in — no
-  // accidents, no time pressure; if the player doesn't grab the leash right
-  // away, she just keeps waiting (the need icon stays showing).
-
-  // Picks up a dog's leash: hides her stationary sprite and starts a small
-  // follow-visual with her own walk animation (from the art rewrite).
-  _grabLeash(stay) {
-    if (this.leashedDog) return;
-    const rec = this._staySprites.get(stay);
-    if (!rec) return;
-    this._destroyStaySprites(stay);
-
-    const look = effectiveLook(stay.animal, this._tieBreakers());
-    const base = ensureAnimalTextures(this, stay.animal.species, stay.animal.stage, look);
-    const sprite = this.add.sprite(this.player.x, this.player.y, `${base}_idle_0`)
-      .setOrigin(0.5, 1).setScale(ANIMAL_DISPLAY_SCALE).setDepth(this.player.y);
-    sprite.play(`${base}_idle`);
-    const tag = this._addNameTag(sprite.x, sprite.y - sprite.displayHeight - 6, stay.animal.name);
-
-    this.leashedDog = stay;
-    this._walkVisual = { sprite, tag, base, wentOutside: false, pausing: false, businessDone: false };
-    this.game.events.emit(EVENTS.NOTIFY, `Taking ${stay.animal.name} for a walk!`);
-  }
-
-  // Per-frame follow (same beside-the-player idea as _followCarry, but at
-  // ground level and with a real walk/idle animation instead of riding above
-  // the player's head) plus the outside/business/back-inside phase machine.
-  _updateLeashedDog() {
-    if (!this.leashedDog || !this._walkVisual) return;
-    const wv = this._walkVisual;
-
-    const targetX = this.player.x - PLAYER_W * 0.7;
-    const targetY = this.player.y + 4;
-    wv.sprite.x += (targetX - wv.sprite.x) * 0.25;
-    wv.sprite.y += (targetY - wv.sprite.y) * 0.25;
-    wv.sprite.setDepth(wv.sprite.y);
-    wv.tag.container.setPosition(wv.sprite.x, wv.sprite.y - wv.sprite.displayHeight - 6 - wv.tag.height);
-
-    const moving = this.player.body.velocity.length() > 5;
-    const animKey = moving ? `${wv.base}_walk` : `${wv.base}_idle`;
-    if (wv.sprite.anims.currentAnim?.key !== animKey) wv.sprite.play(animKey);
-
-    // Outside the back door → pause → does her business, once.
-    if (!wv.wentOutside && this.player.x > ROOM.w + 30) {
-      wv.wentOutside = true;
-    }
-    if (wv.wentOutside && !wv.businessDone && !wv.pausing) {
-      wv.pausing = true;
-      this.time.delayedCall(1200, () => {
-        wv.businessDone = true;
-        this.game.events.emit(EVENTS.NOTIFY, `${this.leashedDog.animal.name} did her business!`);
-      });
-    }
-    // Back inside, past the door, and done → unleash and settle back in.
-    if (wv.wentOutside && wv.businessDone && this.player.x < ROOM.w - 30) {
-      this._finishWalk();
-    }
-  }
-
-  // Ends the walk: unleashes the dog and settles her back into her own cage,
-  // clearing the bathroom need.
-  _finishWalk() {
-    const stay = this.leashedDog;
-    this._walkVisual.sprite.destroy();
-    this._walkVisual.tag.container.destroy();
-    this._walkVisual = null;
-    this.leashedDog = null;
-
-    clearNeed(stay, 'bathroom');
-    // Issue #27: she's leashed straight from wherever her cage actually is —
-    // stay.location/cageSection never change during the walk itself (only
-    // the visuals swap to the leash follow-visual) — so use that instead of
-    // hardcoding 'dog', which would send her to the wrong cage in
-    // generalized mode if she'd been kenneled somewhere else.
-    const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.location || 'dog'));
-    const pos = this._sectionSlot(section, stay);
-    // Bug fix: a dog can now be leash-grabbed straight out of the yard (her
-    // bathroom need no longer requires stay.location === 'dog' — see the
-    // matching fix in _checkInteractions). Restore her bookkeeping location
-    // back to her actual cage, not just her visual position — otherwise
-    // she'd render in her cage but still read as LOCATION.YARD everywhere
-    // else (_settledStays, section-full counts, cage art refresh, etc.).
-    stay.location = section.key;
-    this._renderStay(stay, pos.x, pos.y);
-    this._refreshCageArt();
-    this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} feels much better!`);
-    // If this was the night's current "needs the bathroom" wake-up (issue
-    // #11), the walk resolves it — resume toward morning.
-    if (this.night.currentWake?.stay === stay && this.night.currentWake.reason === WAKE_REASON.BATHROOM) {
-      this._resolveWakeUp();
-    }
   }
 
   // ── Births: pregnancy/eggs → babies (issue #9) ───────────────────────────
@@ -2598,6 +2501,34 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // it and couldn't); otherwise a fresh mess appears there quietly, same as
   // before (no notification for a routine new mess).
   _updateMesses(delta) {
+    // Issue #38: any dog currently playing in the yard who needs the
+    // bathroom does her business right where she's playing after a short
+    // while — leaves a mess to scoop (same as cat litter) and clears her
+    // need, replacing the old dedicated leash-walk minigame. Resolved ALL
+    // qualifying dogs at once rather than picking one at random (unlike the
+    // cat timer below) since there's rarely more than one at a time, and we
+    // don't want her stuck waiting on bad luck for something she was
+    // specifically brought outside to do.
+    this._dogYardTimer -= delta;
+    if (this._dogYardTimer <= 0) {
+      this._dogYardTimer = DOG_YARD_INTERVAL();
+      const dogs = this.roster.stays.filter((s) => s.animal.species === 'dog' && s.location === LOCATION.YARD && s.needs.bathroom);
+      for (const dog of dogs) {
+        const rec = this._staySprites.get(dog);
+        if (!rec) continue;
+        this._spawnMess('dog', { x: rec.sprite.x, y: rec.sprite.y }, dog);
+        clearNeed(dog, 'bathroom');
+        this._setNeedIcon(dog, 'bathroom', false);
+        this.game.events.emit(EVENTS.NOTIFY, `${dog.animal.name} did her business!`);
+        // If this was the night's current "needs the bathroom" wake-up
+        // (issue #11), doing her business resolves it — resume toward
+        // morning, same as the old leash walk used to.
+        if (this.night.currentWake?.stay === dog && this.night.currentWake.reason === WAKE_REASON.BATHROOM) {
+          this._resolveWakeUp();
+        }
+      }
+    }
+
     this._catLitterTimer -= delta;
     if (this._catLitterTimer <= 0) {
       this._catLitterTimer = CAT_LITTER_INTERVAL();
@@ -2652,36 +2583,36 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
     }
 
-    // Issue #20: pick up any settled or yard-placed animal to take her out
-    // to play (or bring her back in). Skipped at night (everyone should be
-    // in her cage for tuck-in) and for a dog currently needing the bathroom
-    // (the dedicated leash flow below takes priority for her).
-    if (!this.night.active) {
-      const sectionKeys = new Set(SECTIONS.map((s) => s.key));
-      for (const stay of this.roster.stays) {
-        const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
-        if (!settled) continue;
-        // Bug fix: this used to check stay.location === 'dog', which broke
-        // the instant a dog could end up anywhere OTHER than a nominally
-        // "dog" cage slot or her actual species — i.e. any dog out in the
-        // yard (location === 'yard'), or one settled in a cage nominally
-        // keyed to a different species under "any pet, any cage" mixing.
-        // Her real species lives on the animal instance, not the slot.
-        if (stay.animal.species === 'dog' && stay.needs.bathroom) continue;
-        // A mom flagged ready-and-waiting (birthReady, below) sits at this
-        // same sprite position — without this guard, the tie in consider()
-        // always resolves to whichever action was registered first (this
-        // pickup, registered earlier in the loop), so interacting with her
-        // silently picked her up instead of ever triggering the birth.
-        if (stay.birthReady) continue;
-        // Owner note 2026-07-29: "the interact location for an animal that
-        // is outside playing doesn't move with their visual... it should
-        // move with them" — she wanders within her bounds (_updateWander),
-        // so the pickup target must track her live sprite position, not her
-        // original fixed drop-off spot (rec.pos).
-        const rec = this._staySprites.get(stay);
-        if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._pickUp(stay));
-      }
+    // Issue #20/#38: pick up any settled or yard-placed animal to take her
+    // out to play (or bring her back in) — including a dog who needs the
+    // bathroom, which is now just this SAME action (owner note 2026-07-29:
+    // "taking a dog for a poop walk shouldn't be different from taking them
+    // out to play; they should be able to poop while out for a play, and be
+    // able to be let go to play when out for a poop"). She just wanders
+    // freely in the yard like anyone else and does her business there on her
+    // own (see _updateMesses) — no separate leash minigame.
+    // Skipped at night (everyone should be in her cage for tuck-in) EXCEPT a
+    // dog who currently needs the bathroom — she can still be taken out
+    // overnight, same exemption the old leash flow used to have.
+    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
+    for (const stay of this.roster.stays) {
+      const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
+      if (!settled) continue;
+      const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
+      if (this.night.active && !bathroomDog) continue;
+      // A mom flagged ready-and-waiting (birthReady, below) sits at this
+      // same sprite position — without this guard, the tie in consider()
+      // always resolves to whichever action was registered first (this
+      // pickup, registered earlier in the loop), so interacting with her
+      // silently picked her up instead of ever triggering the birth.
+      if (stay.birthReady) continue;
+      // Owner note 2026-07-29: "the interact location for an animal that
+      // is outside playing doesn't move with their visual... it should
+      // move with them" — she wanders within her bounds (_updateWander),
+      // so the pickup target must track her live sprite position, not her
+      // original fixed drop-off spot (rec.pos).
+      const rec = this._staySprites.get(stay);
+      if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._pickUp(stay));
     }
 
     // Owner note 2026-07-29 (bowl decoupling): filling food vs. water now
@@ -2712,16 +2643,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     for (const mess of this.messes) {
       consider(mess.x, mess.y, () => this._cleanMess(mess));
-    }
-
-    // Issue #19: a dog who needs to go out gets her leash grabbed, not
-    // whisked away automatically — walking her out is the player's job.
-    // Bug fix: check her real species (stay.animal.species), not
-    // stay.location — see the matching fix/comment above.
-    for (const stay of this.roster.stays) {
-      if (stay.animal.species !== 'dog' || !stay.needs.bathroom) continue;
-      const rec = this._staySprites.get(stay);
-      if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._grabLeash(stay));
     }
 
     // Issue #37: the computer's only for SENDING now — she needs her photo
@@ -2819,8 +2740,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (this.carrying) {
       this._followCarry();
       this._checkDropoff(interactPressed);
-    } else if (this.leashedDog) {
-      this._updateLeashedDog();
     } else if (this.carryingDivider) {
       this._followDividerCarry();
       if (interactPressed) this._dropDivider();
