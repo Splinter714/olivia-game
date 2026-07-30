@@ -672,10 +672,26 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // not just occupancy/species. Water bowls (WATER_BOWL_SPOTS) get the exact
   // same create/destroy/reskin treatment as the food bowl, just with a
   // single shared texture instead of per-species art.
+  //
+  // Issue #32 #6 (owner: "I see the bowls for guinea pig and dog, but they
+  // don't appear visible for some other animals — is it a z order issue?").
+  // It was: _updateWander lets a settled stay's sprite drift anywhere inside
+  // her own cage rect and re-sets her depth to her CURRENT y every frame
+  // (rec.sprite.setDepth(rec.sprite.y)), clamped as far down as
+  // cage.y + cage.h - 4 (the cage's own bottom edge). The bowl's depth used
+  // to be derived from its own spot y (also anchored near that same bottom
+  // edge) minus 1 — so the instant she wandered near the front of her cage
+  // (species/timing-dependent, which is why only some species/moments
+  // showed it), her depth caught up to and passed the bowl's fixed depth and
+  // she rendered in front of it. Anchoring the bowl's depth to the CAGE's
+  // bottom edge instead of the bowl's own (now re-centered) spot guarantees
+  // it always exceeds the max depth her wander can ever reach, regardless of
+  // species/cage size/where the bowl sits within the cage.
   _refreshBowls() {
     if (!this._bowlImgs || !this.roster) return;
     const bowlSpots = this._activeBowlSpots();
     const waterSpots = this._activeWaterBowlSpots();
+    const cages = this._activeCages();
     for (const key of Object.keys(this._bowlImgs)) {
       this._bowlImgs[key].forEach((existing, slot) => {
         const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
@@ -689,12 +705,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
           ? (BOWL_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_KEY)
           : (BOWL_EMPTY_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_EMPTY_KEY);
         const { x, y } = bowlSpots[key][slot];
+        const depth = cages[key][slot].y + cages[key][slot].h + 1;
         // Skip only if already showing the right bowl in the right place —
         // a Mix Cages toggle moves the spot even when the texture doesn't
         // change, so both need checking (see _activeBowlSpots).
         if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
         existing?.destroy();
-        const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y - 1);
+        const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
         this._bowlImgs[key][slot] = bowl;
         this._snapCagePop(bowl);
       });
@@ -708,9 +725,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         const stocked = !!occupant.bowl?.water;
         const texKey = stocked ? WATER_BOWL_KEY : WATER_BOWL_EMPTY_KEY;
         const { x, y } = waterSpots[key][slot];
+        const depth = cages[key][slot].y + cages[key][slot].h + 1;
         if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
         existing?.destroy();
-        const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y - 1);
+        const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
         this._waterBowlImgs[key][slot] = bowl;
         this._snapCagePop(bowl);
       });

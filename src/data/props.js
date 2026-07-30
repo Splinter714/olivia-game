@@ -159,17 +159,23 @@ export const SCOOPER_SPOT = (() => {
 // One food/water bowl SPRITE spot per individual cage slot (issue #22 #6,
 // refined by owner note 2026-07-29: "the interact point should be the cage,
 // not the food bowl... don't need to be there before placing the animal").
-// This is purely where the bowl sprite visually sits (a corner of the cage);
-// KennelScene now targets the cage's own rect (cageAnimalSpot) for the
-// feeding INTERACTION, and only creates a bowl sprite here once a stay is
-// actually settled in that cage slot (destroying it again once the cage goes
-// empty) — see KennelScene._refreshBowls. Turtles are excluded: a turtle on
-// its water-tank island can't walk over to a bowl the way a land animal can,
-// so they're fed differently (a piece of lettuce dropped into the tank —
-// see KennelScene._feedTurtleTank). Snakes stay on dry sand/perch, so a
-// regular per-cage bowl still works fine for them.
+// This is purely where the bowl sprite visually sits; KennelScene now
+// targets the cage's own rect (cageAnimalSpot) for the feeding INTERACTION,
+// and only creates a bowl sprite here once a stay is actually settled in
+// that cage slot (destroying it again once the cage goes empty) — see
+// KennelScene._refreshBowls. Turtles are excluded: a turtle on its
+// water-tank island can't walk over to a bowl the way a land animal can, so
+// they're fed differently (a piece of lettuce dropped into the tank — see
+// KennelScene._feedTurtleTank). Snakes stay on dry sand/perch, so a regular
+// per-cage bowl still works fine for them.
+//
+// Issue #32 #6: recentered from a corner to bottom-center (owner note
+// 2026-07-29: "food water bowls should be more centered on each cage") —
+// food sits just left of center, water just right (see
+// waterBowlSpotForCage below), side by side near the bottom so the two
+// stay visually distinct without overlapping.
 function bowlSpotForCage(cage) {
-  return { x: cage.x + cage.w - 6, y: cage.y + cage.h - 4 };
+  return { x: cage.x + cage.w / 2 - 12, y: cage.y + cage.h - 8 };
 }
 const BOWL_ELIGIBLE_KEYS = ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'];
 export const BOWL_SPOTS = Object.fromEntries(
@@ -184,12 +190,13 @@ export const BOWL_SPOTS_UNIFIED = Object.fromEntries(
 
 // Water bowl SPRITE spot (owner note 2026-07-29: "same with water bowls" —
 // filling/drinking should work identically to food, as its own separate
-// interactable). Sits in the opposite corner of the cage from the food bowl
-// so the two are visually and positionally distinct; same species list/
-// turtle exclusion as BOWL_SPOTS (turtles have no bowl of any kind — see the
-// comment above).
+// interactable). Issue #32 #6: sits just right of bottom-center, right next
+// to the (also recentered) food bowl at cage.w/2 - 12 — same y, mirrored
+// x-offset, so the two sit side by side near the cage's bottom-center
+// without overlapping. Same species list/turtle exclusion as BOWL_SPOTS
+// (turtles have no bowl of any kind — see the comment above).
 function waterBowlSpotForCage(cage) {
-  return { x: cage.x + 6, y: cage.y + cage.h - 4 };
+  return { x: cage.x + cage.w / 2 + 12, y: cage.y + cage.h - 8 };
 }
 export const WATER_BOWL_SPOTS = Object.fromEntries(
   BOWL_ELIGIBLE_KEYS.map((key) => [key, CAGES[key].map(waterBowlSpotForCage)]),
