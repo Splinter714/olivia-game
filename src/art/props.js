@@ -5,7 +5,7 @@
 // gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
 import { gen } from './_gen.js';
 import {
-  TURTLE, SNAKE, LITTER_BOX, CAGES, OVEN, YARD_DIVIDER_X1, YARD_DIVIDER_X0,
+  TURTLE, SNAKE, LITTER_BOX_SIZE, CAGES, OVEN, YARD_DIVIDER_X1, YARD_DIVIDER_X0,
 } from '../data/props.js';
 
 export const TANK_KEY = 'prop-tank';
@@ -81,17 +81,15 @@ export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: '
 export const CAGE_KEY = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-${key}`]));
 
 // Owner feedback after trying "Mix Cages" (2026-07-29): "cage sizes should
-// all be the same" — one uniform cell size used for every species' cage art
-// while generalized mode is on, instead of each section's own (very
-// different) cell size. Picked small enough to fit inside the tightest
-// slot in the building — the turtle/snake tank islands/perches (the
-// per-section cageArea math in data/props.js works out to roughly 72x63 for
-// those two) — so a uniform-sized cage never pokes outside its tank when
-// centered in its slot. Every other section's slot is comfortably bigger
-// than this, so the art just reads as a small, tidy, identical pen/tank/nest
-// wherever it sits.
-export const GENERALIZED_CAGE_W = 68;
-export const GENERALIZED_CAGE_H = 58;
+// all be the same... each individual cage should be larger, like square with
+// both dimensions equal to the previous height of cat and dog cages" (that
+// height worked out to exactly 167px). Every cage in Mix Cages mode is now a
+// 167x167 square — this is also the exact cell size of the unified cage grid
+// (data/props.js's UNIFIED_CAGES, laid out in the new Cage Hall room), so a
+// cage image fills its grid cell edge-to-edge with no centering/inset math
+// needed (see KennelScene._refreshCageArt).
+export const GENERALIZED_CAGE_W = 167;
+export const GENERALIZED_CAGE_H = 167;
 
 // One uniform-size texture per species, used only in generalized mode
 // (KennelScene._refreshCageArt draws whichever species is actually settled
@@ -485,7 +483,7 @@ function drawDividerLine(g, w, h) {
 export function buildPropTextures(scene) {
   gen(scene, TANK_KEY, TURTLE.tank.w, TURTLE.tank.h, (g) => drawTank(g, TURTLE.tank.w, TURTLE.tank.h));
   gen(scene, SNAKE_TANK_KEY, SNAKE.tank.w, SNAKE.tank.h, (g) => drawSnakeTank(g, SNAKE.tank.w, SNAKE.tank.h));
-  gen(scene, LITTER_BOX_KEY, LITTER_BOX.w, LITTER_BOX.h, (g) => drawLitterBox(g, LITTER_BOX.w, LITTER_BOX.h));
+  gen(scene, LITTER_BOX_KEY, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h, (g) => drawLitterBox(g, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h));
   gen(scene, SCOOPER_KEY, 26, 32, (g) => drawScooper(g, 26, 32));
   gen(scene, BOWL_KEY, 24, 18, (g) => drawBowl(g, 24, 18, true));
   gen(scene, BOWL_HAY_KEY, 24, 18, (g) => drawHayBowl(g, 24, 18, true));

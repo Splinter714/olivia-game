@@ -2,7 +2,10 @@
 // data/sections.js's SECTIONS the same way penRects()/wallRects() are: plain
 // rects that both KennelScene's rendering and its interaction/collision code
 // can share, so the numbers only live in one place.
-import { SECTIONS, RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE } from './sections.js';
+import {
+  SECTIONS, RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE,
+  WALL, CAGE_HALL,
+} from './sections.js';
 
 const sectionByKey = (key) => SECTIONS.find((s) => s.key === key);
 
@@ -67,9 +70,53 @@ function cageGrid(rect, cols = 3, rows = 2, pad = 8, gap = 8) {
 }
 
 // sectionKey -> array of CAGES_PER_SECTION cage rects. Every section
-// (including turtle/snake as of issue #20) gets one.
+// (including turtle/snake as of issue #20) gets one. Used for NORMAL ("By
+// Type") mode — untouched by the Cage Hall rework below (owner note
+// 2026-07-29: normal mode stays exactly as it is today).
 export const CAGES = Object.fromEntries(
   SECTIONS.map((s) => [s.key, cageGrid(cageAreaFor(s.key), 3, 2, 8, 8)]), // 3x2 = CAGES_PER_SECTION
+);
+
+// ── Unified cage grid (Mix Cages mode, owner note 2026-07-29) ───────────────
+// "Make the whole place just a big grid of empty cages with halls... between
+// them" — a completely separate position set (not a resize of the 8
+// sections above) laid out inside CAGE_HALL (sections.js), a brand-new room
+// appended south of the main building. Same (sectionKey, slot) identity as
+// CAGES (roster.js's occupancy bookkeeping doesn't change — a stay's
+// `location`/`cageSlot` still means "section s's Nth nominal cage"), just a
+// different on-screen position for that identity while generalized mode is
+// on. KennelScene swaps which of CAGES/UNIFIED_CAGES it reads from (and
+// re-renders every settled stay + re-positions every cage/bowl/litter sprite)
+// the instant the mode toggles — see its _activeCages().
+//
+// 8 sections x CAGES_PER_SECTION(6) = 48 cages, laid out as a flat 8-column x
+// 6-row grid (48 cells exactly) — no clustering by species (owner: "no
+// residual per-section identity in the layout"). Each cell is exactly
+// GENERALIZED_CAGE_W/H (167x167, art/props.js) with an 8px gap, sized to
+// fill CAGE_HALL's interior edge-to-edge: 8*167 + 7*8 = 1392 = CAGE_HALL.w -
+// 2*WALL, and 6*167 + 5*8 = 1042 = CAGE_HALL.h - 2*WALL.
+const UNIFIED_COLS = 8;
+const UNIFIED_ROWS = 6; // 8*6 = 48 = SECTIONS.length * CAGES_PER_SECTION
+const UNIFIED_CELL = 167; // matches art/props.js's GENERALIZED_CAGE_W/H exactly
+const UNIFIED_GAP = 8;
+const UNIFIED_ORIGIN_X = CAGE_HALL.x + WALL;
+const UNIFIED_ORIGIN_Y = CAGE_HALL.y + WALL;
+
+export const UNIFIED_CAGES = Object.fromEntries(
+  SECTIONS.map((s, si) => [
+    s.key,
+    Array.from({ length: CAGES_PER_SECTION }, (_, slot) => {
+      const idx = si * CAGES_PER_SECTION + slot;
+      const col = idx % UNIFIED_COLS;
+      const row = Math.floor(idx / UNIFIED_COLS);
+      return {
+        x: UNIFIED_ORIGIN_X + col * (UNIFIED_CELL + UNIFIED_GAP),
+        y: UNIFIED_ORIGIN_Y + row * (UNIFIED_CELL + UNIFIED_GAP),
+        w: UNIFIED_CELL,
+        h: UNIFIED_CELL,
+      };
+    }),
+  ]),
 );
 
 // Where an animal sprite stands inside a cage rect (origin 0.5, 1 — feet on
@@ -78,14 +125,25 @@ export function cageAnimalSpot(cage) {
   return { x: cage.x + cage.w / 2, y: cage.y + cage.h - 6 };
 }
 
-// Litter box lives in a back corner of the cat section now that the shared
-// playpen (issue #20) is gone — cats "use litter boxes" instead of the
-// general scoop (DESIGN.md). Kept as one shared box per section (not one per
-// cage) — a litter mess is still a "whole section" chore like it always was.
-export const LITTER_BOX = (() => {
-  const s = sectionByKey('cat').rect;
-  return { x: s.x + s.w - 46, y: s.y + s.h - 30, w: 40, h: 24 };
-})();
+// Small per-cage litter box (owner note 2026-07-29: "each cat cage should
+// have a small litter box, not a corner everyone litter box") — same
+// occupancy-driven create/destroy/reskin pattern as bowlSpotForCage/
+// BOWL_SPOTS below, just gated on species === 'cat' (KennelScene
+// ._refreshLitterBoxes) rather than the whole bowl-eligible list, and one
+// spot per cage instead of two (no separate water variant). Computed for
+// every section key (not just 'cat') because in generalized mode a cat can
+// end up settled in ANY section's nominal slot — mirrors exactly how
+// BOWL_SPOTS covers every key regardless of who's actually placed there.
+export const LITTER_BOX_SIZE = { w: 40, h: 24 };
+function litterBoxSpotForCage(cage) {
+  return { x: cage.x + cage.w * 0.26, y: cage.y + cage.h * 0.46 };
+}
+export const LITTER_SPOTS = Object.fromEntries(
+  Object.keys(CAGES).map((key) => [key, CAGES[key].map(litterBoxSpotForCage)]),
+);
+export const LITTER_SPOTS_UNIFIED = Object.fromEntries(
+  Object.keys(UNIFIED_CAGES).map((key) => [key, UNIFIED_CAGES[key].map(litterBoxSpotForCage)]),
+);
 
 // Scooper pickup prop — relocated out of the (now-removed) dog playpen to a
 // small stand in the hallway just outside the dog section's opening, since
@@ -113,8 +171,15 @@ export const SCOOPER_SPOT = (() => {
 function bowlSpotForCage(cage) {
   return { x: cage.x + cage.w - 6, y: cage.y + cage.h - 4 };
 }
+const BOWL_ELIGIBLE_KEYS = ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'];
 export const BOWL_SPOTS = Object.fromEntries(
-  ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'].map((key) => [key, CAGES[key].map(bowlSpotForCage)]),
+  BOWL_ELIGIBLE_KEYS.map((key) => [key, CAGES[key].map(bowlSpotForCage)]),
+);
+// Mix Cages counterpart (owner note 2026-07-29) — same per-slot corner spot,
+// computed against UNIFIED_CAGES' hall positions instead. KennelScene picks
+// whichever of these matches the live mode (see _activeBowlSpots).
+export const BOWL_SPOTS_UNIFIED = Object.fromEntries(
+  BOWL_ELIGIBLE_KEYS.map((key) => [key, UNIFIED_CAGES[key].map(bowlSpotForCage)]),
 );
 
 // Water bowl SPRITE spot (owner note 2026-07-29: "same with water bowls" —
@@ -127,7 +192,10 @@ function waterBowlSpotForCage(cage) {
   return { x: cage.x + 6, y: cage.y + cage.h - 4 };
 }
 export const WATER_BOWL_SPOTS = Object.fromEntries(
-  ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'].map((key) => [key, CAGES[key].map(waterBowlSpotForCage)]),
+  BOWL_ELIGIBLE_KEYS.map((key) => [key, CAGES[key].map(waterBowlSpotForCage)]),
+);
+export const WATER_BOWL_SPOTS_UNIFIED = Object.fromEntries(
+  BOWL_ELIGIBLE_KEYS.map((key) => [key, UNIFIED_CAGES[key].map(waterBowlSpotForCage)]),
 );
 
 // Turtle feeding spot (issue #20 follow-up): a little lettuce-leaf marker at

@@ -27,6 +27,21 @@ export const ROOM = { y: 380, w: 1440, h: 1000 }; // the kennel building interio
 
 export const OUTSIDE = { x: ROOM.w, w: 700 }; // grass strip east of the building
 
+// ── Cage Hall (Mix Cages mode, owner note 2026-07-29: "make the whole place
+// just a big grid of empty cages with halls... between them", "get rid of
+// the area backgrounds and stuff (but only in multi-cage mode)") ───────────
+// A brand-new room appended south of ROOM's own south wall (same
+// shares-the-neighbor's-wall trick BACK_WING uses against ROOM's north wall),
+// existing purely to hold the unified 8x6 cage grid data/props.js builds for
+// generalized ("Mix Cages") mode. It's always physically present in the
+// world (built once in KennelScene, like every other room) — normal ("By
+// Type") mode just never puts anything in it, since normal mode keeps using
+// the original 8 SECTIONS/CAGES below completely untouched. Reached via
+// CAGE_HALL_DOOR, a new gap in ROOM's south wall (distinct from FRONT_DOOR,
+// which stays purely visual).
+export const CAGE_HALL = { x: 0, y: ROOM.y + ROOM.h, w: ROOM.w, h: 1090 };
+export const CAGE_HALL_DOOR = { x0: 900, x1: 1040 };
+
 // Back wing (issue #13, repositioned north by issue #23): a two-room area
 // above the main kennel building — a supply-storage room and the player's
 // house/kitchen. It shares ROOM's north wall as its own south wall (no
@@ -62,7 +77,7 @@ export const HOUSE_ROOM = {
   w: BACK_WING.x + BACK_WING.w - WALL - (WING_DIVIDE_X + WALL / 2), h: BACK_WING.h - WALL * 2,
 };
 
-export const WORLD = { w: ROOM.w + OUTSIDE.w, h: ROOM.y + ROOM.h };
+export const WORLD = { w: ROOM.w + OUTSIDE.w, h: ROOM.y + ROOM.h + CAGE_HALL.h };
 
 // Fixed capacity of individual cages/tank-slots per section (issue #18) —
 // once a section holds 6 settled stays, that species quietly stops arriving
@@ -161,15 +176,30 @@ export function penRects({ rect, opening }) {
 
 // Outer building walls; the east wall splits around the back-door gap, the
 // north wall splits around the staff-door gap up into the back wing (issue
-// #13, repositioned north by issue #23).
+// #13, repositioned north by issue #23), and the south wall now also splits
+// around CAGE_HALL_DOOR (the new Cage Hall's entrance, see CAGE_HALL above)
+// — FRONT_DOOR stays purely visual/solid, unaffected.
 export function wallRects() {
   return [
     { x: 0, y: ROOM.y, w: STAFF_DOOR.x0, h: WALL },                                    // north (west of staff door)
     { x: STAFF_DOOR.x1, y: ROOM.y, w: ROOM.w - STAFF_DOOR.x1, h: WALL },                // north (east of staff door)
-    { x: 0, y: ROOM.y + ROOM.h - WALL, w: ROOM.w, h: WALL },                            // south
+    { x: 0, y: ROOM.y + ROOM.h - WALL, w: CAGE_HALL_DOOR.x0, h: WALL },                 // south (west of cage-hall door)
+    { x: CAGE_HALL_DOOR.x1, y: ROOM.y + ROOM.h - WALL, w: ROOM.w - CAGE_HALL_DOOR.x1, h: WALL }, // south (east of cage-hall door)
     { x: 0, y: ROOM.y, w: WALL, h: ROOM.h },                                            // west
     { x: ROOM.w - WALL, y: ROOM.y, w: WALL, h: BACK_DOOR.y0 - ROOM.y },                 // east (above door)
     { x: ROOM.w - WALL, y: BACK_DOOR.y1, w: WALL, h: ROOM.y + ROOM.h - BACK_DOOR.y1 },  // east (below door)
+  ];
+}
+
+// Cage Hall's own outer walls (south/west/east) — its north side is ROOM's
+// own south wall above (with CAGE_HALL_DOOR already carved there), same
+// shared-wall trick backWingWallRects uses against ROOM's north wall.
+export function cageHallWallRects() {
+  const { x, y, w, h } = CAGE_HALL;
+  return [
+    { x, y: y + h - WALL, w, h: WALL },   // south (own outer wall)
+    { x, y, w: WALL, h },                  // west
+    { x: x + w - WALL, y, w: WALL, h },    // east
   ];
 }
 
