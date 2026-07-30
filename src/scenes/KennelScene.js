@@ -15,7 +15,8 @@ import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
 import { findPath } from '../data/path.js';
 import { tickNeeds, clearNeed } from '../data/needs.js';
-import { tickBirth } from '../data/births.js';
+import { tickBirth, attachBirthTimer } from '../data/births.js';
+import { SPECIES, FAMILY } from '../data/species.js';
 import { pickWakeEvent, WAKE_REASON } from '../data/night.js';
 import { createAnimal } from '../data/animal.js';
 import { randomName } from '../data/names.js';
@@ -1911,6 +1912,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       stay.companions = [...stay.companions, ...babies];
       stay.needsAnnouncement = true;
       this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s eggs are hatching!`);
+    } else if (stay.animal.isPregnant && SPECIES[stay.animal.species].family === FAMILY.EGGS_OR_BABIES) {
+      // Owner note 2026-07-29 (issue #31): for an egg-laying species, the
+      // next phase after "pregnant" is laying eggs, not live babies
+      // appearing immediately — she sits on the eggs and hatching is its
+      // own later birth-ready event (the hasEggs branch above). No
+      // announcement yet; that's for when babies/hatchlings actually appear.
+      stay.animal.isPregnant = false;
+      stay.animal.hasEggs = true;
+      stay.animal.eggCount = 1 + Math.floor(Math.random() * 3);
+      attachBirthTimer(stay); // re-arm for the hatching event
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} laid her eggs!`);
     } else if (stay.animal.isPregnant) {
       stay.animal.isPregnant = false;
       const n = 1 + Math.floor(Math.random() * 2); // 1-2 babies
