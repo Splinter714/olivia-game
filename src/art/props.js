@@ -30,15 +30,46 @@ export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: '
 // One individual-cage texture key per section (issue #18, extended to
 // turtle/snake by issue #20) — every cage in a section is the same size
 // (data/props.js's CAGES grid), so one texture per section covers all 6.
+// Used in normal ("By Type") mode, where each section keeps its own
+// historical cell size.
 export const CAGE_KEY = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-${key}`]));
 
-// Issue #27 ("generalized cages" toggle): one neutral empty-slot texture per
-// section shape, shown for any cage with nobody currently assigned to it
-// while generalized mode is on — there's no species pre-assigned to an empty
-// cage anymore, so it gets a plain, un-themed look instead of e.g. an empty
-// turtle island or dog pen. Sized to match that section's own cage cell
-// (same w/h as CAGE_KEY[key]) so swapping textures never changes the fit.
-export const EMPTY_CAGE_KEY = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-empty-${key}`]));
+// Owner feedback after trying "Mix Cages" (2026-07-29): "cage sizes should
+// all be the same" — one uniform cell size used for every species' cage art
+// while generalized mode is on, instead of each section's own (very
+// different) cell size. Picked small enough to fit inside the tightest
+// slot in the building — the turtle/snake tank islands/perches (the
+// per-section cageArea math in data/props.js works out to roughly 72x63 for
+// those two) — so a uniform-sized cage never pokes outside its tank when
+// centered in its slot. Every other section's slot is comfortably bigger
+// than this, so the art just reads as a small, tidy, identical pen/tank/nest
+// wherever it sits.
+export const GENERALIZED_CAGE_W = 68;
+export const GENERALIZED_CAGE_H = 58;
+
+// One uniform-size texture per species, used only in generalized mode
+// (KennelScene._refreshCageArt draws whichever species is actually settled
+// in a cage at this size, centered in the cage's slot).
+export const CAGE_KEY_UNIFORM = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-uniform-${key}`]));
+
+// Issue #27 ("generalized cages" toggle), simplified per the 2026-07-29 owner
+// note ("they should all be the same type of cage at the beginning"): ONE
+// shared neutral/empty-slot texture (uniform size, no per-section shape)
+// shown for any cage with nobody currently assigned to it while generalized
+// mode is on — there's no species pre-assigned to an empty cage anymore, so
+// it gets a single plain, un-themed look everywhere instead of per-section
+// empty art.
+export const EMPTY_CAGE_KEY = 'prop-cage-empty';
+
+// Which draw function renders a given species' cage art — shared by the
+// normal-mode (per-section-sized) and generalized-mode (uniform-sized)
+// texture builds below so the two only ever differ in the w/h passed in.
+function cageDrawFn(key) {
+  if (key === 'turtle') return drawIslandSlot;
+  if (key === 'snake') return drawPerchSlot;
+  if (key === 'bird') return drawNestSlot;
+  return drawCagePen;
+}
 
 // Water tank with a glass-cover highlight along the top rim.
 function drawTank(g, w, h) {
@@ -359,10 +390,13 @@ export function buildPropTextures(scene) {
 
   for (const key of Object.keys(CAGES)) {
     const { w, h } = CAGES[key][0]; // every cage in a section shares one size
-    if (key === 'turtle') gen(scene, CAGE_KEY[key], w, h, (g) => drawIslandSlot(g, w, h));
-    else if (key === 'snake') gen(scene, CAGE_KEY[key], w, h, (g) => drawPerchSlot(g, w, h));
-    else if (key === 'bird') gen(scene, CAGE_KEY[key], w, h, (g) => drawNestSlot(g, w, h));
-    else gen(scene, CAGE_KEY[key], w, h, (g) => drawCagePen(g, w, h));
-    gen(scene, EMPTY_CAGE_KEY[key], w, h, (g) => drawEmptyCageSlot(g, w, h));
+    const draw = cageDrawFn(key);
+    gen(scene, CAGE_KEY[key], w, h, (g) => draw(g, w, h));
+    // Generalized-mode counterpart: same art, uniform size (owner note above).
+    gen(scene, CAGE_KEY_UNIFORM[key], GENERALIZED_CAGE_W, GENERALIZED_CAGE_H,
+      (g) => draw(g, GENERALIZED_CAGE_W, GENERALIZED_CAGE_H));
   }
+  // One shared empty-slot texture (uniform size) for generalized mode.
+  gen(scene, EMPTY_CAGE_KEY, GENERALIZED_CAGE_W, GENERALIZED_CAGE_H,
+    (g) => drawEmptyCageSlot(g, GENERALIZED_CAGE_W, GENERALIZED_CAGE_H));
 }

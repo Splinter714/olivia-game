@@ -31,7 +31,7 @@ import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY, CARRY_DISPLAY_SCALE } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, SNAKE_TANK_KEY, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, EMPTY_CAGE_KEY,
+  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_KEY_UNIFORM, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY,
   LETTUCE_KEY, YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
@@ -249,11 +249,19 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       });
     }
 
-    // Outer walls + every section's pen walls, tiled with the same wall texture.
-    const wallLike = [...wallRects(), ...SECTIONS.flatMap((s) => penRects(s))];
-    for (const r of wallLike) {
+    // Outer building walls (perimeter, back-wing, yard fence) — these never
+    // toggle with generalized mode, only the internal section-dividing pen
+    // walls below do (owner note 2026-07-29: "By Type" mode should read as
+    // one open room, no separator areas).
+    for (const r of wallRects()) {
       this.add.tileSprite(r.x, r.y, r.w, r.h, 'tile-wall').setOrigin(0, 0).setDepth(0);
     }
+
+    // Internal pen walls dividing the sections from each other — kept as a
+    // handle list so _applyCageMode can hide/show them live (their arcade
+    // colliders are toggled the same way in _rebuildPenCollision).
+    this._penWallSprites = SECTIONS.flatMap((s) => penRects(s)).map((r) =>
+      this.add.tileSprite(r.x, r.y, r.w, r.h, 'tile-wall').setOrigin(0, 0).setDepth(0));
 
     // Outside fence.
     for (const r of outsideFenceRects()) {
@@ -475,42 +483,78 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
   }
 
   // Neutralizes (or restores) the section-level species theming: floor
-  // colours + labels. Deliberately leaves every wall/cage rect exactly where
-  // it is — only the presentation changes, live, no scene rebuild.
+  // colours + labels, the internal pen walls (drawn art + arcade colliders),
+  // and each cage's own size/art. Deliberately leaves every OUTER building
+  // wall and every cage SLOT POSITION exactly where it is — only the
+  // presentation (and, for pen walls, the walkability) changes, live, no
+  // scene rebuild.
   _applyCageMode() {
     for (const s of SECTIONS) {
       this._sectionFloors[s.key]?.setTexture(this.generalizedCages ? 'floor-neutral' : `floor-${s.key}`);
       this._sectionLabels[s.key]?.setVisible(!this.generalizedCages);
     }
+    // Owner note 2026-07-29: "By Type" (generalized) mode should read as one
+    // open room — hide the section-dividing pen walls (both the drawn tiles
+    // and their arcade colliders) while it's on, restore them the instant
+    // it's switched back off.
+    this._penWallSprites?.forEach((spr) => spr.setVisible(!this.generalizedCages));
+    this._rebuildPenCollision();
     this._refreshCageArt();
   }
 
-  // Re-textures every individual cage: in normal mode, always its section's
-  // native look. In generalized mode, whoever's actually settled there gets
-  // her OWN species' cage art (a turtle in any cage still gets tank-style
-  // rendering, etc.) and an empty slot gets the neutral empty-cage look —
-  // only section-level organization/labeling is neutralized, never each
-  // occupied cage's own furniture style.
+  // Re-textures (and, in generalized mode, re-sizes) every individual cage.
+  //
+  // Normal mode: always the section's own native look, at that section's own
+  // historical cell size (unchanged from before this pass).
+  //
+  // Generalized mode (owner note 2026-07-29): every cage is the SAME uniform
+  // size (GENERALIZED_CAGE_W/H), centered inside its slot rect so it never
+  // exceeds even the tightest slot (the turtle/snake tank islands/perches).
+  // Whoever's actually settled there "snaps to" her OWN species' cage art at
+  // that uniform size (a turtle always gets a little water-tank-with-sand
+  // island, a snake her tank perch, etc.) with a quick scale-pop tween the
+  // moment the art actually changes; an empty slot gets the single shared
+  // neutral empty-cage look. Only section-level organization/labeling is
+  // neutralized — never each occupied cage's own furniture style.
   _refreshCageArt() {
     if (!this._cageImgs) return;
     for (const key of Object.keys(this._cageImgs)) {
       this._cageImgs[key].forEach((img, slot) => {
-        if (!this.generalizedCages) { img.setTexture(CAGE_KEY[key]); return; }
+        const cage = CAGES[key][slot];
+        if (!this.generalizedCages) {
+          img.setTexture(CAGE_KEY[key]).setOrigin(0, 0).setPosition(cage.x, cage.y);
+          return;
+        }
         const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
-        img.setTexture(occupant ? CAGE_KEY[occupant.animal.species] : EMPTY_CAGE_KEY[key]);
+        const texKey = occupant ? CAGE_KEY_UNIFORM[occupant.animal.species] : EMPTY_CAGE_KEY;
+        const changed = img.texture.key !== texKey;
+        img.setTexture(texKey).setOrigin(0.5, 0.5)
+          .setPosition(cage.x + cage.w / 2, cage.y + cage.h / 2);
+        if (changed) this._snapCagePop(img);
       });
     }
   }
 
+  // "Kinda snap to" beat (owner note 2026-07-29): a brief scale-pop when a
+  // cage's art actually changes (an animal settles in, checks out, or a
+  // different species takes over a freed slot) — not a full animation
+  // system, just a quick in-then-settle tween so the texture swap reads as a
+  // deliberate transition rather than a flat instant change.
+  _snapCagePop(img) {
+    img.setScale(0.55);
+    this.tweens.add({
+      targets: img, scale: 1.12, duration: 130, ease: 'Back.Out',
+      onComplete: () => this.tweens.add({ targets: img, scale: 1, duration: 100, ease: 'Sine.easeOut' }),
+    });
+  }
+
   _buildCollision() {
-    // Every rect a body can't walk through — feeds both the arcade static
-    // colliders below and findPath's obstacle-aware routing. The litter box,
-    // scooper, and bowls stay non-solid on purpose — they're small
-    // furniture, not walls, and keeping them out of pathfinding avoids extra
-    // routing complexity for a first pass.
-    this.obstacleRects = [
+    // Obstacles that ALWAYS block movement, regardless of cage mode — the
+    // outer building walls, big furniture, and outside fence. Internal pen
+    // walls are handled separately below (_rebuildPenCollision) since only
+    // those toggle off in generalized mode.
+    this._outerObstacleRects = [
       ...wallRects(),
-      ...SECTIONS.flatMap((s) => penRects(s)),
       RECEPTION.desk,
       TURTLE.tank,
       SNAKE.tank,
@@ -521,12 +565,33 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
 
     this.physics.world.setBounds(0, 0, WORLD.w, WORLD.h);
     this.walls = this.physics.add.staticGroup();
-    for (const r of this.obstacleRects) {
-      const zone = this.add.zone(r.x + r.w / 2, r.y + r.h / 2, r.w, r.h);
-      this.physics.add.existing(zone, true);
-      this.walls.add(zone);
-    }
+    for (const r of this._outerObstacleRects) this._addWallZone(r, this.walls);
 
+    // Internal section-dividing pen walls — their own static group so they
+    // can be cleared/rebuilt live when generalized mode toggles, without
+    // touching the always-on `this.walls` group above.
+    this.penWalls = this.physics.add.staticGroup();
+    this._rebuildPenCollision();
+  }
+
+  _addWallZone(r, group) {
+    const zone = this.add.zone(r.x + r.w / 2, r.y + r.h / 2, r.w, r.h);
+    this.physics.add.existing(zone, true);
+    group.add(zone);
+    return zone;
+  }
+
+  // (Re)builds the internal pen-wall colliders: present in normal mode,
+  // absent in generalized mode (owner note 2026-07-29 — see _applyCageMode).
+  // Also recomputes this.obstacleRects/this._collides, the shared "what
+  // blocks a body" list used by both arcade physics and findPath's routing.
+  _rebuildPenCollision() {
+    this.penWalls.clear(true, true);
+    this._penObstacleRects = SECTIONS.flatMap((s) => penRects(s));
+    if (!this.generalizedCages) {
+      for (const r of this._penObstacleRects) this._addWallZone(r, this.penWalls);
+    }
+    this.obstacleRects = [...this._outerObstacleRects, ...(this.generalizedCages ? [] : this._penObstacleRects)];
     this._collides = (x, y, r) => this.obstacleRects.some((rect) => circleRectOverlap(x, y, r, rect));
   }
 
@@ -543,6 +608,9 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     this.player.setDepth(startY);
 
     this.physics.add.collider(this.player, this.walls);
+    // Internal pen walls are their own group (see _buildCollision) so they
+    // can be cleared/rebuilt live when generalized mode toggles.
+    this.physics.add.collider(this.player, this.penWalls);
   }
 
   // ── Roster rendering (issues #4 arrivals, #5 carrying) ──────────────────────
@@ -1045,7 +1113,14 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     });
   }
 
-  _checkDropoff() {
+  // `interactPressed` is only consulted by the generalized-mode reception
+  // branch below (owner note 2026-07-29: placing a fresh arrival into a
+  // specific open cage needs an explicit interact press — same convention as
+  // every other interaction in the game — instead of happening automatically
+  // just from walking near an open cage). Every other drop-off path (normal
+  // mode's species-section walk-in, and bringing an animal back in from the
+  // yard) is unaffected and keeps its existing walk-up-and-it-happens feel.
+  _checkDropoff(interactPressed) {
     const stay = this.carrying;
     if (this._carryOrigin === LOCATION.YARD) {
       // Bringing her back inside — only her own section (cage) will accept
@@ -1071,6 +1146,10 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       if (this.generalizedCages) {
         const found = this._findOpenCageNear(this.player.x, this.player.y);
         if (!found) return;
+        // Owner note 2026-07-29: proximity alone only highlights/targets the
+        // nearest open cage — actually placing her there needs an interact
+        // press, same as picking up an arrival or feeding a bowl.
+        if (!interactPressed) return;
         if (this._dropOff(stay, found.section, { fromReception: true, cageSlot: found.slot })) this._carryOrigin = null;
         return;
       }
@@ -2131,7 +2210,7 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     const interactPressed = this.controls.interactJustDown();
     if (this.carrying) {
       this._followCarry();
-      this._checkDropoff();
+      this._checkDropoff(interactPressed);
     } else if (this.leashedDog) {
       this._updateLeashedDog();
     } else if (this.carryingDivider) {
