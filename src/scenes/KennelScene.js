@@ -2606,6 +2606,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // pickup, registered earlier in the loop), so interacting with her
       // silently picked her up instead of ever triggering the birth.
       if (stay.birthReady) continue;
+      // Issue #37: same tie-break issue as birthReady above — a mom with
+      // new babies not yet photographed sits at this same sprite position;
+      // without this guard interacting with her always picked her up
+      // instead of ever taking the photo.
+      if (stay.needsAnnouncement && !stay.photoTaken) continue;
       // Owner note 2026-07-29: "the interact location for an animal that
       // is outside playing doesn't move with their visual... it should
       // move with them" — she wanders within her bounds (_updateWander),
