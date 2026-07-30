@@ -1142,7 +1142,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   }
 
   _placeAtReception(stay) {
-    const waiting = this.roster.stays.filter((s) => s !== stay && s.location === LOCATION.RECEPTION).length;
+    // Count only ALREADY-RENDERED reception stays (i.e. she has a sprite in
+    // _staySprites), not every stay whose `location` merely reads RECEPTION —
+    // roster.js sets that the instant a stay is created, well before her
+    // owner's ~1.5s walk-in animation finishes and _placeAtReception actually
+    // runs for her. Without this, two arrivals spawned back-to-back (the
+    // "occasionally two" roll in _onHourChange) each counted the OTHER
+    // still-mid-walk stay as "already waiting" and computed the identical
+    // grid slot, landing both pets on top of each other.
+    const waiting = this.roster.stays.filter((s) => s !== stay && s.location === LOCATION.RECEPTION && this._staySprites.has(s)).length;
     const { rug } = RECEPTION;
     const x = rug.x + 30 + (waiting % 3) * 55;
     const y = rug.y + 24 + Math.floor(waiting / 3) * 42;
