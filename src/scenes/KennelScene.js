@@ -232,6 +232,21 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
         backgroundColor: '#ffffffcc',
         padding: { x: 6, y: 3 },
       }).setOrigin(0.5, 0).setDepth(50);
+
+      // Dev tool (src/dev/dragTool.js): a draggable "area handle" standing in
+      // for this whole section's rect — the floor tile above is Graphics-
+      // backed, not a movable Image, so there's nothing else to grab that
+      // represents "the section" as a whole (only its individual furniture,
+      // registered separately in _buildProps). The handle is a plain {x, y}
+      // — no texture, no footprint on the scene when the tool is off — kept
+      // at the rect's own origin so its exported {x, y} pastes straight over
+      // SECTIONS[i].rect.x/.rect.y in sections.js.
+      this._devRegistry.push({
+        name: `SECTIONS.${s.key}.rect`,
+        obj: { x, y },
+        kind: 'area',
+        rectSize: { w, h },
+      });
     }
 
     // Outer walls + every section's pen walls, tiled with the same wall texture.
@@ -387,8 +402,13 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
   // (populated above, right where each object is actually placed) into the
   // drag tool's live target list. Filters out anything whose `obj` isn't
   // currently on screen (e.g. the scooper while it's in the player's hands).
+  // `kind`/`rectSize` pass through for the section-area handles (see
+  // _drawWorld) — dragTool.js draws/exports those differently from ordinary
+  // furniture props.
   _devDragTargets() {
-    return this._devRegistry.map((e) => ({ name: e.name, obj: e.obj })).filter((e) => e.obj);
+    return this._devRegistry
+      .map((e) => ({ name: e.name, obj: e.obj, kind: e.kind, rectSize: e.rectSize }))
+      .filter((e) => e.obj);
   }
 
   // (Re)creates the resting scooper sprite at its current rest spot — called
