@@ -34,6 +34,22 @@ export const CARRY_KIND = {
 
 const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 
+// A stay still "occupies" `sectionKey`'s capacity even while she's out
+// playing in the yard (issue #20) — she kept her `cageSlot` when she was
+// carried out (see KennelScene._pickUp/_dropOffToYard, neither of which
+// clears it) and she's coming back to that same section. Without this, a
+// yard trip looked like it freed up a slot: a NEW arrival of the same
+// species could fill the section back up to CAGES_PER_SECTION while she was
+// still out, and then bringing her back inside (or the forced night recall,
+// KennelScene._recallYardToCages) would find the section "full" with
+// nowhere to put her, falling back to an overlapping generic grid spot. A
+// section's key equals its species key (data/sections.js's SECTIONS), so a
+// yard stay "belongs" to `sectionKey` whenever her species matches it.
+function belongsToSection(stay, sectionKey) {
+  if (stay.location === sectionKey) return true;
+  return stay.location === LOCATION.YARD && stay.animal.species === sectionKey;
+}
+
 // Issue #18: picks the first open cage slot (0..CAGES_PER_SECTION-1) in
 // `sectionKey` among `stays`, or null if all 6 are taken. Called by KennelScene
 // on drop-off (data/props.js's CAGES holds the actual on-screen rect per slot;
@@ -42,7 +58,7 @@ const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 // automatically at checkout since roster.checkoutDue() removes her from `stays`.
 export function assignCageSlot(stays, sectionKey) {
   const used = new Set(
-    stays.filter((s) => s.location === sectionKey && s.cageSlot != null).map((s) => s.cageSlot),
+    stays.filter((s) => belongsToSection(s, sectionKey) && s.cageSlot != null).map((s) => s.cageSlot),
   );
   for (let i = 0; i < CAGES_PER_SECTION; i++) if (!used.has(i)) return i;
   return null;
@@ -145,9 +161,12 @@ export function createRoster() {
   // Issue #18: a section has a fixed CAGES_PER_SECTION (6) individual cages —
   // once every cage is taken by a settled stay, that species quietly stops
   // arriving (no queue, no penalty, no notification) until a checkout frees
-  // one up. Reception/carrying stays don't count — they haven't taken a cage yet.
+  // one up. Reception/carrying stays don't count — they haven't taken a cage
+  // yet. A stay out in the yard DOES still count against her own section
+  // (see belongsToSection above) — she still owns her cage, she's just out
+  // playing in it for now.
   function isSectionFull(sectionKey) {
-    return stays.filter((s) => s.location === sectionKey).length >= CAGES_PER_SECTION;
+    return stays.filter((s) => belongsToSection(s, sectionKey)).length >= CAGES_PER_SECTION;
   }
 
   // Spawns one new arrival (an owner dropping off a pet). ~40% of the time it's

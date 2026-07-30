@@ -871,16 +871,16 @@ export default class KennelScene extends Phaser.Scene {
       if (!section) return;
       const { x, y, w, h } = section.rect;
       if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
-      this._dropOff(stay, section);
-      this._carryOrigin = null;
+      // _dropOff returns false (and leaves her in the player's hands) if the
+      // section's 6 cages are all already taken — see its own comment.
+      if (this._dropOff(stay, section)) this._carryOrigin = null;
     } else if (this._carryOrigin === LOCATION.RECEPTION) {
       // A fresh arrival — walking into her own section settles her into a cage.
       const section = SECTIONS.find((s) => s.key === stay.animal.species);
       if (!section) return;
       const { x, y, w, h } = section.rect;
       if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
-      this._dropOff(stay, section, { fromReception: true });
-      this._carryOrigin = null;
+      if (this._dropOff(stay, section, { fromReception: true })) this._carryOrigin = null;
     } else {
       // Picked up from her own cage to take out to play — only the yard
       // will accept her (so picking her up doesn't instantly re-drop her
@@ -891,7 +891,29 @@ export default class KennelScene extends Phaser.Scene {
     }
   }
 
+  // Returns true if the drop-off happened, false if it was declined (section
+  // full — see below), so _checkDropoff knows whether to keep carrying her.
   _dropOff(stay, section, opts = {}) {
+    // Issue #18/#20: don't accept the drop if every one of this section's 6
+    // cages is already taken by another stay — that used to fall through to
+    // assignCageSlot returning null and _sectionSlot's generic grid fallback,
+    // which doesn't know the section's actual cage/tank layout and could
+    // place her overlapping another animal or the cage/tank furniture. This
+    // can happen even though arrivals stop once a section is full, because
+    // the player can still manually carry an already-settled animal back
+    // in from the yard (or, rarely, a fresh reception arrival) into a
+    // section that filled up in the meantime. Treat it like walking into
+    // any other non-accepting spot: nothing happens, she stays in the
+    // player's hands, and a light notification explains why.
+    const cageSlot = assignCageSlot(this.roster.stays, section.key);
+    if (cageSlot == null) {
+      const now = this.time.now;
+      if (now - (this._fullSectionNotifyAt || 0) > 1500) {
+        this._fullSectionNotifyAt = now;
+        this.game.events.emit(EVENTS.NOTIFY, `${section.label} is full right now!`);
+      }
+      return false;
+    }
     this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
     this._carryVisual = null;
     this.carrying = null;
@@ -900,9 +922,9 @@ export default class KennelScene extends Phaser.Scene {
     // mid-carry when night fell) still needs tucking in, same as everyone
     // else (issue #11).
     if (this.night.active) stay.tuckedIn = stay.tuckedIn ?? false;
-    // Issue #18: auto-assign her into the first open individual cage in this
-    // section (companions/babies share it, same as today's "near mom" render).
-    stay.cageSlot = assignCageSlot(this.roster.stays, section.key);
+    // Issue #18: assign her into the open individual cage found above
+    // (companions/babies share it, same as today's "near mom" render).
+    stay.cageSlot = cageSlot;
     const pos = this._sectionSlot(section, stay);
     // Issue #21: a fresh arrival (not a yard-return) resolves out of her
     // carry container right here — a quick fade+shrink "let out of the box/
@@ -912,6 +934,7 @@ export default class KennelScene extends Phaser.Scene {
       this._playUnboxing(pos.x, pos.y, stay.carryKind);
     }
     this._renderStay(stay, pos.x, pos.y);
+    return true;
   }
 
   // The container art fades and shrinks away at the drop-off spot — a small,
@@ -998,7 +1021,17 @@ export default class KennelScene extends Phaser.Scene {
     this.carryingDivider = false;
     this._dividerVisual?.destroy();
     this._dividerVisual = null;
-    this.yardDividerY = Phaser.Math.Clamp(this.player.y, ROOM.y + 40, ROOM.y + ROOM.h - 40);
+    // Clamped to ROOM.y+64 / ROOM.y+ROOM.h-64, not +40/-40: _yardZoneRect
+    // below enforces a 40px-tall minimum per zone, and with only a 40px
+    // clamp margin the divider could sit close enough to the top/bottom
+    // wall that the true available space for that zone was LESS than 40px
+    // (as little as 16px at the old clamp) — the enforced minimum then made
+    // the zone rect extend past the fence line into the other zone, so a
+    // dropped-off animal could land overlapping the fence or the far zone's
+    // occupants. +64/-64 leaves at least 50px of real space on the tight
+    // side (after _yardZoneRect's own 10px fence margin), so the max(40, …)
+    // floor never has to override the real geometry.
+    this.yardDividerY = Phaser.Math.Clamp(this.player.y, ROOM.y + 64, ROOM.y + ROOM.h - 64);
     this.dividerLineImg.setY(this.yardDividerY).setDepth(this.yardDividerY);
     this.dividerPostImg.setPosition((YARD_DIVIDER_X0 + YARD_DIVIDER_X1) / 2, this.yardDividerY)
       .setDepth(this.yardDividerY + 0.1).setVisible(true);
@@ -1526,7 +1559,14 @@ export default class KennelScene extends Phaser.Scene {
 
   // Brings anyone still out in the yard back inside to her own cage before
   // tuck-in starts (issue #20) — "you stay awake until every single animal
-  // is asleep" (DESIGN.md) applies to yard playtime too.
+  // is asleep" (DESIGN.md) applies to yard playtime too. Unlike a player-
+  // initiated drop-off (_dropOff), this recall is forced — she can't stay in
+  // the yard just because her cage is "full" — but that shouldn't actually
+  // happen: data/roster.js's assignCageSlot/isSectionFull now count a yard
+  // stay against her own section's capacity the whole time she's out, so a
+  // section can no longer fill up behind her back while she's playing.
+  // _sectionSlot's generic-grid fallback (see its own comment) stays in
+  // place as a last-resort safety net in case that invariant is ever violated.
   _recallYardToCages() {
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.YARD) continue;
