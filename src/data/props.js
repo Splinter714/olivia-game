@@ -168,8 +168,14 @@ export const COMPUTER_SPOT = {
 export const OVEN_SPOT = { x: HOUSE_ROOM.x + HOUSE_ROOM.w * 0.62, y: HOUSE_ROOM.y + HOUSE_ROOM.h * 0.36 };
 // Solid counter/oven obstacle — same idea as the reception desk.
 export const OVEN = { x: OVEN_SPOT.x - 24, y: OVEN_SPOT.y - 34, w: 56, h: 40 };
-// Where the baked treat tray appears, just beside the oven on the counter.
-export const TREAT_TRAY_SPOT = { x: OVEN_SPOT.x - 38, y: OVEN_SPOT.y + 2 };
+// Where the baked treat tray appears, sitting on the counter's own surface —
+// not on the floor. drawOven (art/props.js) draws the countertop strip at
+// local y 0.5h-0.62h within its 40px-tall sprite (origin 0,1 at OVEN_SPOT), so
+// the counter's top edge sits at world y = OVEN_SPOT.y - 40 + 0.5*40 =
+// OVEN_SPOT.y - 20; owner note 2026-07-29 ("the cookies just going on the
+// ground next to the oven is crazy") — the old spot (OVEN_SPOT.y + 2) was
+// below the whole sprite, on the floor.
+export const TREAT_TRAY_SPOT = { x: OVEN_SPOT.x - 10, y: OVEN_SPOT.y - 19 };
 
 // Fixed shelves/box/bag dressing scattered around the storage room.
 export const STORAGE_PROPS = [
