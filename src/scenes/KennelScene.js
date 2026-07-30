@@ -22,12 +22,13 @@ import { pickWanderInterval, wanderAmplitude } from '../data/wander.js';
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
+import { buildOwnerTexture, OWNER_W } from '../art/owner.js';
 import {
   buildAnimalTextures, ensureAnimalTextures, ANIMAL_DISPLAY_SCALE, EGG_KEY,
 } from '../art/animals.js';
 import { resolveTieBreakers, effectiveLook } from '../data/distinguish.js';
 import { lookId } from '../data/coats.js';
-import { buildCarryTextures, CARRY_KEY } from '../art/carry.js';
+import { buildCarryTextures, CARRY_KEY, CARRY_DISPLAY_SCALE } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, SNAKE_TANK_KEY, LITTER_BOX_KEY,
   SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY,
@@ -89,6 +90,7 @@ export default class KennelScene extends Phaser.Scene {
     buildFloorTile(this, 'floor-storage', 0xcbb994, 0xbfa987);
     buildFloorTile(this, 'floor-house', 0xf5ecd8, 0xe8dfc8);
     buildPlayerTexture(this);
+    buildOwnerTexture(this);
     buildAnimalTextures(this);
     buildCarryTextures(this);
     buildPropTextures(this);
@@ -134,7 +136,7 @@ export default class KennelScene extends Phaser.Scene {
     this._staySprites = new Map(); // stay -> { pos, sprite, tag:{container,width,height}, extras:[...], babyLabels:[...], needIcons:{}, wanderBounds }
     this.carrying = null;          // the stay currently in the player's hands, or null
     this._carryOrigin = null;      // where `carrying` was picked up from: 'reception' | sectionKey | LOCATION.YARD
-    this._carryVisual = null;      // { obj } following the player while carrying
+    this._carryVisual = null;      // { parts: [{obj, dx, dy}, ...] } following the player while carrying
     this.leashedDog = null;        // the dog stay currently being walked outside (issue #19), or null
     this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
 
@@ -399,9 +401,60 @@ export default class KennelScene extends Phaser.Scene {
     // Issue #18: null means that species' section is full (all 6 cages
     // taken) — quietly skip this roll, no queue/penalty/notification.
     if (!stay) return;
-    this._placeAtReception(stay);
-    this._syncTieBreakers(); // a new guest may now match someone already here
-    this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived!`);
+    this._runOwnerDropOff(stay);
+  }
+
+  // Issue #21: a new arrival isn't just placed at reception out of thin air —
+  // a simple owner NPC walks her in through the front door, carrying/leading
+  // her (leash/carrier/box/basket, or just holding her for a CARRY_KIND.NONE
+  // species), sets her down at reception, then walks back out and despawns.
+  // The NOTIFY (and the real reception render) fire once she's actually
+  // there, same timing the old instant-placement had — just after a short
+  // walk instead of immediately.
+  _runOwnerDropOff(stay) {
+    const doorX = (FRONT_DOOR.x0 + FRONT_DOOR.x1) / 2;
+    const doorY = ROOM.y + ROOM.h - WALL - 2;
+    const { rug } = RECEPTION;
+    const deskX = rug.x + rug.w / 2;
+    const deskY = rug.y + rug.h * 0.3;
+
+    const owner = this.add.sprite(doorX, doorY, 'owner-npc').setOrigin(0.5, 1).setDepth(doorY);
+
+    // She visibly carries the container/animal in with her — the same prop
+    // that will sit at reception once she sets it down, so the hand-off
+    // reads as continuous rather than the pet just popping into existence.
+    let carryProp;
+    if (stay.carryKind !== CARRY_KIND.NONE) {
+      carryProp = this.add.image(owner.x, owner.y, CARRY_KEY[stay.carryKind])
+        .setOrigin(0.5, 1).setScale(CARRY_DISPLAY_SCALE);
+    } else {
+      carryProp = this._addAnimalSprite(owner.x, owner.y, stay.animal, stay.animal.stage, this._tieBreakers());
+    }
+    const followOwner = () => {
+      carryProp.x = owner.x + OWNER_W * 0.4;
+      carryProp.y = owner.y;
+      carryProp.setDepth(owner.depth + 1);
+    };
+    followOwner();
+
+    this.tweens.add({
+      targets: owner, x: deskX, y: deskY, duration: 1500, ease: 'Sine.easeInOut',
+      onUpdate: () => { owner.setDepth(owner.y); followOwner(); },
+      onComplete: () => {
+        carryProp.destroy();
+        this._placeAtReception(stay);
+        this._syncTieBreakers(); // a new guest may now match someone already here
+        this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived!`);
+
+        this.time.delayedCall(500, () => {
+          this.tweens.add({
+            targets: owner, x: doorX, y: doorY, duration: 1500, ease: 'Sine.easeInOut',
+            onUpdate: () => owner.setDepth(owner.y),
+            onComplete: () => owner.destroy(),
+          });
+        });
+      },
+    });
   }
 
   _placeAtReception(stay) {
@@ -478,6 +531,41 @@ export default class KennelScene extends Phaser.Scene {
     return sprite;
   }
 
+  // Issue #21: draws a stay's own animal sprite composed with her carry
+  // container (leash/cage/box/basket) rather than standing bare — used
+  // whenever she's still "arriving" (at reception) so she reads as freshly
+  // dropped off, not already settled in. Returns the animal sprite (callers
+  // hang name tags/companions off it same as any other render) plus every
+  // extra display object the container art added, for the caller's own
+  // cleanup list.
+  //
+  // LEASH: she stands beside her leash (no overlap needed). CAGE: the
+  // carrier's solid shell is drawn IN FRONT of her (same anchor point) with a
+  // see-through wire door, so she visibly peeks out rather than standing
+  // free. BOX/BASKET: the open terrarium-style carrier sits BEHIND her (or
+  // her eggs, drawn separately by the caller) — she's simply sitting inside
+  // a low, see-through tray, nothing needs to occlude her.
+  _addContainedAnimal(x, y, stay, tb) {
+    const { animal, carryKind } = stay;
+    const extras = [];
+    if (carryKind === CARRY_KIND.LEASH) {
+      const sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
+      const lx = x + sprite.displayWidth * 0.6;
+      extras.push(this.add.image(lx, y, CARRY_KEY[carryKind]).setOrigin(0.5, 1).setScale(CARRY_DISPLAY_SCALE).setDepth(y - 0.5));
+      return { sprite, extras };
+    }
+    if (carryKind === CARRY_KIND.CAGE) {
+      const sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
+      extras.push(this.add.image(x, y, CARRY_KEY[carryKind]).setOrigin(0.5, 1).setScale(CARRY_DISPLAY_SCALE).setDepth(y + 0.5));
+      return { sprite, extras };
+    }
+    // BOX / BASKET — open carrier drawn behind her (and behind the eggs the
+    // caller adds separately for the basket case).
+    extras.push(this.add.image(x, y, CARRY_KEY[carryKind]).setOrigin(0.5, 1).setScale(CARRY_DISPLAY_SCALE).setDepth(y - 0.5));
+    const sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
+    return { sprite, extras };
+  }
+
   // A cheap string capturing every look decision this stay's render depended
   // on, so a later arrival that changes them can trigger a redraw.
   _lookSignature(stay, tieBreakers) {
@@ -505,7 +593,20 @@ export default class KennelScene extends Phaser.Scene {
     this._destroyStaySprites(stay);
     const { animal } = stay;
     const tb = this._tieBreakers();
-    const sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
+    // Issue #21: a fresh arrival still waiting at reception shows contained
+    // in her leash/carrier/box/basket from the moment she appears, not as a
+    // bare animal — she only "comes out" once dropped off into her section
+    // (see _dropOff/_playUnboxing). CARRY_KIND.NONE species (guinea pig/
+    // hamster/bunny/bird-without-eggs) are just gently held either way, per
+    // DESIGN.md, so they always render bare.
+    const contained = stay.location === LOCATION.RECEPTION && stay.carryKind !== CARRY_KIND.NONE;
+    let sprite, containerExtras;
+    if (contained) {
+      ({ sprite, extras: containerExtras } = this._addContainedAnimal(x, y, stay, tb));
+    } else {
+      sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
+      containerExtras = [];
+    }
     const tag = this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
 
     // Issue #22 #3: scale family spacing to the actual cage/island/yard-zone
@@ -526,7 +627,7 @@ export default class KennelScene extends Phaser.Scene {
     // individual island/perch/nest (small space, plenty of room to share) —
     // tighter spacing than the wider spread used for cat/dog companions.
     const sharesHome = animal.species === 'turtle' || animal.species === 'snake' || animal.species === 'bird';
-    const extras = [];
+    const extras = [...containerExtras];
     const babyLabels = [];
     let cx = x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);
     if (animal.hasEggs) {
@@ -685,25 +786,36 @@ export default class KennelScene extends Phaser.Scene {
     this._destroyStaySprites(stay);
     stay.location = LOCATION.CARRYING;
     this.carrying = stay;
-    // Arrivals with a carry prop (leash/cage/box/basket) ride in that prop;
-    // everything else (small pets, or any settled animal taken out to play)
-    // is carried bare, so its own animated sprite rides along.
-    let obj;
+    // Arrivals with a carry prop (leash/cage/box/basket) ride in that prop,
+    // composed with her own sprite the same "contained" way she showed at
+    // reception (issue #21) — everything else (small pets, or any settled
+    // animal taken out to play) is carried bare, so just its own animated
+    // sprite rides along.
+    const anchorX = this.player.x, anchorY = this.player.y;
+    let sprite, extraObjs;
     if (this._carryOrigin === LOCATION.RECEPTION && stay.carryKind !== CARRY_KIND.NONE) {
-      obj = this.add.image(this.player.x, this.player.y, CARRY_KEY[stay.carryKind]).setOrigin(0.5, 1);
+      ({ sprite, extras: extraObjs } = this._addContainedAnimal(anchorX, anchorY, stay, this._tieBreakers()));
     } else {
-      obj = this._addAnimalSprite(this.player.x, this.player.y, stay.animal, stay.animal.stage, this._tieBreakers());
+      sprite = this._addAnimalSprite(anchorX, anchorY, stay.animal, stay.animal.stage, this._tieBreakers());
+      extraObjs = [];
     }
-    obj.setDepth(9500);
-    this._carryVisual = { obj };
+    // Every part follows the player as one group — record each part's offset
+    // from the shared anchor point at creation time so _followCarry can just
+    // re-apply it every frame without needing to know per-container layout.
+    const parts = [sprite, ...extraObjs].map((obj) => ({ obj, dx: obj.x - anchorX, dy: obj.y - anchorY }));
+    parts.forEach(({ obj }) => obj.setDepth(9500));
+    this._carryVisual = { parts };
   }
 
   _followCarry() {
     if (!this._carryVisual) return;
-    const { obj } = this._carryVisual;
-    obj.x = this.player.x;
-    obj.y = this.player.y - PLAYER_H * 0.55;
-    obj.setDepth(this.player.y + 1);
+    const ax = this.player.x;
+    const ay = this.player.y - PLAYER_H * 0.55;
+    this._carryVisual.parts.forEach(({ obj, dx, dy }, i) => {
+      obj.x = ax + dx;
+      obj.y = ay + dy;
+      obj.setDepth(this.player.y + 1 + i * 0.01);
+    });
   }
 
   _checkDropoff() {
@@ -722,7 +834,7 @@ export default class KennelScene extends Phaser.Scene {
       if (!section) return;
       const { x, y, w, h } = section.rect;
       if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
-      this._dropOff(stay, section);
+      this._dropOff(stay, section, { fromReception: true });
       this._carryOrigin = null;
     } else {
       // Picked up from her own cage to take out to play — only the yard
@@ -734,8 +846,8 @@ export default class KennelScene extends Phaser.Scene {
     }
   }
 
-  _dropOff(stay, section) {
-    this._carryVisual?.obj.destroy();
+  _dropOff(stay, section, opts = {}) {
+    this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
     this._carryVisual = null;
     this.carrying = null;
     stay.location = section.key;
@@ -747,7 +859,25 @@ export default class KennelScene extends Phaser.Scene {
     // section (companions/babies share it, same as today's "near mom" render).
     stay.cageSlot = assignCageSlot(this.roster.stays, section.key);
     const pos = this._sectionSlot(section, stay);
+    // Issue #21: a fresh arrival (not a yard-return) resolves out of her
+    // carry container right here — a quick fade+shrink "let out of the box/
+    // carrier" beat — before _renderStay draws her bare-in-cage look (which
+    // it does automatically now that her location is no longer 'reception').
+    if (opts.fromReception && stay.carryKind !== CARRY_KIND.NONE) {
+      this._playUnboxing(pos.x, pos.y, stay.carryKind);
+    }
     this._renderStay(stay, pos.x, pos.y);
+  }
+
+  // The container art fades and shrinks away at the drop-off spot — a small,
+  // simple "she's out and settled now" beat, not required to be elaborate.
+  _playUnboxing(x, y, carryKind) {
+    const img = this.add.image(x, y, CARRY_KEY[carryKind])
+      .setOrigin(0.5, 1).setScale(CARRY_DISPLAY_SCALE).setDepth(y + 0.5);
+    this.tweens.add({
+      targets: img, alpha: 0, scale: CARRY_DISPLAY_SCALE * 0.6, duration: 420, ease: 'Sine.easeIn',
+      onComplete: () => img.destroy(),
+    });
   }
 
   // Places a carried stay out in the yard to play (issue #20). Zone is
@@ -756,7 +886,7 @@ export default class KennelScene extends Phaser.Scene {
   // multiple occupants of the same zone are spread in a simple grid so they
   // don't stack.
   _dropOffToYard(stay) {
-    this._carryVisual?.obj.destroy();
+    this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
     this._carryVisual = null;
     this.carrying = null;
     stay.location = LOCATION.YARD;
