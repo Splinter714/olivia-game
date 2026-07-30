@@ -354,7 +354,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       const waitX = rug.x + rug.w + 40 + (idx % 3) * 40;
       const waitY = rug.y + 24 + Math.floor(idx / 3) * 42;
       const owner = this.add.sprite(waitX, waitY, 'owner-npc').setOrigin(0.5, 1).setDepth(waitY);
-      this._checkoutOwners.set(stay, { sprite: owner, arrived: true });
+      const tag = this._addNameTag(owner.x, owner.y - OWNER_W * 1.1, stay.animal.name);
+      tag.container.setVisible(true).setDepth(9000);
+      this._checkoutOwners.set(stay, { sprite: owner, tag, arrived: true });
     }
   }
 
@@ -709,7 +711,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const cages = CAGES;
     for (const key of Object.keys(this._bowlImgs)) {
       this._bowlImgs[key].forEach((existing, slot) => {
-        const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
+        const occupant = this.roster.stays.find((s) => belongsToSection(s, key) && s.cageSlot === slot);
         if (!occupant) {
           existing?.destroy();
           this._bowlImgs[key][slot] = null;
@@ -729,7 +731,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         this._snapCagePop(bowl);
       });
       this._waterBowlImgs[key].forEach((existing, slot) => {
-        const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
+        const occupant = this.roster.stays.find((s) => belongsToSection(s, key) && s.cageSlot === slot);
         if (!occupant) {
           existing?.destroy();
           this._waterBowlImgs[key][slot] = null;
@@ -760,7 +762,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const spots = LITTER_SPOTS;
     for (const key of Object.keys(this._litterImgs)) {
       this._litterImgs[key].forEach((existing, slot) => {
-        const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
+        const occupant = this.roster.stays.find((s) => belongsToSection(s, key) && s.cageSlot === slot);
         const isCat = occupant?.animal.species === 'cat';
         if (!isCat) {
           existing?.destroy();
@@ -1030,12 +1032,20 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const waitY = rug.y + 24 + Math.floor(waiting / 3) * 42;
 
     const owner = this.add.sprite(doorX, doorY, 'owner-npc').setOrigin(0.5, 1).setDepth(doorY);
-    const rec = { sprite: owner, arrived: false };
+    // Owner note 2026-07-29: "can we put pet names above the heads of the
+    // owners waiting to pick up their pets?" — so it's obvious at a glance
+    // which owner goes with which cage/pet.
+    const tag = this._addNameTag(owner.x, owner.y - OWNER_W * 1.1, stay.animal.name);
+    tag.container.setVisible(true).setDepth(9000);
+    const rec = { sprite: owner, tag, arrived: false };
     this._checkoutOwners.set(stay, rec);
 
     this.tweens.add({
       targets: owner, x: waitX, y: waitY, duration: 1500, ease: 'Sine.easeInOut',
-      onUpdate: () => owner.setDepth(owner.y),
+      onUpdate: () => {
+        owner.setDepth(owner.y);
+        tag.container.setPosition(owner.x, owner.y - OWNER_W * 1.1 - tag.height);
+      },
       onComplete: () => {
         rec.arrived = true;
         this.game.events.emit(EVENTS.NOTIFY, `It's time for ${stay.animal.name} to go home!`);
@@ -1057,6 +1067,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.carrying = null;
 
     if (rec) {
+      rec.tag?.container.destroy(); // the pet's gone now — no more name to show
       const doorX = (FRONT_DOOR.x0 + FRONT_DOOR.x1) / 2;
       const doorY = ROOM.y + ROOM.h - WALL - 2;
       this.tweens.add({
@@ -1210,17 +1221,32 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // size available, so a family "reads as together but with breathing
     // room" without spilling out of a small individual cage. `spread` is a
     // multiplier around a ~90px baseline cage width; opts.yardBounds covers
-    // the yard-play case (no cage lookup, but still bounded).
+    // the yard-play case (no cage lookup, but still bounded). This one stays
+    // keyed off stay.location on purpose — it's about where she's ACTUALLY
+    // physically standing right now (a cage, or a yard zone), for wander/
+    // spread bounds.
     const cage = CAGES[stay.location]?.[stay.cageSlot];
 
     // Nameplate anchor: a caged/tanked/nested stay (per issue #20's
     // unification, turtle islands/snake perches/bird nests all count) gets a
-    // FIXED plate mounted top-center of her specific cage rect, independent
-    // of wherever she currently wanders inside it — reads as a nameplate on
-    // the cage door, not a floating label. Anyone without a cage (waiting at
-    // reception, being carried, out playing in the yard) keeps the original
-    // behavior: the tag floats just above her current position.
-    const cageNameAnchor = cage ? { x: cage.x + cage.w / 2, y: cage.y + 18 } : null;
+    // FIXED plate mounted just below her cage's food/water bowls, independent
+    // of wherever she currently wanders inside it (or whether she's even
+    // there at all right now) — reads as a nameplate on the cage door, not a
+    // floating label. Anyone without a cage (waiting at reception, being
+    // carried) keeps the original behavior: the tag floats just above her
+    // current position.
+    //
+    // Bug fix (owner note 2026-07-29: "for assigned cages when there's an
+    // animal in the play-yard, the food/water bowls and name plate and all
+    // of that should stay put"): this used to reuse `cage` above, which is
+    // null the instant she's out playing (her `location` reads 'yard' then,
+    // even though the cage is still hers) — the nameplate would fall back to
+    // floating over her in the yard instead of staying on her cage. Looked
+    // up via `cageSection` instead (her actual home cage, set at drop-off
+    // and unchanged by a yard trip) so it stays put regardless of whether
+    // she's actually standing there right now.
+    const homeCage = CAGES[stay.cageSection]?.[stay.cageSlot];
+    const cageNameAnchor = homeCage ? { x: homeCage.x + homeCage.w / 2, y: homeCage.y + homeCage.h + 14 } : null;
     const tag = cageNameAnchor
       ? this._addNameTag(cageNameAnchor.x, cageNameAnchor.y, animal.name)
       : this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
@@ -2322,7 +2348,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (!rec) return;
     if (show) {
       if (rec.blanket) return;
-      const img = this.add.image(rec.pos.x, rec.pos.y - rec.sprite.displayHeight * 0.32, BLANKET_KEY)
+      // Bug fix (owner note 2026-07-29: "blankets should actually go ON the
+      // animals position") — this used rec.pos, her FIXED original drop-off
+      // spot, not rec.sprite.x/y, where she's actually currently standing
+      // after wandering. She stops wandering the instant she's tucked in
+      // (_updateWander's tuckedIn check), so her sprite position at THIS
+      // moment is exactly where the blanket needs to land and stay.
+      const img = this.add.image(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight * 0.32, BLANKET_KEY)
         .setOrigin(0.5, 0.5).setDepth(rec.sprite.depth + 0.3);
       img.setDisplaySize(rec.sprite.displayWidth * 1.3, rec.sprite.displayHeight * 0.85);
       rec.blanket = img;
