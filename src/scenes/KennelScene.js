@@ -1291,6 +1291,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // the yard branch existed before, so there was no way to set her back
       // down without a pointless round trip through the yard first.
       if (this.player.x >= OUTSIDE.x + 8) {
+        // Owner note 2026-07-29: being in the yard should only highlight/
+        // enable setting her down there — an explicit interact press is
+        // needed to actually place her, same as every other drop-off target,
+        // rather than auto-placing the instant she crosses into the yard.
+        if (!interactPressed) return;
         this._dropOffToYard(stay);
         this._carryOrigin = null;
         return;
