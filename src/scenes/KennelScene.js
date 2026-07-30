@@ -1787,7 +1787,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // generalized mode if she'd been kenneled somewhere else.
     const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.location || 'dog'));
     const pos = this._sectionSlot(section, stay);
+    // Bug fix: a dog can now be leash-grabbed straight out of the yard (her
+    // bathroom need no longer requires stay.location === 'dog' — see the
+    // matching fix in _checkInteractions). Restore her bookkeeping location
+    // back to her actual cage, not just her visual position — otherwise
+    // she'd render in her cage but still read as LOCATION.YARD everywhere
+    // else (_settledStays, section-full counts, cage art refresh, etc.).
+    stay.location = section.key;
     this._renderStay(stay, pos.x, pos.y);
+    this._refreshCageArt();
     this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} feels much better!`);
     // If this was the night's current "needs the bathroom" wake-up (issue
     // #11), the walk resolves it — resume toward morning.
@@ -2487,7 +2495,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       for (const stay of this.roster.stays) {
         const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
         if (!settled) continue;
-        if (stay.location === 'dog' && stay.needs.bathroom) continue;
+        // Bug fix: this used to check stay.location === 'dog', which broke
+        // the instant a dog could end up anywhere OTHER than a nominally
+        // "dog" cage slot or her actual species — i.e. any dog out in the
+        // yard (location === 'yard'), or one settled in a cage nominally
+        // keyed to a different species under "any pet, any cage" mixing.
+        // Her real species lives on the animal instance, not the slot.
+        if (stay.animal.species === 'dog' && stay.needs.bathroom) continue;
         // A mom flagged ready-and-waiting (birthReady, below) sits at this
         // same sprite position — without this guard, the tie in consider()
         // always resolves to whichever action was registered first (this
@@ -2536,8 +2550,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     // Issue #19: a dog who needs to go out gets her leash grabbed, not
     // whisked away automatically — walking her out is the player's job.
+    // Bug fix: check her real species (stay.animal.species), not
+    // stay.location — see the matching fix/comment above.
     for (const stay of this.roster.stays) {
-      if (stay.location !== 'dog' || !stay.needs.bathroom) continue;
+      if (stay.animal.species !== 'dog' || !stay.needs.bathroom) continue;
       const rec = this._staySprites.get(stay);
       if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._grabLeash(stay));
     }
