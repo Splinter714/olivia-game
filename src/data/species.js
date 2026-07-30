@@ -101,7 +101,12 @@ export const SPECIES = {
     key: 'dragon',
     label: '🐉 Dragon',
     family: FAMILY.EGGS_OR_BABIES,
-    size: { w: 20, h: 16 },
+    // w widened 20->29 to match art/animals.js's DRAGON_GEO.adult design
+    // grid, which grew for the longer S-curved tail (2026-07-29) — this
+    // `size` is what KennelScene uses for placement/spacing math, so it has
+    // to track the actual art grid or animals.js's buildAnimalTextures()
+    // guard warns about the drift.
+    size: { w: 29, h: 16 },
     babyScale: 0.6,
     secret: true,
   },
