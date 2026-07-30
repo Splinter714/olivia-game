@@ -68,6 +68,10 @@ const CAT_LITTER_INTERVAL = () => 25_000 + Math.random() * 25_000;
 // after a short while, leaving a mess to scoop (same as cat litter), and
 // her need clears — same interval family as the cat's litter timer.
 const DOG_YARD_INTERVAL = () => 8_000 + Math.random() * 7_000;
+// Issue #36 follow-up (owner note 2026-07-29: "don't have SO many owners
+// come to pick-up at once") — mirrors the arrival cap on simultaneous
+// lingering owners.
+const CHECKOUT_OWNER_CAP = 2;
 
 // Night sequence timings (issue #11) — the screen fades to black once
 // everyone's tucked in, fades back for each wake-up so the player can act,
@@ -989,7 +993,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // her up and carries her over to that waiting owner (_checkDropoff /
   // _completeCheckout below).
   _flagCheckoutsReady(day) {
-    for (const stay of this.roster.flagCheckoutReady(day)) {
+    // Owner note 2026-07-29: "don't have SO many owners come to pick-up at
+    // once" — cap simultaneous waiting checkout owners, same convention as
+    // arrivals' `_lingeringOwners.size >= 3` cap. A stay whose checkout is
+    // due but doesn't fit gets picked up again on a later hour tick once the
+    // player's delivered someone else and freed up room.
+    const room = Math.max(0, CHECKOUT_OWNER_CAP - this._checkoutOwners.size);
+    if (room === 0) return;
+    for (const stay of this.roster.flagCheckoutReady(day, room)) {
       this._setNeedIcon(stay, 'checkout', true);
       this._runOwnerCheckout(stay);
     }

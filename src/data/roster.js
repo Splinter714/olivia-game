@@ -297,9 +297,16 @@ export function createRoster(saved = null) {
   // the checkout (finalizeCheckout, below). This only flags; it doesn't touch
   // `stays`/`pool` at all. Idempotent — a stay already flagged is skipped, so
   // repeat hourly ticks can't re-flag/re-spawn an owner for her.
-  function flagCheckoutReady(day) {
+  // `limit` caps how many NEW stays get flagged this call (owner note
+  // 2026-07-29: "don't have SO many owners come to pick-up at once") — a stay
+  // whose checkout is due but who doesn't fit under the limit is simply left
+  // unflagged and picked up again on a later hour tick once room frees up
+  // (KennelScene passes room based on how many checkout owners are currently
+  // waiting), same idea as the arrival cap on simultaneous lingering owners.
+  function flagCheckoutReady(day, limit = Infinity) {
     const flagged = [];
     for (const stay of stays) {
+      if (flagged.length >= limit) break;
       if (stay.checkoutReady) continue;
       // A stay out playing in the yard, still at reception, or mid-carry
       // hasn't "settled" back into her cage yet — skip until she has (issue
