@@ -12,16 +12,31 @@
 // (Turtles' tank water level is deliberately NOT modeled here — it's a
 // section-level resource, not a per-animal need; see KennelScene's
 // turtleTankNeedsWater.)
-const FOOD_INTERVAL = () => 20_000 + Math.random() * 20_000;      // 20-40s
-const WATER_INTERVAL = () => 20_000 + Math.random() * 20_000;     // 20-40s, same kid-gentle pacing as food
+//
+// Owner note 2026-07-29 (issue #30): "food and water bowls should only need
+// filled maybe at MOST 3x per day" — food and water flip due TOGETHER, at
+// three fixed times of the game-day (real feeding times), rather than each
+// on its own random real-time countdown. `timers.nextFeedAt` is an absolute
+// game hour (day*24 + hourFloat), compared against the clock every tick.
+const FEED_HOURS = [7, 12, 17]; // owner-confirmed: 7am, 12pm, 5pm
 const BATHROOM_INTERVAL = () => 35_000 + Math.random() * 30_000;  // dogs only, 35-65s
 
-export function createNeeds(speciesKey) {
+const absHour = (day, hour) => day * 24 + hour;
+
+// Smallest absolute game hour, strictly after `afterAbs`, that lands on one
+// of FEED_HOURS.
+function nextFeedAbsHour(afterAbs) {
+  const day = Math.floor(afterAbs / 24);
+  const hourOfDay = afterAbs - day * 24;
+  const next = FEED_HOURS.find((h) => h > hourOfDay);
+  return next != null ? day * 24 + next : (day + 1) * 24 + FEED_HOURS[0];
+}
+
+export function createNeeds(speciesKey, day = 0, hour = 0) {
   const needs = { food: false };
-  const timers = { food: FOOD_INTERVAL() };
+  const timers = { nextFeedAt: nextFeedAbsHour(absHour(day, hour)) };
   if (speciesKey !== 'turtle') {
     needs.water = false;
-    timers.water = WATER_INTERVAL();
   }
   if (speciesKey === 'dog') {
     needs.bathroom = false;
@@ -41,25 +56,34 @@ export function createBowlState() {
   return { food: false, water: false };
 }
 
-// Advances a settled stay's need timers by deltaMs. Returns the need keys
-// that just flipped true this call (e.g. ['food']) so the caller (KennelScene)
-// can show an indicator / fire a notification once, not every frame.
-export function tickNeeds(stay, deltaMs) {
+// Advances a settled stay's need timers. `absHourNow` is the current
+// absolute game hour (day*24 + hourFloat) — food/water are schedule-based,
+// not real-time countdowns, so they need clock time, not deltaMs. Returns
+// the need keys that just flipped true this call (e.g. ['food', 'water'])
+// so the caller (KennelScene) can show an indicator / fire a notification
+// once, not every frame.
+export function tickNeeds(stay, deltaMs, absHourNow) {
   const flipped = [];
-  for (const key of Object.keys(stay.timers)) {
-    if (stay.needs[key]) continue; // already waiting on the player, don't re-fire
-    stay.timers[key] -= deltaMs;
-    if (stay.timers[key] <= 0) {
-      stay.needs[key] = true;
-      flipped.push(key);
+  if (absHourNow >= stay.timers.nextFeedAt) {
+    if (!stay.needs.food) { stay.needs.food = true; flipped.push('food'); }
+    if ('water' in stay.needs && !stay.needs.water) { stay.needs.water = true; flipped.push('water'); }
+    stay.timers.nextFeedAt = nextFeedAbsHour(absHourNow);
+  }
+  if ('bathroom' in stay.timers && !stay.needs.bathroom) {
+    stay.timers.bathroom -= deltaMs;
+    if (stay.timers.bathroom <= 0) {
+      stay.needs.bathroom = true;
+      flipped.push('bathroom');
     }
   }
   return flipped;
 }
 
-// Clears a need (fed / taken outside) and restarts its timer for next time.
+// Clears a need (fed / taken outside). Food/water share one schedule (see
+// tickNeeds) so there's no per-key timer to restart for them — only
+// bathroom restarts its own countdown here.
 export function clearNeed(stay, key) {
   if (!(key in stay.needs)) return;
   stay.needs[key] = false;
-  stay.timers[key] = key === 'bathroom' ? BATHROOM_INTERVAL() : key === 'water' ? WATER_INTERVAL() : FOOD_INTERVAL();
+  if (key === 'bathroom') stay.timers.bathroom = BATHROOM_INTERVAL();
 }

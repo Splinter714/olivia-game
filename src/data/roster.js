@@ -240,7 +240,7 @@ export function createRoster() {
     if (!group) group = familyFor(speciesKey, rng);
 
     const primary = group[0];
-    const { needs, timers } = createNeeds(speciesKey);
+    const { needs, timers } = createNeeds(speciesKey, day, hour);
     const stay = {
       animal: primary,
       companions: group.slice(1),
@@ -331,7 +331,7 @@ export function createRoster() {
     // girl and boy dragon names), matching "a small baby dragon" rather than
     // a grown mom.
     const primary = createAnimal('dragon', { stage: 'baby' });
-    const { needs, timers } = createNeeds('dragon');
+    const { needs, timers } = createNeeds('dragon', day, hour);
     const stay = {
       animal: primary,
       companions: [],

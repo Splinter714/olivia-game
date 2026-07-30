@@ -2375,8 +2375,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   _updateNeeds(delta) {
     let bowlsChanged = false;
+    const absHourNow = this.clock.day * 24 + this.clock.hourFloat;
     for (const stay of this._settledStays()) { // only settled stays accrue needs
-      const flipped = tickNeeds(stay, delta);
+      const flipped = tickNeeds(stay, delta, absHourNow);
       for (const key of flipped) {
         this._setNeedIcon(stay, key, true);
         if (key === 'bathroom') {
@@ -2518,6 +2519,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
         if (!settled) continue;
         if (stay.location === 'dog' && stay.needs.bathroom) continue;
+        // A mom flagged ready-and-waiting (birthReady, below) sits at this
+        // same sprite position — without this guard, the tie in consider()
+        // always resolves to whichever action was registered first (this
+        // pickup, registered earlier in the loop), so interacting with her
+        // silently picked her up instead of ever triggering the birth.
+        if (stay.birthReady) continue;
         // Owner note 2026-07-29: "the interact location for an animal that
         // is outside playing doesn't move with their visual... it should
         // move with them" — she wanders within her bounds (_updateWander),
