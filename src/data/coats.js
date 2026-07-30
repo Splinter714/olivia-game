@@ -278,6 +278,30 @@ const DRAGON_COATS = {
     belly: 0xfff3cf, wing: 0x9c6a14, horn: 0xffffff, eye: 0x2a5a3a,
     mark: 0x8a5e10,
   },
+  sky: {
+    label: 'Sky',
+    body: { hi: 0x9adcff, mid: 0x4fa8e0, lo: 0x2c6ea8 },
+    belly: 0xd8f0ff, wing: 0x24507a, horn: 0xffffff, eye: 0xffe066,
+    mark: 0x1c3f5c,
+  },
+  rose: {
+    label: 'Rose',
+    body: { hi: 0xffb8d9, mid: 0xe8639f, lo: 0xb03d74 },
+    belly: 0xffe0ee, wing: 0x7a2850, horn: 0xfff3cf, eye: 0x6fe0a0,
+    mark: 0x8a2a56,
+  },
+  silver: {
+    label: 'Silver',
+    body: { hi: 0xf0f0f5, mid: 0xb8bcc8, lo: 0x7c8090 },
+    belly: 0xffffff, wing: 0x565a68, horn: 0xffe066, eye: 0x4fa8e0,
+    mark: 0x454858,
+  },
+  moss: {
+    label: 'Moss',
+    body: { hi: 0xc8e07a, mid: 0x8fae3e, lo: 0x5c7228 },
+    belly: 0xeaf2c8, wing: 0x3c4a1a, horn: 0xe8dcc0, eye: 0xff9a5c,
+    mark: 0x2c3814,
+  },
 };
 
 export const COATS = {

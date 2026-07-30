@@ -9,28 +9,28 @@
 //
 // Deliberately simple, matching this being a hidden bonus and not a core
 // feature: a rolling buffer of the last CODE.length letter keys typed, no
-// modifiers/case-sensitivity to worry about, and fires exactly once per
-// session (no persistence — a page reload resets it, same as dragTool's own
-// session-only stance).
+// modifiers/case-sensitivity to worry about. Owner note 2026-07-29: typing it
+// again summons ANOTHER dragon — repeatable, not a one-time thing — so the
+// buffer just resets after a hit rather than latching a "found" flag (no
+// persistence either way — a page reload resets the buffer, same as
+// dragTool's own session-only stance).
 const CODE = 'DRAGON';
 
 export const WithSecretDragon = (Base) => class extends Base {
   // Called once from create(), any time after this.input exists.
   buildSecretDragon() {
     this._dragonCodeBuf = '';
-    this._dragonFound = false;
     this._onSecretDragonKeyBound = (event) => this._onSecretDragonKey(event);
     this.input.keyboard.on('keydown', this._onSecretDragonKeyBound);
     this.events.once('shutdown', () => this.destroySecretDragon());
   }
 
   _onSecretDragonKey(event) {
-    if (this._dragonFound) return;
     const key = event.key;
     if (!key || key.length !== 1 || !/[a-zA-Z]/.test(key)) return;
     this._dragonCodeBuf = (this._dragonCodeBuf + key.toUpperCase()).slice(-CODE.length);
     if (this._dragonCodeBuf !== CODE) return;
-    this._dragonFound = true;
+    this._dragonCodeBuf = ''; // reset so the SAME code can be typed again for another dragon
     // this._triggerSecretDragon is defined on KennelScene itself — this mixin
     // only owns the input detection, not what happens once it fires.
     this._triggerSecretDragon?.();
