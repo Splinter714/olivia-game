@@ -167,6 +167,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
     this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment she starts walking in until her pet is picked up (issue #25)
 
+    // Now that this.roster/this._staySprites exist, apply the Mix Cages
+    // toggle's visuals to match its default (see _buildModeToggle, which
+    // builds the button earlier but can't call this yet at that point).
+    this._applyCageMode();
+
     // (yardDividerY/carryingDivider/_dividerVisual and the scooper-rest state
     // are set earlier, above _buildProps() — see that comment.)
     this.messes = [];              // { kind: 'cat', x, y, sprite } — issue #20: dogs no longer mess indoors
@@ -456,12 +461,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Re-anchor on resize, same convention as HudScene's top-left panel and
     // Controls' bottom-right interact button.
     this.scale.on('resize', () => this._layoutModeToggle());
-    // World/collision is always built in normal-mode form first (_drawWorld/
-    // _buildCollision draw themed floors + solid pen walls unconditionally);
-    // since generalizedCages now defaults to true, apply its visuals once
-    // here so boot state actually matches the flag instead of only updating
-    // on the button's first press.
-    this._applyCageMode();
+    // NOTE: applying the mode's visuals (_applyCageMode) has to wait until
+    // this.roster exists — _refreshCageArt reads this.roster.stays, which
+    // isn't created yet at this point in create(). See the call right after
+    // roster/staySprites setup below instead of calling it here.
   }
 
   _layoutModeToggle() {
