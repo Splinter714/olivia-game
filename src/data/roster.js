@@ -72,13 +72,26 @@ export function isCageSlotOpen(stays, sectionKey, slot) {
 }
 
 // Issue #27: true if ANY cage anywhere in the whole kennel is currently open
-// — used to gate arrivals in generalized mode, where there's no more
-// per-species territory, so a species should keep arriving as long as some
-// cage (any section) is free, not just a nominally-"hers". Also used by the
-// secret bonus dragon trigger (KennelScene._triggerSecretDragon) to bail out
-// gracefully if the whole kennel is genuinely full.
+// — used to gate arrivals, where there's no more per-species territory, so a
+// species should keep arriving as long as some cage (any section) is free,
+// not just a nominally-"hers". Also used by the secret bonus dragon trigger
+// (KennelScene._triggerSecretDragon) to bail out gracefully if the whole
+// kennel is genuinely full.
+//
+// Bug fix (owner note 2026-07-29: "if all cages are assigned, don't send any
+// more customers") — the old per-section `assignCageSlot` check only counts
+// a stay against capacity once she's actually assigned a real cageSlot,
+// which doesn't happen until she's dropped off. A stay still waiting at
+// reception (or being carried in) doesn't consume a slot in that accounting
+// at all, so arrivals kept rolling — and piling up at reception with
+// nowhere to go — right up to the reception-owner cap, even once every cage
+// was truly spoken for by everyone already waiting. A simple total-count
+// check (every CURRENT stay, whatever stage she's at, counts against total
+// capacity) closes that gap — now matches "the kennel is full" the instant
+// enough guests exist to fill every cage, not just once they've all
+// literally been placed in one.
 export function anyOpenCageAnywhere(stays) {
-  return SECTIONS.some((s) => assignCageSlot(stays, s.key) != null);
+  return stays.length < SECTIONS.length * CAGES_PER_SECTION;
 }
 
 // Issue #18: picks the first open cage slot (0..CAGES_PER_SECTION-1) in
