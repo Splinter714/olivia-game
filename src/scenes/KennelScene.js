@@ -824,15 +824,21 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     return { container, width, height };
   }
 
-  // Every frame: shows a name tag only while the player is close enough to
-  // read it (issue #22 #2), and hides it again otherwise. Applies to every
-  // stay's tag + baby labels, and the leashed-dog walk tag.
+  // Every frame: a tag fixed to a cage door is a permanent nameplate, always
+  // visible — you can read who lives there from across the room, same as a
+  // real kennel. Only a tag following an animal that's "out and about"
+  // (reception, carrying, out playing in the yard) stays proximity-gated
+  // (issue #22 #2), since those float in open space rather than being
+  // mounted on fixed furniture. Baby under-labels stay proximity-gated
+  // either way — they're a separate small detail, not the door nameplate.
   _updateNameTagVisibility() {
     const px = this.player.x, py = this.player.y;
     for (const rec of this._staySprites.values()) {
-      const within = Phaser.Math.Distance.Between(px, py, rec.pos.x, rec.pos.y) <= NAME_TAG_RADIUS;
+      const within = rec.cageAnchored
+        || Phaser.Math.Distance.Between(px, py, rec.pos.x, rec.pos.y) <= NAME_TAG_RADIUS;
       rec.tag.container.setVisible(within);
-      for (const label of rec.babyLabels) label.setVisible(within);
+      const babiesWithin = Phaser.Math.Distance.Between(px, py, rec.pos.x, rec.pos.y) <= NAME_TAG_RADIUS;
+      for (const label of rec.babyLabels) label.setVisible(babiesWithin);
     }
     if (this._walkVisual) {
       const wv = this._walkVisual;
