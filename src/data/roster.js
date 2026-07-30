@@ -9,7 +9,7 @@ import { SPECIES_KEYS } from './species.js';
 import { createNeeds } from './needs.js';
 import { attachBirthTimer } from './births.js';
 import { pickUpgradeKind } from './economy.js';
-import { CAGES_PER_SECTION } from './sections.js';
+import { CAGES_PER_SECTION, SECTIONS } from './sections.js';
 
 // Where a stay currently is. Any SECTIONS[].key (data/sections.js) is also a
 // valid `location` once an animal has been carried to its section.
@@ -42,12 +42,36 @@ const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 // species could fill the section back up to CAGES_PER_SECTION while she was
 // still out, and then bringing her back inside (or the forced night recall,
 // KennelScene._recallYardToCages) would find the section "full" with
-// nowhere to put her, falling back to an overlapping generic grid spot. A
-// section's key equals its species key (data/sections.js's SECTIONS), so a
-// yard stay "belongs" to `sectionKey` whenever her species matches it.
+// nowhere to put her, falling back to an overlapping generic grid spot.
+//
+// Issue #27 ("generalized cages"): a section's key USED to always equal its
+// occupant's species key, so checking `stay.animal.species === sectionKey`
+// was an easy stand-in for "whichever section her cage is actually in". Once
+// generalized mode lets a cage hold ANY species, that stand-in breaks — a
+// turtle napping in a dog cage would never "belong" to the dog section by
+// this species check. `stay.cageSection` (set by KennelScene._dropOff/
+// _recallYardToCages the moment she's actually assigned a cage) is the real
+// answer regardless of mode; in normal (species-locked) mode it's always
+// equal to her species anyway, so this is a no-op there.
 function belongsToSection(stay, sectionKey) {
   if (stay.location === sectionKey) return true;
-  return stay.location === LOCATION.YARD && stay.animal.species === sectionKey;
+  return stay.location === LOCATION.YARD && stay.cageSection === sectionKey;
+}
+
+// Issue #27: is this EXACT cage slot (not just "some slot in the section")
+// currently free? Used by KennelScene in generalized mode, where a fresh
+// arrival can be dropped into any specific open cage anywhere, not just an
+// auto-assigned slot within her own species' section.
+export function isCageSlotOpen(stays, sectionKey, slot) {
+  return !stays.some((s) => belongsToSection(s, sectionKey) && s.cageSlot === slot);
+}
+
+// Issue #27: true if ANY cage anywhere in the whole kennel is currently open
+// — used to gate arrivals in generalized mode, where there's no more
+// per-species territory, so a species should keep arriving as long as some
+// cage (any section) is free, not just a nominally-"hers".
+export function anyOpenCageAnywhere(stays) {
+  return SECTIONS.some((s) => assignCageSlot(stays, s.key) != null);
 }
 
 // Issue #18: picks the first open cage slot (0..CAGES_PER_SECTION-1) in
@@ -174,9 +198,14 @@ export function createRoster() {
   // otherwise a fresh family/individual. Adds a new stay to `stays` and returns
   // it — or returns null if that species' section is already full (issue #18);
   // the caller (KennelScene) just skips that particular roll, quietly.
-  function spawnArrival({ day, hour, rng = Math.random } = {}) {
+  //
+  // Issue #27: `generalized` (passed by KennelScene from its
+  // `generalizedCages` toggle) swaps the gating check — there's no more
+  // per-species territory in that mode, so a species keeps arriving as long
+  // as ANY cage anywhere is open, not just one nominally "hers".
+  function spawnArrival({ day, hour, rng = Math.random, generalized = false } = {}) {
     const speciesKey = pickSpecies(rng);
-    if (isSectionFull(speciesKey)) return null;
+    if (generalized ? !anyOpenCageAnywhere(stays) : isSectionFull(speciesKey)) return null;
     let group = null;
 
     if (rng() < 0.4) {

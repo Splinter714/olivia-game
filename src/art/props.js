@@ -32,6 +32,14 @@ export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: '
 // (data/props.js's CAGES grid), so one texture per section covers all 6.
 export const CAGE_KEY = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-${key}`]));
 
+// Issue #27 ("generalized cages" toggle): one neutral empty-slot texture per
+// section shape, shown for any cage with nobody currently assigned to it
+// while generalized mode is on — there's no species pre-assigned to an empty
+// cage anymore, so it gets a plain, un-themed look instead of e.g. an empty
+// turtle island or dog pen. Sized to match that section's own cage cell
+// (same w/h as CAGE_KEY[key]) so swapping textures never changes the fit.
+export const EMPTY_CAGE_KEY = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-empty-${key}`]));
+
 // Water tank with a glass-cover highlight along the top rim.
 function drawTank(g, w, h) {
   g.fillStyle(0x2d6f8e, 1).fillRoundedRect(0, 0, w, h, 10);
@@ -279,6 +287,18 @@ function drawBoxStack(g, w, h) {
     .strokeRect(w * 0.02, h * 0.72, w * 0.96, h * 0.26);
 }
 
+// Issue #27: a plain dashed-outline empty slot — no species theming, just
+// "there's a free cage here" in generalized mode.
+function drawEmptyCageSlot(g, w, h) {
+  g.fillStyle(0xe4e0d6, 0.45).fillRoundedRect(2, 2, w - 4, h - 4, 8);
+  g.lineStyle(2, 0xa8a296, 0.9);
+  const dash = 8, gap = 5;
+  for (let x = 2; x < w - 2; x += dash + gap) g.lineBetween(x, 2, Math.min(x + dash, w - 2), 2);
+  for (let x = 2; x < w - 2; x += dash + gap) g.lineBetween(x, h - 2, Math.min(x + dash, w - 2), h - 2);
+  for (let y = 2; y < h - 2; y += dash + gap) g.lineBetween(2, y, 2, Math.min(y + dash, h - 2));
+  for (let y = 2; y < h - 2; y += dash + gap) g.lineBetween(w - 2, y, w - 2, Math.min(y + dash, h - 2));
+}
+
 function drawBag(g, w, h) {
   g.fillStyle(0xd9c9a0, 1).fillRoundedRect(w * 0.1, h * 0.2, w * 0.8, h * 0.78, 6);
   g.fillStyle(0xb9a678, 1).fillRect(w * 0.1, h * 0.2, w * 0.8, h * 0.14);
@@ -343,5 +363,6 @@ export function buildPropTextures(scene) {
     else if (key === 'snake') gen(scene, CAGE_KEY[key], w, h, (g) => drawPerchSlot(g, w, h));
     else if (key === 'bird') gen(scene, CAGE_KEY[key], w, h, (g) => drawNestSlot(g, w, h));
     else gen(scene, CAGE_KEY[key], w, h, (g) => drawCagePen(g, w, h));
+    gen(scene, EMPTY_CAGE_KEY[key], w, h, (g) => drawEmptyCageSlot(g, w, h));
   }
 }

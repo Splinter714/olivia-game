@@ -31,7 +31,7 @@ import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY, CARRY_DISPLAY_SCALE } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, SNAKE_TANK_KEY, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY,
+  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY,
   LETTUCE_KEY, YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
@@ -39,7 +39,7 @@ import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
 } from '../art/raccoon.js';
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
-import { createRoster, LOCATION, CARRY_KIND, assignCageSlot } from '../data/roster.js';
+import { createRoster, LOCATION, CARRY_KIND, assignCageSlot, isCageSlotOpen } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
 
@@ -92,10 +92,20 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     // below, so the registry can't drift from the real world.
     this._devRegistry = [];
 
+    // Issue #27: "generalized cages" toggle — off by default (species-locked
+    // sections, exactly today's behavior). See _buildModeToggle for the
+    // on-screen button and _applyCageMode/_refreshCageArt for the live
+    // visual + placement-logic switch.
+    this.generalizedCages = false;
+
     buildKennelTextures(this);
     for (const s of SECTIONS) buildFloorTile(this, `floor-${s.key}`, s.floor, s.floorDark);
     buildFloorTile(this, 'floor-storage', 0xcbb994, 0xbfa987);
     buildFloorTile(this, 'floor-house', 0xf5ecd8, 0xe8dfc8);
+    // Neutral, un-themed floor tone shown across every section while
+    // generalized mode is on, so the room visually reads as "no sections"
+    // even though the walls/cage positions haven't moved.
+    buildFloorTile(this, 'floor-neutral', 0xd8d2c4, 0xccc6b8);
     buildPlayerTexture(this);
     buildOwnerTexture(this);
     buildAnimalTextures(this);
@@ -127,6 +137,10 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
 
     this.controls = new Controls(this);
     this.buildDevDrag(); // F9 to toggle — see src/dev/dragTool.js
+
+    // Issue #27: small on-screen toggle button, top-right (clear of the
+    // top-left clock/money HUD and the bottom-right touch interact button).
+    this._buildModeToggle();
 
     this.clock = createClock();
     this._lastHour = this.clock.hour;
@@ -203,10 +217,15 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     this.add.tileSprite(0, ROOM.y, ROOM.w, ROOM.h, 'tile-wood').setOrigin(0, 0).setDepth(-3);
     this.add.tileSprite(OUTSIDE.x, ROOM.y, OUTSIDE.w, ROOM.h, 'tile-grass').setOrigin(0, 0).setDepth(-3);
 
+    // Issue #27: keep a handle on each section's floor tile + label so
+    // _applyCageMode can swap the floor to the neutral tone and hide the
+    // label live, without rebuilding any wall/cage geometry.
+    this._sectionFloors = {};
+    this._sectionLabels = {};
     for (const s of SECTIONS) {
       const { x, y, w, h } = s.rect;
-      this.add.tileSprite(x, y, w, h, `floor-${s.key}`).setOrigin(0, 0).setDepth(-2);
-      this.add.text(x + w / 2, y + 10, s.label, {
+      this._sectionFloors[s.key] = this.add.tileSprite(x, y, w, h, `floor-${s.key}`).setOrigin(0, 0).setDepth(-2);
+      this._sectionLabels[s.key] = this.add.text(x + w / 2, y + 10, s.label, {
         fontFamily: 'system-ui, sans-serif',
         fontSize: '15px',
         color: '#2b2b2b',
@@ -327,10 +346,16 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
 
     // Individual cages (issue #18) — 6 per section, including turtles/snakes
     // as of issue #20 (styled as islands/perches instead of wire pens).
+    // Issue #27: keep a handle on each cage's image (this._cageImgs) so
+    // _refreshCageArt can re-texture it per-occupant once generalized mode
+    // is on, without touching its position/size.
+    this._cageImgs = {};
     for (const key of Object.keys(CAGES)) {
+      this._cageImgs[key] = [];
       CAGES[key].forEach((cage, i) => {
         const img = this.add.image(cage.x, cage.y, CAGE_KEY[key]).setOrigin(0, 0).setDepth(cage.y - 2);
         this._devRegistry.push({ name: `CAGES.${key}.${i}`, obj: img });
+        this._cageImgs[key].push(img);
       });
     }
 
@@ -373,6 +398,88 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     this._scooperRestSprite?.destroy();
     const { x, y } = this.scooperRestPos;
     this._scooperRestSprite = this.add.image(x, y, SCOOPER_KEY).setOrigin(0.5, 1).setDepth(y);
+  }
+
+  // ── Generalized-cages toggle (issue #27) ─────────────────────────────────
+  // "In case my daughter hates it" — a small, clearly-labeled on-screen
+  // button so Olivia can flip the experiment herself, live, no reload. Top-
+  // right corner: clear of HudScene's top-left clock/money panel and
+  // Controls' bottom-right touch interact button.
+
+  _buildModeToggle() {
+    const g = this.add.graphics().setScrollFactor(0).setDepth(9998);
+    const label = this.add.text(0, 0, '', {
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '13px',
+      fontStyle: 'bold',
+      color: '#ffffff',
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(9999);
+    // A separate invisible interactive zone (graphics objects don't take
+    // pointer input directly) sized/positioned to match the drawn button.
+    const zone = this.add.zone(0, 0, 10, 10).setScrollFactor(0).setDepth(9999)
+      .setInteractive({ useHandCursor: true });
+    zone.on('pointerdown', () => this._toggleGeneralizedCages());
+    this._modeToggle = { g, label, zone, w: 168, h: 34 };
+    this._layoutModeToggle();
+    // Re-anchor on resize, same convention as HudScene's top-left panel and
+    // Controls' bottom-right interact button.
+    this.scale.on('resize', () => this._layoutModeToggle());
+  }
+
+  _layoutModeToggle() {
+    const t = this._modeToggle;
+    if (!t) return;
+    const off = worldUiOffset(this);
+    t.x = off.x + logicalW(this) - t.w / 2 - 16;
+    t.y = off.y + 16 + t.h / 2;
+    t.zone.setPosition(t.x, t.y).setSize(t.w, t.h);
+    this._renderModeToggle();
+  }
+
+  _renderModeToggle() {
+    const t = this._modeToggle;
+    if (!t) return;
+    t.g.clear();
+    t.g.fillStyle(0x2a3648, 0.75).fillRoundedRect(t.x - t.w / 2, t.y - t.h / 2, t.w, t.h, 8);
+    t.g.lineStyle(2, 0xffffff, 0.85).strokeRoundedRect(t.x - t.w / 2, t.y - t.h / 2, t.w, t.h, 8);
+    t.label.setPosition(t.x, t.y);
+    t.label.setText(this.generalizedCages ? '🔀 Mix Cages' : '🏠 By Type');
+  }
+
+  _toggleGeneralizedCages() {
+    this.generalizedCages = !this.generalizedCages;
+    this._renderModeToggle();
+    this._applyCageMode();
+    this.game.events.emit(EVENTS.NOTIFY,
+      this.generalizedCages ? 'Cages mixed — any pet can go in any open cage!' : 'Back to cages by type!');
+  }
+
+  // Neutralizes (or restores) the section-level species theming: floor
+  // colours + labels. Deliberately leaves every wall/cage rect exactly where
+  // it is — only the presentation changes, live, no scene rebuild.
+  _applyCageMode() {
+    for (const s of SECTIONS) {
+      this._sectionFloors[s.key]?.setTexture(this.generalizedCages ? 'floor-neutral' : `floor-${s.key}`);
+      this._sectionLabels[s.key]?.setVisible(!this.generalizedCages);
+    }
+    this._refreshCageArt();
+  }
+
+  // Re-textures every individual cage: in normal mode, always its section's
+  // native look. In generalized mode, whoever's actually settled there gets
+  // her OWN species' cage art (a turtle in any cage still gets tank-style
+  // rendering, etc.) and an empty slot gets the neutral empty-cage look —
+  // only section-level organization/labeling is neutralized, never each
+  // occupied cage's own furniture style.
+  _refreshCageArt() {
+    if (!this._cageImgs) return;
+    for (const key of Object.keys(this._cageImgs)) {
+      this._cageImgs[key].forEach((img, slot) => {
+        if (!this.generalizedCages) { img.setTexture(CAGE_KEY[key]); return; }
+        const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
+        img.setTexture(occupant ? CAGE_KEY[occupant.animal.species] : EMPTY_CAGE_KEY[key]);
+      });
+    }
   }
 
   _buildCollision() {
@@ -441,7 +548,9 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     // roll below could let a 4th owner start walking in before the 3rd has
     // been counted.
     if (this._lingeringOwners.size >= 3) return;
-    const stay = this.roster.spawnArrival({ day, hour });
+    // Issue #27: in generalized mode there's no more per-species territory —
+    // a species keeps arriving as long as ANY cage anywhere is open.
+    const stay = this.roster.spawnArrival({ day, hour, generalized: this.generalizedCages });
     // Issue #18: null means that species' section is full (all 6 cages
     // taken) — quietly skip this roll, no queue/penalty/notification.
     if (!stay) return;
@@ -549,6 +658,7 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       this._payOutForCheckout(stay);
     }
     this._syncTieBreakers(); // whoever's left may no longer need a collar
+    this._refreshCageArt(); // a checked-out stay's cage may now read as empty (issue #27)
   }
 
   // Issue #12 ("Doing a Great Job"): the owner pays for the stay a moment
@@ -918,8 +1028,14 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
   _checkDropoff() {
     const stay = this.carrying;
     if (this._carryOrigin === LOCATION.YARD) {
-      // Bringing her back inside — only her own section (cage) will accept her.
-      const section = SECTIONS.find((s) => s.key === stay.animal.species);
+      // Bringing her back inside — only her own section (cage) will accept
+      // her. Issue #27: "her own section" means wherever her cage actually
+      // IS (stay.cageSection, set the moment she was last assigned a cage),
+      // not necessarily her species' section — in generalized mode those can
+      // differ. Falls back to species for a stay that somehow never got a
+      // cageSection (shouldn't happen — she can't reach the yard without
+      // having been dropped into a cage first).
+      const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.animal.species));
       if (!section) return;
       const { x, y, w, h } = section.rect;
       if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
@@ -927,7 +1043,17 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       // section's 6 cages are all already taken — see its own comment.
       if (this._dropOff(stay, section)) this._carryOrigin = null;
     } else if (this._carryOrigin === LOCATION.RECEPTION) {
-      // A fresh arrival — walking into her own section settles her into a cage.
+      // A fresh arrival. Issue #27: in generalized mode there's no themed
+      // section to walk into at all — instead, walking up to ANY specific
+      // currently-empty cage anywhere accepts the drop into THAT exact cage.
+      // Normal mode keeps the original species-locked-section behavior
+      // completely unchanged.
+      if (this.generalizedCages) {
+        const found = this._findOpenCageNear(this.player.x, this.player.y);
+        if (!found) return;
+        if (this._dropOff(stay, found.section, { fromReception: true, cageSlot: found.slot })) this._carryOrigin = null;
+        return;
+      }
       const section = SECTIONS.find((s) => s.key === stay.animal.species);
       if (!section) return;
       const { x, y, w, h } = section.rect;
@@ -945,6 +1071,11 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
 
   // Returns true if the drop-off happened, false if it was declined (section
   // full — see below), so _checkDropoff knows whether to keep carrying her.
+  //
+  // Issue #27: `opts.cageSlot`, when given (generalized-mode reception
+  // drop-off — see _findOpenCageNear), assigns her to THAT exact slot
+  // instead of auto-picking the first open one in the section — she was
+  // targeted at a specific empty cage, not "the section" in general.
   _dropOff(stay, section, opts = {}) {
     // Issue #18/#20: don't accept the drop if every one of this section's 6
     // cages is already taken by another stay — that used to fall through to
@@ -957,7 +1088,7 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     // section that filled up in the meantime. Treat it like walking into
     // any other non-accepting spot: nothing happens, she stays in the
     // player's hands, and a light notification explains why.
-    const cageSlot = assignCageSlot(this.roster.stays, section.key);
+    const cageSlot = opts.cageSlot != null ? opts.cageSlot : assignCageSlot(this.roster.stays, section.key);
     if (cageSlot == null) {
       const now = this.time.now;
       if (now - (this._fullSectionNotifyAt || 0) > 1500) {
@@ -977,6 +1108,12 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     // Issue #18: assign her into the open individual cage found above
     // (companions/babies share it, same as today's "near mom" render).
     stay.cageSlot = cageSlot;
+    // Issue #27: remember which section her cage is actually in, so a later
+    // yard trip (belongsToSection/_recallYardToCages/_checkDropoff's yard
+    // branch) still finds the right "home" section even if it doesn't match
+    // her species — in normal mode this always equals her species anyway.
+    stay.cageSection = section.key;
+    this._refreshCageArt();
     const pos = this._sectionSlot(section, stay);
     // Issue #21: a fresh arrival (not a yard-return) resolves out of her
     // carry container right here — a quick fade+shrink "let out of the box/
@@ -1036,6 +1173,27 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     if (cage) return cageAnimalSpot(cage);
     const already = this.roster.stays.filter((s) => s !== stay && s.location === section.key).length;
     return this._gridSlot(section.rect, already, 30, 46, 60);
+  }
+
+  // Issue #27 (generalized mode): the closest currently-EMPTY cage slot,
+  // anywhere in the whole kennel (not just the carried animal's own
+  // species' section), within pickup range of (px, py) — or null if nothing
+  // open is close enough. Used by _checkDropoff's reception branch so
+  // walking up to any specific open cage targets THAT exact cage.
+  _findOpenCageNear(px, py) {
+    let best = null, bestD = PICKUP_RADIUS;
+    for (const key of Object.keys(CAGES)) {
+      CAGES[key].forEach((cage, slot) => {
+        if (!isCageSlotOpen(this.roster.stays, key, slot)) return;
+        const spot = cageAnimalSpot(cage);
+        const d = Phaser.Math.Distance.Between(px, py, spot.x, spot.y);
+        if (d < bestD) {
+          bestD = d;
+          best = { section: SECTIONS.find((s) => s.key === key), slot };
+        }
+      });
+    }
+    return best;
   }
 
   _gridSlot(rect, index, margin, rowH, colW) {
@@ -1110,7 +1268,13 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
   // as any other multi-occupant cage.
   _feedTurtleTank() {
     if (this._turtleFeeding) return false;
-    const hungry = this.roster.stays.filter((s) => s.location === 'turtle' && s.needs.food);
+    // Issue #27: in generalized mode a turtle can end up housed in ANY
+    // cage, not just the 'turtle' section — so match on species (wherever
+    // she actually is) as well as the plain section-location check (which
+    // also covers the generalized-mode reverse case: some OTHER species
+    // sharing the turtle tank's cages, who still needs feeding and has no
+    // regular bowl there — see BOWL_SPOTS' turtle exclusion).
+    const hungry = this.roster.stays.filter((s) => s.needs.food && (s.animal.species === 'turtle' || s.location === 'turtle'));
     if (!hungry.length) return false;
     this._turtleFeeding = true;
     const { x, y } = TURTLE_FEED_SPOT;
@@ -1244,7 +1408,12 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     this.leashedDog = null;
 
     clearNeed(stay, 'bathroom');
-    const section = SECTIONS.find((s) => s.key === 'dog');
+    // Issue #27: she's leashed straight from wherever her cage actually is —
+    // stay.location/cageSection never change during the walk itself (only
+    // the visuals swap to the leash follow-visual) — so use that instead of
+    // hardcoding 'dog', which would send her to the wrong cage in
+    // generalized mode if she'd been kenneled somewhere else.
+    const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.location || 'dog'));
     const pos = this._sectionSlot(section, stay);
     this._renderStay(stay, pos.x, pos.y);
     this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} feels much better!`);
@@ -1622,13 +1791,20 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
   _recallYardToCages() {
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.YARD) continue;
-      const section = SECTIONS.find((s) => s.key === stay.animal.species);
+      // Issue #27: her actual "home" section is wherever her cage really is
+      // (stay.cageSection), not necessarily her species' section — those can
+      // differ once generalized mode has placed her somewhere else. Falls
+      // back to species for safety (shouldn't be needed — she can't be in
+      // the yard without a cageSection already set by a prior drop-off).
+      const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.animal.species));
       if (!section) continue;
       stay.cageSlot = assignCageSlot(this.roster.stays, section.key);
+      stay.cageSection = section.key;
       stay.location = section.key;
       const pos = this._sectionSlot(section, stay);
       this._renderStay(stay, pos.x, pos.y);
     }
+    this._refreshCageArt();
   }
 
   // Lays (or removes) the small fabric sheet over a stay — one blanket per
@@ -1780,7 +1956,11 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     this._catLitterTimer -= delta;
     if (this._catLitterTimer <= 0) {
       this._catLitterTimer = CAT_LITTER_INTERVAL();
-      const catsPresent = this.roster.stays.some((s) => s.location === 'cat');
+      // Issue #27: a cat's litter box need is about her SPECIES, not which
+      // cage she's actually in — in generalized mode she may be settled
+      // somewhere other than the 'cat' section, so check presence among
+      // every settled/yard stay rather than assuming location === species.
+      const catsPresent = this._settledStays().some((s) => s.animal.species === 'cat');
       const count = this.messes.filter((m) => m.kind === 'cat').length;
       if (catsPresent && count < MAX_MESS_PER_SPOT) this._spawnMess('cat', LITTER_BOX);
     }
