@@ -76,7 +76,10 @@ export const BOX_KEY = 'prop-boxes';
 export const BAG_KEY = 'prop-bag';
 export const YARD_DIVIDER_POST_KEY = 'prop-yard-divider-post';
 export const YARD_DIVIDER_LINE_KEY = 'prop-yard-divider-line';
-export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck', babies: 'need-babies' };
+export const NEED_KEY = {
+  food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail',
+  tuck: 'need-tuck', babies: 'need-babies', checkout: 'need-checkout',
+};
 
 // Issue #32: one single cage grid now (the old per-section "By Type" layout
 // and the later separate "Cage Hall" room are both gone) — every cage is the
@@ -314,6 +317,13 @@ function drawNeedBubble(g, w, h, icon) {
     g.fillCircle(w * 0.38, h * 0.44, w * 0.15);
     g.fillCircle(w * 0.62, h * 0.44, w * 0.15);
     g.fillTriangle(w * 0.24, h * 0.48, w * 0.76, h * 0.48, w * 0.5, h * 0.74);
+  } else if (icon === 'checkout') {
+    // A tiny house — "ready to go home" icon (issue #36), shown above a
+    // settled stay once her checkout is due and a waiting owner has walked
+    // in, until the player carries her over to complete the handoff.
+    g.fillStyle(0xe0a95e, 1).fillRect(w * 0.28, h * 0.5, w * 0.44, h * 0.32);
+    g.fillTriangle(w * 0.22, h * 0.5, w * 0.5, h * 0.26, w * 0.78, h * 0.5);
+    g.fillStyle(0x8a5a34, 1).fillRect(w * 0.46, h * 0.62, w * 0.12, h * 0.2);
   } else { // water
     g.fillStyle(0x4b9fc4, 1);
     g.fillTriangle(w * 0.5, h * 0.24, w * 0.32, h * 0.62, w * 0.68, h * 0.62);
@@ -503,6 +513,7 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.mail, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'mail'));
   gen(scene, NEED_KEY.tuck, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'tuck'));
   gen(scene, NEED_KEY.babies, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'babies'));
+  gen(scene, NEED_KEY.checkout, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'checkout'));
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
   gen(scene, BLANKET_KEY, 36, 26, (g) => drawBlanket(g, 36, 26));
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));

@@ -2,7 +2,7 @@
 // a data/animal.js animal instance with kennel-specific state: where it currently
 // is, when it arrived, and when it's due to check out (DESIGN.md "sleeps over at
 // least 2 nights"). KennelScene is the only Phaser-facing consumer — it renders
-// whatever `roster.stays` currently holds and calls spawnArrival()/checkoutDue()
+// whatever `roster.stays` currently holds and calls spawnArrival()/flagCheckoutReady()/finalizeCheckout()
 // off the game clock's HOUR_CHANGE event.
 import { createAnimal } from './animal.js';
 import { SPECIES_KEYS } from './species.js';
@@ -86,7 +86,7 @@ export function anyOpenCageAnywhere(stays) {
 // on drop-off (data/props.js's CAGES holds the actual on-screen rect per slot;
 // turtles don't have a rendered cage grid but still use this for capacity
 // bookkeeping via _islandSlot's own index). A stay's `cageSlot` is freed
-// automatically at checkout since roster.checkoutDue() removes her from `stays`.
+// automatically at checkout since roster.finalizeCheckout() removes her from `stays`.
 export function assignCageSlot(stays, sectionKey) {
   const used = new Set(
     stays.filter((s) => belongsToSection(s, sectionKey) && s.cageSlot != null).map((s) => s.cageSlot),
@@ -150,7 +150,7 @@ function babyCountFor(speciesKey, rng) {
 // before. Issue #34 (localStorage persistence): pass `{ stays, pool }` (the
 // plain-data arrays data/persistence.js parsed back out of a save) to resume
 // with those exact stays/pool instead — every closure below (spawnArrival,
-// checkoutDue, spawnDragon) reads/mutates whichever `stays`/`pool` arrays it
+// flagCheckoutReady, finalizeCheckout, spawnDragon) reads/mutates whichever `stays`/`pool` arrays it
 // closed over, so handing it the restored arrays is enough to make the whole
 // roster behave as if it had been running the whole time.
 export function createRoster(saved = null) {
@@ -165,7 +165,7 @@ export function createRoster(saved = null) {
     // In a live (never-reloaded) session, a checked-in returning guest's
     // `stay.animal` and her pool entry's `.animal` are the exact SAME object
     // (spawnArrival above reuses `entry.animal` directly as the mom) — so any
-    // mutation (e.g. checkoutDue awarding a new upgrade) lands on both at
+    // mutation (e.g. finalizeCheckout awarding a new upgrade) lands on both at
     // once. A plain JSON save/load necessarily produces two separate-but-
     // equal copies instead; re-link them here so that invariant holds again
     // once restored, same as if the session had never reloaded.
@@ -291,30 +291,46 @@ export function createRoster(saved = null) {
   // KennelScene can flavor-announce it. Money payout itself is computed by
   // KennelScene from data/economy.js at checkout time, not here — it doesn't
   // need any roster-side bookkeeping.
-  function checkoutDue(day) {
-    const due = [];
-    for (let i = stays.length - 1; i >= 0; i--) {
-      const stay = stays[i];
-      // A stay out playing in the yard hasn't "settled" back into her section
-      // yet either — skip her until the player brings her back inside (issue #20).
+  // Issue #36: checkout is no longer instant — a due stay just gets FLAGGED
+  // ready (`stay.checkoutReady`), and KennelScene spawns a waiting owner for
+  // her; the player has to actually carry her over to that owner to complete
+  // the checkout (finalizeCheckout, below). This only flags; it doesn't touch
+  // `stays`/`pool` at all. Idempotent — a stay already flagged is skipped, so
+  // repeat hourly ticks can't re-flag/re-spawn an owner for her.
+  function flagCheckoutReady(day) {
+    const flagged = [];
+    for (const stay of stays) {
+      if (stay.checkoutReady) continue;
+      // A stay out playing in the yard, still at reception, or mid-carry
+      // hasn't "settled" back into her cage yet — skip until she has (issue
+      // #20); same condition checkoutDue used to gate on.
       if (stay.location === LOCATION.RECEPTION || stay.location === LOCATION.CARRYING || stay.location === LOCATION.YARD) continue;
       if (day < stay.checkoutDay) continue;
-      stays.splice(i, 1);
-      due.push(stay);
-      const existing = pool.find((p) => p.animal.id === stay.animal.id);
-      if (existing) {
-        if (existing.visits >= 1) {
-          const kind = pickUpgradeKind(stay.animal);
-          stay.animal.upgrades = [...(stay.animal.upgrades || []), kind];
-          stay.newUpgrade = kind;
-        }
-        existing.visits += 1;
-        existing.available = true;
-      } else {
-        pool.push({ animal: stay.animal, available: true, visits: 1 });
-      }
+      stay.checkoutReady = true;
+      flagged.push(stay);
     }
-    return due;
+    return flagged;
+  }
+
+  // Finalizes a checkout once the player has actually delivered `stay` to
+  // her waiting owner (KennelScene._completeCheckout) — removes her from
+  // `stays` and updates the returning-guest pool (visit count / upgrade),
+  // exactly the bookkeeping the old instant checkoutDue used to do inline.
+  function finalizeCheckout(stay) {
+    const i = stays.indexOf(stay);
+    if (i !== -1) stays.splice(i, 1);
+    const existing = pool.find((p) => p.animal.id === stay.animal.id);
+    if (existing) {
+      if (existing.visits >= 1) {
+        const kind = pickUpgradeKind(stay.animal);
+        stay.animal.upgrades = [...(stay.animal.upgrades || []), kind];
+        stay.newUpgrade = kind;
+      }
+      existing.visits += 1;
+      existing.available = true;
+    } else {
+      pool.push({ animal: stay.animal, available: true, visits: 1 });
+    }
   }
 
   // Secret bonus guest (src/dev/secretDragon.js's "DRAGON" cheat code) — the
@@ -356,5 +372,5 @@ export function createRoster(saved = null) {
     return stay;
   }
 
-  return { stays, pool, spawnArrival, checkoutDue, spawnDragon };
+  return { stays, pool, spawnArrival, flagCheckoutReady, finalizeCheckout, spawnDragon };
 }

@@ -167,6 +167,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.leashedDog = null;        // the dog stay currently being walked outside (issue #19), or null
     this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
     this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment she starts walking in until her pet is picked up (issue #25)
+    this._checkoutOwners = new Map();  // stay -> { sprite, arrived } — a waiting checkout owner (issue #36), from the moment she starts walking in until the player delivers her pet
 
     // ── Night: tuck-in / staying awake / wake-ups (issue #11) ──────────────
     // Issue #34 regression fix: this has to exist BEFORE _refreshCageArt()
@@ -330,6 +331,22 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // yet for a stay that was just placed by the loop above — one refresh
     // catches every cage at once (same call _dropOff makes).
     this._refreshCageArt();
+
+    // Issue #36: a restored stay's `checkoutReady` flag survives the save
+    // (plain boolean), but her waiting owner is a live Phaser sprite and
+    // doesn't — re-spawn one for her, already standing at reception (no
+    // walk-in animation needed for a silent resume, unlike a fresh flag).
+    const waitingBase = this._checkoutOwners.size;
+    let waitingIdx = 0;
+    for (const stay of this.roster.stays) {
+      if (!stay.checkoutReady) continue;
+      const { rug } = RECEPTION;
+      const idx = waitingBase + waitingIdx++;
+      const waitX = rug.x + rug.w + 40 + (idx % 3) * 40;
+      const waitY = rug.y + 24 + Math.floor(idx / 3) * 42;
+      const owner = this.add.sprite(waitX, waitY, 'owner-npc').setOrigin(0.5, 1).setDepth(waitY);
+      this._checkoutOwners.set(stay, { sprite: owner, arrived: true });
+    }
   }
 
   // ── World geometry ──────────────────────────────────────────────────────
@@ -816,8 +833,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (phase === PHASE.DAY || phase === PHASE.EVENING) {
       this._spawnArrival(day, hour);
       if (Math.random() < 0.25) this._spawnArrival(day, hour); // "occasionally two" for variety
+      // Issue #36: checkout no longer happens overnight, same day/evening-
+      // only rule as arrivals — an owner shouldn't show up to collect her
+      // pet in the middle of the night.
+      this._flagCheckoutsReady(day);
     }
-    this._processCheckouts(day);
   }
 
   _spawnArrival(day, hour) {
@@ -956,18 +976,79 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     });
   }
 
-  _processCheckouts(day) {
-    for (const stay of this.roster.checkoutDue(day)) {
-      this._destroyStaySprites(stay);
-      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} went home!`);
-      this._payOutForCheckout(stay);
+  // Issue #36 ("owners should actually walk in to pick them up", and no
+  // checkouts overnight): a due stay is just FLAGGED ready here — she stays
+  // right where she is, in her cage, with a small "ready to go home" icon —
+  // and an owner NPC walks in and waits at reception, same convention as an
+  // arriving owner. The actual checkout only happens once the player picks
+  // her up and carries her over to that waiting owner (_checkDropoff /
+  // _completeCheckout below).
+  _flagCheckoutsReady(day) {
+    for (const stay of this.roster.flagCheckoutReady(day)) {
+      this._setNeedIcon(stay, 'checkout', true);
+      this._runOwnerCheckout(stay);
     }
+  }
+
+  // Walks a collection owner in from the front door to wait at reception
+  // (mirrors _runOwnerDropOff's walk-in, just with no pet in hand and no
+  // container prop — she's here to collect, not deliver). Multiple waiting
+  // checkout owners spread out in their own small grid, offset from the
+  // arriving-owner reception area so the two waiting crowds don't overlap.
+  _runOwnerCheckout(stay) {
+    const doorX = (FRONT_DOOR.x0 + FRONT_DOOR.x1) / 2;
+    const doorY = ROOM.y + ROOM.h - WALL - 2;
+    const { rug } = RECEPTION;
+    const waiting = this._checkoutOwners.size;
+    const waitX = rug.x + rug.w + 40 + (waiting % 3) * 40;
+    const waitY = rug.y + 24 + Math.floor(waiting / 3) * 42;
+
+    const owner = this.add.sprite(doorX, doorY, 'owner-npc').setOrigin(0.5, 1).setDepth(doorY);
+    const rec = { sprite: owner, arrived: false };
+    this._checkoutOwners.set(stay, rec);
+
+    this.tweens.add({
+      targets: owner, x: waitX, y: waitY, duration: 1500, ease: 'Sine.easeInOut',
+      onUpdate: () => owner.setDepth(owner.y),
+      onComplete: () => {
+        rec.arrived = true;
+        this.game.events.emit(EVENTS.NOTIFY, `It's time for ${stay.animal.name} to go home!`);
+      },
+    });
+  }
+
+  // Fires once the player has actually carried a checkout-ready stay over to
+  // her waiting owner (see _checkDropoff) — hands her off (the carried
+  // sprite simply disappears, same "carryProp.destroy()" beat _runOwnerDropOff
+  // uses in reverse), walks the owner back out with her, and finalizes the
+  // roster-side bookkeeping/payout exactly like the old instant checkout did.
+  _completeCheckout(stay) {
+    const rec = this._checkoutOwners.get(stay);
+    this._checkoutOwners.delete(stay);
+    this._setNeedIcon(stay, 'checkout', false);
+    this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
+    this._carryVisual = null;
+    this.carrying = null;
+
+    if (rec) {
+      const doorX = (FRONT_DOOR.x0 + FRONT_DOOR.x1) / 2;
+      const doorY = ROOM.y + ROOM.h - WALL - 2;
+      this.tweens.add({
+        targets: rec.sprite, x: doorX, y: doorY, duration: 1500, ease: 'Sine.easeInOut',
+        onUpdate: () => rec.sprite.setDepth(rec.sprite.y),
+        onComplete: () => rec.sprite.destroy(),
+      });
+    }
+
+    this.roster.finalizeCheckout(stay);
+    this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} went home!`);
+    this._payOutForCheckout(stay);
     this._syncTieBreakers(); // whoever's left may no longer need a collar
-    this._refreshCageArt(); // a checked-out stay's cage may now read as empty (issue #27)
+    this._refreshCageArt(); // her cage may now read as empty (issue #27)
   }
 
   // Issue #12 ("Doing a Great Job"): the owner pays for the stay a moment
-  // after she goes home, and — if roster.checkoutDue flagged her as a
+  // after she goes home, and — if roster.finalizeCheckout flagged her as a
   // returning guest earning new stuff this time — a follow-up flavor line
   // about the upgrade. Same delayed-notify chaining as the reception
   // computer's baby-announcement flow (_useComputer): no lock is needed here
@@ -1202,6 +1283,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Issue #9 refinement: a mom flagged "ready, needs your help" keeps her
     // heart icon across a redraw too.
     if (stay.birthReady) this._setNeedIcon(stay, 'babies', true);
+    // Issue #36: a stay flagged ready-for-checkout (waiting owner already
+    // walked in) keeps her "ready to go home" icon across a redraw too.
+    if (stay.checkoutReady) this._setNeedIcon(stay, 'checkout', true);
   }
 
   _destroyStaySprites(stay) {
@@ -1348,6 +1432,19 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // before.
   _checkDropoff(interactPressed) {
     const stay = this.carrying;
+    // Issue #36: a checkout-ready stay goes home, not back into a cage —
+    // regardless of where she was picked up from, walking her over to her
+    // waiting owner (once actually arrived at reception) and interacting
+    // completes the checkout. She can't be placed in a cage or the yard
+    // while in this state.
+    if (stay.checkoutReady) {
+      const rec = this._checkoutOwners.get(stay);
+      if (rec?.arrived && interactPressed) {
+        const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, rec.sprite.x, rec.sprite.y);
+        if (d < PICKUP_RADIUS) this._completeCheckout(stay);
+      }
+      return;
+    }
     if (this._carryOrigin === LOCATION.YARD) {
       // Picked up from the yard — she can go right back into the yard
       // (change your mind / move her to a different spot), OR come back
