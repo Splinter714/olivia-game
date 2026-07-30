@@ -1225,9 +1225,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // another animal currently in the kennel gets a coloured collar — and an
     // ID tattoo once the collars run out — drawn straight into their art by
     // the tie-breaker resolution above (data/distinguish.js).
+    const babySprites = [];
     for (const baby of stay.companions) {
       const jitterY = (sharesHome ? (Math.random() - 0.5) * 10 : (Math.random() - 0.5) * 8) * spread;
-      extras.push(this._addAnimalSprite(cx, y + jitterY, baby, 'baby', tb));
+      const babySprite = this._addAnimalSprite(cx, y + jitterY, baby, 'baby', tb);
+      extras.push(babySprite);
+      babySprites.push(babySprite);
 
       // Tiny label under each baby — "???" until the owner names it via the
       // reception computer (issue #10), then its real name. Proximity-gated
@@ -1263,7 +1266,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const wanderBounds = bounds ? { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h } : null;
 
     const rec = {
-      pos: { x, y }, sprite, tag, extras, babyLabels, needIcons: {}, blanket: null,
+      pos: { x, y }, sprite, tag, extras, babyLabels, babySprites, needIcons: {}, blanket: null,
       wanderBounds, wander: null, cageAnchored: !!cageNameAnchor,
       // What this render assumed about tie-breakers, so _syncTieBreakers can
       // tell when an arrival/checkout has changed who needs a collar.
@@ -1286,6 +1289,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Issue #36: a stay flagged ready-for-checkout (waiting owner already
     // walked in) keeps her "ready to go home" icon across a redraw too.
     if (stay.checkoutReady) this._setNeedIcon(stay, 'checkout', true);
+    // Issue #37: a mom with new babies/hatchlings not yet photographed keeps
+    // her "take a picture" camera icon across a redraw too.
+    if (stay.needsAnnouncement && !stay.photoTaken) this._setNeedIcon(stay, 'photo', true);
   }
 
   _destroyStaySprites(stay) {
@@ -1966,6 +1972,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         createAnimal(stay.animal.species, { stage: 'baby', name: BABY_PLACEHOLDER }));
       stay.companions = [...stay.companions, ...babies];
       stay.needsAnnouncement = true;
+      stay.photoTaken = false; // issue #37: needs a photo taken before she can be announced
       this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s eggs are hatching!`);
     } else if (stay.animal.isPregnant && SPECIES[stay.animal.species].family === FAMILY.EGGS_OR_BABIES) {
       // Owner note 2026-07-29 (issue #31): for an egg-laying species, the
@@ -1985,6 +1992,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         createAnimal(stay.animal.species, { stage: 'baby', name: BABY_PLACEHOLDER }));
       stay.companions = [...stay.companions, ...babies];
       stay.needsAnnouncement = true;
+      stay.photoTaken = false; // issue #37: needs a photo taken before she can be announced
       this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} is having babies!`);
     } else {
       return; // shouldn't happen — birthTimer only attaches when expecting
@@ -1999,6 +2007,48 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
   }
 
+  // ── Taking the babies' photo (issue #37) ─────────────────────────────────
+  // Owner note 2026-07-29: "can we add something where you actually get to
+  // take cute pics of the babies before you send the email?" — walking up to
+  // a mom with new babies/hatchlings and interacting snaps a real little
+  // photo (a render-texture snapshot of her and her babies' ACTUAL current
+  // sprites — coats/collars/tattoos and all, not a generic graphic), with a
+  // camera-flash moment for feedback. Only once she's been photographed can
+  // the computer actually send her announcement (see _useComputer/
+  // _updateComputerIcon's photoTaken gate).
+  _takePhoto(stay) {
+    if (!stay.needsAnnouncement || stay.photoTaken) return;
+    const rec = this._staySprites.get(stay);
+    if (!rec) return;
+    stay.photoTaken = true;
+    this._setNeedIcon(stay, 'photo', false);
+    this._updateComputerIcon(); // she may now be the reason the mail icon appears
+    this.game.events.emit(EVENTS.NOTIFY, `📸 Snap! Got a great picture of ${stay.animal.name}'s babies!`);
+
+    // Camera flash — a quick full-screen white fade, same oversized-rect
+    // trick sleepGfx/tintGfx use for a screen-covering overlay.
+    const sw = logicalW(this), sh = logicalH(this);
+    const flash = this.add.graphics().setScrollFactor(0).setDepth(10500);
+    flash.fillStyle(0xffffff, 1).fillRect(-sw, -sh, sw * 3, sh * 3);
+    this.tweens.add({ targets: flash, alpha: 0, duration: 350, ease: 'Sine.easeOut', onComplete: () => flash.destroy() });
+
+    // Snapshot mom + every baby's current sprite frame into a small
+    // polaroid-style render texture — a real picture of exactly who's here.
+    const sprites = [rec.sprite, ...(rec.babySprites || [])];
+    const pad = 12;
+    const minX = Math.min(...sprites.map((s) => s.x - s.displayWidth / 2)) - pad;
+    const maxX = Math.max(...sprites.map((s) => s.x + s.displayWidth / 2)) + pad;
+    const minY = Math.min(...sprites.map((s) => s.y - s.displayHeight)) - pad;
+    const maxY = Math.max(...sprites.map((s) => s.y)) + pad * 0.6;
+    const w = Math.max(40, maxX - minX), h = Math.max(32, maxY - minY);
+    const rt = this.add.renderTexture(0, 0, w, h).setVisible(false);
+    rt.fill(0xffffff, 1, 0, 0, w, h); // white polaroid backing
+    for (const s of sprites) rt.draw(s, s.x - minX, s.y - minY);
+    stay.photoKey = `photo-${stay.animal.id}-${this.time.now}`;
+    rt.saveTexture(stay.photoKey);
+    rt.destroy();
+  }
+
   // ── The computer: baby announcements (issue #10) ─────────────────────────
   // A simple scripted flow, not a real chat client: interact near the
   // computer while a stay has un-announced babies to send a picture, then a
@@ -2006,7 +2056,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // data/names.js same as any other arrival — which get applied for real.
 
   _updateComputerIcon() {
-    const anyPending = !this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement);
+    // Issue #37: only counts as "pending" once her photo's actually taken —
+    // otherwise the mail icon would invite a send before there's a picture.
+    const anyPending = !this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement && s.photoTaken);
     if (anyPending && !this._computerNeedIcon) {
       this._computerNeedIcon = this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y - 40, NEED_KEY.mail).setDepth(9002);
     } else if (!anyPending && this._computerNeedIcon) {
@@ -2017,10 +2069,27 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   _useComputer() {
     if (this._computerBusy) return;
-    const stay = this.roster.stays.find((s) => s.needsAnnouncement);
+    const stay = this.roster.stays.find((s) => s.needsAnnouncement && s.photoTaken);
     if (!stay) return;
     this._computerBusy = true;
     this._updateComputerIcon(); // hide the icon immediately — it's being handled
+
+    // Issue #37: show the actual photo taken at her cage (if the texture's
+    // still around — a page reload doesn't persist Phaser textures, only the
+    // stay.photoKey string, so this quietly no-ops if it's gone) as a little
+    // polaroid popping up beside the monitor while it "sends".
+    if (stay.photoKey && this.textures.exists(stay.photoKey)) {
+      const img = this.add.image(COMPUTER_SPOT.x - 6, COMPUTER_SPOT.y - 30, stay.photoKey)
+        .setOrigin(0.5, 1).setDepth(9600).setScale(0);
+      this.tweens.add({
+        targets: img, scale: 1, duration: 300, ease: 'Back.easeOut',
+        onComplete: () => {
+          this.time.delayedCall(1400, () => {
+            this.tweens.add({ targets: img, alpha: 0, y: img.y - 16, duration: 400, onComplete: () => img.destroy() });
+          });
+        },
+      });
+    }
 
     this.game.events.emit(EVENTS.NOTIFY, `📷 Sent a picture of the babies to ${stay.animal.name}'s owner!`);
     this.time.delayedCall(1800, () => {
@@ -2655,7 +2724,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._grabLeash(stay));
     }
 
-    if (!this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement)) {
+    // Issue #37: the computer's only for SENDING now — she needs her photo
+    // taken first (see the photo consider() loop below).
+    if (!this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement && s.photoTaken)) {
       consider(COMPUTER_SPOT.x, COMPUTER_SPOT.y, () => this._useComputer());
     }
 
@@ -2666,6 +2737,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (!stay.birthReady) continue;
       const rec = this._staySprites.get(stay);
       if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._triggerBirth(stay));
+    }
+
+    // Issue #37 ("can we add something where you actually get to take cute
+    // pics of the babies before you send the email?"): a mom with new
+    // babies/hatchlings not yet photographed needs the player to walk up and
+    // snap her photo before the computer will let her be announced.
+    for (const stay of this.roster.stays) {
+      if (!stay.needsAnnouncement || stay.photoTaken) continue;
+      const rec = this._staySprites.get(stay);
+      if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._takePhoto(stay));
     }
 
     // Issue #13: bake a treat at the kitchen oven — only while the counter's

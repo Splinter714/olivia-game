@@ -78,7 +78,7 @@ export const YARD_DIVIDER_POST_KEY = 'prop-yard-divider-post';
 export const YARD_DIVIDER_LINE_KEY = 'prop-yard-divider-line';
 export const NEED_KEY = {
   food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail',
-  tuck: 'need-tuck', babies: 'need-babies', checkout: 'need-checkout',
+  tuck: 'need-tuck', babies: 'need-babies', checkout: 'need-checkout', photo: 'need-photo',
 };
 
 // Issue #32: one single cage grid now (the old per-section "By Type" layout
@@ -324,6 +324,14 @@ function drawNeedBubble(g, w, h, icon) {
     g.fillStyle(0xe0a95e, 1).fillRect(w * 0.28, h * 0.5, w * 0.44, h * 0.32);
     g.fillTriangle(w * 0.22, h * 0.5, w * 0.5, h * 0.26, w * 0.78, h * 0.5);
     g.fillStyle(0x8a5a34, 1).fillRect(w * 0.46, h * 0.62, w * 0.12, h * 0.2);
+  } else if (icon === 'photo') {
+    // A tiny camera — "take a picture of the babies" icon (issue #37),
+    // shown above a mom with new babies/hatchlings until the player walks
+    // up and snaps their photo (see KennelScene._takePhoto).
+    g.fillStyle(0x4a4a52, 1).fillRoundedRect(w * 0.2, h * 0.4, w * 0.6, h * 0.34, 3);
+    g.fillStyle(0x2a2a30, 1).fillRoundedRect(w * 0.34, h * 0.32, w * 0.18, h * 0.1, 2);
+    g.fillStyle(0xaee0f0, 1).fillCircle(w * 0.5, h * 0.57, w * 0.14);
+    g.fillStyle(0x4a4a52, 1).fillCircle(w * 0.5, h * 0.57, w * 0.08);
   } else { // water
     g.fillStyle(0x4b9fc4, 1);
     g.fillTriangle(w * 0.5, h * 0.24, w * 0.32, h * 0.62, w * 0.68, h * 0.62);
@@ -514,6 +522,7 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.tuck, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'tuck'));
   gen(scene, NEED_KEY.babies, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'babies'));
   gen(scene, NEED_KEY.checkout, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'checkout'));
+  gen(scene, NEED_KEY.photo, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'photo'));
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
   gen(scene, BLANKET_KEY, 36, 26, (g) => drawBlanket(g, 36, 26));
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));
