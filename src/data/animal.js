@@ -13,6 +13,14 @@ function nextId(speciesKey) {
   return `${speciesKey}-${_nextId++}`;
 }
 
+// Bumps the module-private id counter so a fresh arrival after restoring a
+// saved game (issue #34) never collides with a restored animal's own id —
+// data/persistence.js calls this once at boot with one past the highest
+// numeric suffix found in the save.
+export function ensureNextId(minNext) {
+  if (minNext > _nextId) _nextId = minNext;
+}
+
 // Creates a plain-object animal instance for `speciesKey` (must be a key in
 // data/species.js's SPECIES). Options let callers pin any field (arrivals may
 // want a specific name from the owner, a demo may want a fixed look);

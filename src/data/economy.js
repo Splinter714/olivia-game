@@ -25,10 +25,10 @@ export function computePayout(stay, rng = Math.random) {
   return base + (hadGreatCare(stay) ? GREAT_CARE_BONUS : 0);
 }
 
-// Session-scoped running total. Not persisted across reloads — nothing else
-// in the game survives a reload yet either (see roster.js's pool note).
-export function createEconomy() {
-  let total = 0;
+// Running total. `initialTotal` lets a caller resume a saved game's earnings
+// (issue #34's localStorage persistence) instead of always starting at 0.
+export function createEconomy(initialTotal = 0) {
+  let total = initialTotal;
   return {
     get total() { return total; },
     earn(amount) { total += amount; return total; },

@@ -3,6 +3,7 @@ import BootScene from './scenes/BootScene.js';
 import KennelScene from './scenes/KennelScene.js';
 import HudScene from './scenes/HudScene.js';
 import NotificationScene from './scenes/NotificationScene.js';
+import PauseScene from './scenes/PauseScene.js';
 
 // HiDPI: render the canvas buffer at the device's PHYSICAL pixels so pixel-art and
 // text are crisp on Retina screens, while keeping the on-screen size and all game
@@ -32,7 +33,7 @@ const game = new Phaser.Game({
     width: window.innerWidth * getDpr(),
     height: window.innerHeight * getDpr(),
   },
-  scene: [BootScene, KennelScene, HudScene, NotificationScene]
+  scene: [BootScene, KennelScene, HudScene, NotificationScene, PauseScene]
 });
 game.registry.set('dpr', getDpr()); // available to scenes from their first create()
 

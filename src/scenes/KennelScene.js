@@ -45,6 +45,7 @@ import {
 } from '../art/raccoon.js';
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
 import { createRoster, LOCATION, CARRY_KIND, assignCageSlot, isCageSlotOpen, anyOpenCageAnywhere } from '../data/roster.js';
+import { loadGame, saveGame, seedGlobalNameState } from '../data/persistence.js';
 import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
 import { WithSecretDragon } from '../dev/secretDragon.js';
@@ -91,6 +92,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   create() {
     applyDpr(this); // camera zoom = dpr; centred origin (startFollow needs it, see uiUtils.js)
 
+    // Issue #34: resume a saved game if one exists (roster/economy/clock/
+    // yard-divider state), instead of always starting fresh. loadGame()
+    // never throws — a missing/corrupt save just comes back null and
+    // everything below falls through to today's fresh-start behavior.
+    // seedGlobalNameState re-registers every restored animal's name/id so a
+    // brand-new arrival right after loading can't collide with one of them.
+    this._save = loadGame();
+    if (this._save) seedGlobalNameState(this._save);
+
     // Dev tool (src/dev/dragTool.js): a central registry of "things with a
     // hardcoded position a human might want to drag around" — every push
     // happens right where that thing is actually placed, in _buildProps()
@@ -123,7 +133,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // ── Yard divider (issue #20) — one movable HORIZONTAL fence line
     // splitting the outside yard into a top/bottom zone at its current y.
     // Set before _buildProps() below, which places the divider sprite here. ──
-    this.yardDividerY = YARD_DIVIDER_DEFAULT_Y;
+    this.yardDividerY = this._save?.yardDividerY ?? YARD_DIVIDER_DEFAULT_Y;
     this.carryingDivider = false;
     this._dividerVisual = null;
 
@@ -150,7 +160,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // top-left clock/money HUD and the bottom-right touch interact button).
     this._buildModeToggle();
 
-    this.clock = createClock();
+    // Issue #34: pause menu button, sitting right beside the Mix Cages toggle.
+    this._buildPauseButton();
+
+    this.clock = createClock(this._save
+      ? { startDay: this._save.clockDay, startHour: this._save.clockHourFloat }
+      : {});
     this._lastHour = this.clock.hour;
     this._lastPhase = this.clock.phase;
 
@@ -162,7 +177,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.navPath = null;
 
     // ── Roster / arrivals / carrying (issues #4, #5, #20) ──────────────────
-    this.roster = createRoster();
+    this.roster = createRoster(this._save ? { stays: this._save.stays, pool: this._save.pool } : null);
     this._staySprites = new Map(); // stay -> { pos, sprite, tag:{container,width,height}, extras:[...], babyLabels:[...], needIcons:{}, wanderBounds }
     this.carrying = null;          // the stay currently in the player's hands, or null
     this._carryOrigin = null;      // where `carrying` was picked up from: 'reception' | sectionKey | LOCATION.YARD
@@ -190,7 +205,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._computerBusy = false;
 
     // ── Economy: payouts + returning-guest upgrades (issue #12) ────────────
-    this.economy = createEconomy();
+    this.economy = createEconomy(this._save?.economyTotal ?? 0);
 
     // ── Back wing: baking + the raccoon surprise (issue #13) ───────────────
     this.treatTray = null;                        // { treat, sprite } on the kitchen counter, or null
@@ -213,14 +228,108 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     this.game.events.on(EVENTS.HOUR_CHANGE, this._onHourChange, this);
     this.game.events.on(EVENTS.PHASE_CHANGE, this._onPhaseChange, this);
+
+    // Issue #34: autosave every few seconds and once more on page unload —
+    // "a few seconds is fine, this is a kid's game, not high-stakes" (owner
+    // note on the issue). Everything _saveGame needs (roster/economy/clock)
+    // exists by this point in create().
+    this._autosaveTimer = this.time.addEvent({ delay: 5000, loop: true, callback: () => this._saveGame() });
+    this._onBeforeUnload = () => this._saveGame();
+    window.addEventListener('beforeunload', this._onBeforeUnload);
+
     this.events.once('shutdown', () => {
       this.game.events.off(EVENTS.HOUR_CHANGE, this._onHourChange, this);
       this.game.events.off(EVENTS.PHASE_CHANGE, this._onPhaseChange, this);
+      window.removeEventListener('beforeunload', this._onBeforeUnload);
     });
 
-    // Don't start with an empty kennel — one arrival is already waiting at
-    // reception when the shift begins.
-    this._spawnArrival(this.clock.day, this.clock.hour);
+    if (this._save) {
+      // Resuming: re-render every restored stay wherever she currently is
+      // (reception/section/yard), rather than seeding a brand-new arrival.
+      this._restoreStaySprites();
+      // HudScene/NotificationScene only update on these events firing — emit
+      // once now so the HUD immediately reflects the resumed day/hour/money
+      // instead of showing fresh-boot defaults until the next natural change.
+      this.game.events.emit(EVENTS.HOUR_CHANGE, { hour: this.clock.hour, phase: this.clock.phase, day: this.clock.day, syncOnly: true });
+      this.game.events.emit(EVENTS.PHASE_CHANGE, { phase: this.clock.phase, isNight: this.clock.phase === PHASE.NIGHT, syncOnly: true });
+      this.game.events.emit(EVENTS.MONEY_CHANGE, { total: this.economy.total });
+    } else {
+      // Don't start with an empty kennel — one arrival is already waiting at
+      // reception when the shift begins.
+      this._spawnArrival(this.clock.day, this.clock.hour);
+    }
+  }
+
+  // Issue #34: plain-JSON snapshot of everything needed to resume exactly
+  // where the player left off — see data/persistence.js for the save format
+  // contract. Cheap enough to call on a timer; guarded in case it somehow
+  // fires before roster/economy/clock exist yet.
+  _saveGame() {
+    if (!this.roster || !this.economy || !this.clock) return;
+    saveGame({
+      stays: this.roster.stays,
+      pool: this.roster.pool,
+      economyTotal: this.economy.total,
+      clockDay: this.clock.day,
+      clockHourFloat: this.clock.hourFloat,
+      yardDividerY: this.yardDividerY,
+    });
+  }
+
+  // Issue #34: re-renders every stay from a restored save wherever she
+  // currently is, instead of the normal one-at-a-time arrival/dropoff flow
+  // that builds sprites incrementally as things happen live. Mirrors the
+  // exact position math each of those live call sites already uses
+  // (_placeAtReception, _sectionSlot, _dropOffToYard) so a resumed stay ends
+  // up in the same kind of spot a freshly-placed one would.
+  //
+  // `LOCATION.CARRYING` (mid-carry when the page was closed) has no
+  // meaningful visual to resume — DESIGN.md's persistence goal is "the
+  // kennel looks the same when you come back", not frame-accurate resume of
+  // an in-progress pickup — so she's settled back wherever she last had a
+  // real home: her cage if she had one (`cageSection`), reception otherwise.
+  _restoreStaySprites() {
+    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
+    for (const stay of this.roster.stays) {
+      if (stay.location === LOCATION.CARRYING) {
+        stay.location = sectionKeys.has(stay.cageSection) ? stay.cageSection : LOCATION.RECEPTION;
+      }
+    }
+
+    const { rug } = RECEPTION;
+    let receptionIdx = 0;
+    const yardIdx = {};
+    for (const stay of this.roster.stays) {
+      if (stay.location === LOCATION.RECEPTION) {
+        const idx = receptionIdx++;
+        const x = rug.x + 30 + (idx % 3) * 55;
+        const y = rug.y + 24 + Math.floor(idx / 3) * 42;
+        this._renderStay(stay, x, y);
+      } else if (stay.location === LOCATION.YARD) {
+        const zoneKey = stay.yardZone || 'top';
+        const idx = yardIdx[zoneKey] || 0;
+        yardIdx[zoneKey] = idx + 1;
+        const rect = this._yardZoneRect(zoneKey);
+        const pos = this._gridSlot(rect, idx, 20, 44, 52);
+        this._renderStay(stay, pos.x, pos.y, { yardBounds: rect });
+      } else if (sectionKeys.has(stay.location)) {
+        const section = SECTIONS.find((s) => s.key === stay.location);
+        const pos = this._sectionSlot(section, stay);
+        this._renderStay(stay, pos.x, pos.y);
+      } else {
+        // Unrecognized/corrupt location — safest fallback is reception
+        // rather than dropping her sprite entirely.
+        stay.location = LOCATION.RECEPTION;
+        const idx = receptionIdx++;
+        const x = rug.x + 30 + (idx % 3) * 55;
+        const y = rug.y + 24 + Math.floor(idx / 3) * 42;
+        this._renderStay(stay, x, y);
+      }
+    }
+    // Bowl/litter-box/cage-art sprites are occupancy-driven and don't exist
+    // yet for a stay that was just placed by the loop above — one refresh
+    // catches every cage at once (same call _dropOff/_applyCageMode make).
+    this._refreshCageArt();
   }
 
   // ── World geometry ──────────────────────────────────────────────────────
@@ -556,6 +665,54 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this.generalizedCages ? 'Cages mixed — any pet can go in any open cage!' : 'Back to cages by type!');
   }
 
+  // ── Pause menu (issue #34) ────────────────────────────────────────────────
+  // Same small on-screen-button style as _buildModeToggle above, sitting
+  // right next to it. Opening it actually pauses KennelScene (this.scene.pause
+  // stops Phaser from calling update() at all here, which is where the
+  // clock/needs/birth timers/wandering all live) while PauseScene runs in
+  // parallel on top, same "always-on-top overlay scene" pattern as
+  // HudScene/NotificationScene, so its own buttons stay clickable.
+
+  _buildPauseButton() {
+    const g = this.add.graphics().setScrollFactor(0).setDepth(9998);
+    const label = this.add.text(0, 0, '⏸️', {
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '18px',
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(9999);
+    const zone = this.add.zone(0, 0, 10, 10).setScrollFactor(0).setDepth(9999)
+      .setInteractive({ useHandCursor: true });
+    zone.on('pointerdown', () => this._openPauseMenu());
+    this._pauseButton = { g, label, zone, w: 44, h: 34 };
+    this._layoutPauseButton();
+    this.scale.on('resize', () => this._layoutPauseButton());
+  }
+
+  _layoutPauseButton() {
+    const b = this._pauseButton;
+    if (!b) return;
+    const off = worldUiOffset(this);
+    const modeToggleW = this._modeToggle ? this._modeToggle.w + 8 : 0;
+    b.x = off.x + logicalW(this) - modeToggleW - b.w / 2 - 16;
+    b.y = off.y + 16 + b.h / 2;
+    b.zone.setPosition(b.x, b.y).setSize(b.w, b.h);
+    this._renderPauseButton();
+  }
+
+  _renderPauseButton() {
+    const b = this._pauseButton;
+    if (!b) return;
+    b.g.clear();
+    b.g.fillStyle(0x2a3648, 0.75).fillRoundedRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, 8);
+    b.g.lineStyle(2, 0xffffff, 0.85).strokeRoundedRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, 8);
+    b.label.setPosition(b.x, b.y);
+  }
+
+  _openPauseMenu() {
+    this._saveGame(); // opening the menu is as good a checkpoint as any
+    this.scene.pause();
+    this.scene.launch('Pause');
+  }
+
   // Owner note 2026-07-29 ("make the whole place just a big grid of empty
   // cages... get rid of the area backgrounds and stuff, but only in
   // multi-cage mode"): Mix Cages mode is no longer a re-skin of the original
@@ -853,7 +1010,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // Every render call destroys any previous sprites for that stay first, so a
   // stay can move between reception → carrying → a section without leaking art.
 
-  _onHourChange({ hour, phase, day }) {
+  _onHourChange({ hour, phase, day, syncOnly }) {
+    // Issue #34: after loading a save, KennelScene re-emits HOUR_CHANGE/
+    // PHASE_CHANGE with `syncOnly` set purely so HudScene picks up the
+    // resumed day/hour immediately instead of showing fresh-boot defaults —
+    // NOT a real tick, so skip the arrival/checkout/night side effects below.
+    if (syncOnly) return;
     if (phase === PHASE.DAY || phase === PHASE.EVENING) {
       this._spawnArrival(day, hour);
       if (Math.random() < 0.25) this._spawnArrival(day, hour); // "occasionally two" for variety
@@ -2230,7 +2392,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     return this.roster.stays.filter((s) => sectionKeys.has(s.location));
   }
 
-  _onPhaseChange({ isNight }) {
+  _onPhaseChange({ isNight, syncOnly }) {
+    // Issue #34: see _onHourChange's syncOnly comment — a resumed-at-night
+    // save shouldn't forcibly replay the whole tuck-in sequence on load.
+    if (syncOnly) return;
     if (isNight) this._startNight();
   }
 

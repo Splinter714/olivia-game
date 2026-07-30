@@ -144,16 +144,35 @@ function babyCountFor(speciesKey, rng) {
   return 1 + Math.floor(rng() * maxExtra);
 }
 
-// Creates a fresh roster: an empty in-memory stay list plus a returning-guest
-// pool of named animals generated once at game start (DESIGN.md's "old friends").
-// Not persisted across page loads yet — see the report/follow-up note on
-// localStorage persistence, which is out of scope for this pass.
-export function createRoster() {
-  const stays = [];
-  const pool = [];
-  for (const key of SPECIES_KEYS) {
-    const n = RETURNING_POOL_SIZE[key] ?? 2;
-    for (let i = 0; i < n; i++) pool.push({ animal: createAnimal(key), available: true, visits: 0 });
+// Creates a roster: an in-memory stay list plus a returning-guest pool of
+// named animals (DESIGN.md's "old friends"). With no `saved` argument, starts
+// fresh — an empty stay list and a freshly-generated pool, exactly like
+// before. Issue #34 (localStorage persistence): pass `{ stays, pool }` (the
+// plain-data arrays data/persistence.js parsed back out of a save) to resume
+// with those exact stays/pool instead — every closure below (spawnArrival,
+// checkoutDue, spawnDragon) reads/mutates whichever `stays`/`pool` arrays it
+// closed over, so handing it the restored arrays is enough to make the whole
+// roster behave as if it had been running the whole time.
+export function createRoster(saved = null) {
+  const stays = saved?.stays ?? [];
+  const pool = saved?.pool ?? [];
+  if (!saved) {
+    for (const key of SPECIES_KEYS) {
+      const n = RETURNING_POOL_SIZE[key] ?? 2;
+      for (let i = 0; i < n; i++) pool.push({ animal: createAnimal(key), available: true, visits: 0 });
+    }
+  } else {
+    // In a live (never-reloaded) session, a checked-in returning guest's
+    // `stay.animal` and her pool entry's `.animal` are the exact SAME object
+    // (spawnArrival above reuses `entry.animal` directly as the mom) — so any
+    // mutation (e.g. checkoutDue awarding a new upgrade) lands on both at
+    // once. A plain JSON save/load necessarily produces two separate-but-
+    // equal copies instead; re-link them here so that invariant holds again
+    // once restored, same as if the session had never reloaded.
+    for (const stay of stays) {
+      const entry = pool.find((p) => p.animal.id === stay.animal.id);
+      if (entry) entry.animal = stay.animal;
+    }
   }
 
   function pickSpecies(rng) {

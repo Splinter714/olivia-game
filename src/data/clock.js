@@ -58,9 +58,12 @@ export function tintForHour(hourFloat) {
   };
 }
 
-export function createClock({ msPerHour = MS_PER_GAME_HOUR, startHour = 8 } = {}) {
+// `startDay`/`startHour` let a caller resume a saved game exactly where it
+// left off (issue #34's localStorage persistence) instead of always
+// beginning at day 1, 8 o'clock.
+export function createClock({ msPerHour = MS_PER_GAME_HOUR, startHour = 8, startDay = 1 } = {}) {
   let hourFloat = wrap24(startHour);
-  let day = 1;
+  let day = startDay;
   const rollover = () => { while (hourFloat >= 24) { hourFloat -= 24; day += 1; } };
   return {
     get hourFloat() { return hourFloat; },
