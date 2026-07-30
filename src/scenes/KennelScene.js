@@ -2620,7 +2620,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
       if (!settled) continue;
       const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
-      if (this.night.active && !bathroomDog) continue;
+      // Bug fix (owner note 2026-07-29: "I took dogs out to go potty at
+      // night, and it won't let me take them back inside"): once she's done
+      // her business her bathroom need clears, so she no longer qualified
+      // for the exemption above and got stuck outside — _recallYardToCages
+      // only auto-recalls everyone ONCE, at the moment night starts, not for
+      // someone taken out afterward. Anyone currently in the yard has to
+      // stay pickup-able at night regardless of her need, so she can always
+      // be brought back in.
+      const inYard = stay.location === LOCATION.YARD;
+      if (this.night.active && !bathroomDog && !inYard) continue;
       // A mom flagged ready-and-waiting (birthReady, below) sits at this
       // same sprite position — without this guard, the tie in consider()
       // always resolves to whichever action was registered first (this
