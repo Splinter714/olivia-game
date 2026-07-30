@@ -1359,7 +1359,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         return;
       }
       const found = this._findOpenCageNear(this.player.x, this.player.y);
-      if (!found) return;
+      if (!found || !interactPressed) return;
       if (this._dropOff(stay, found.section, { cageSlot: found.slot })) this._carryOrigin = null;
     } else if (this._carryOrigin === LOCATION.RECEPTION) {
       // Owner note 2026-07-29 ("why can't I take a pet directly to the play
