@@ -1,119 +1,56 @@
-// Per-section furniture layout — pure geometry, no Phaser. Derived from
-// data/sections.js's SECTIONS the same way penRects()/wallRects() are: plain
+// Kennel furniture layout — pure geometry, no Phaser. Derived from
+// data/sections.js the same way wallRects()/backWingWallRects() are: plain
 // rects that both KennelScene's rendering and its interaction/collision code
 // can share, so the numbers only live in one place.
 import {
-  SECTIONS, RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE,
-  WALL, CAGE_HALL,
+  RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE, SECTIONS,
 } from './sections.js';
 
-const sectionByKey = (key) => SECTIONS.find((s) => s.key === key);
-
-// Turtle tank: glass-covered water tank filling most of the section. Issue
-// #20 replaced the single shared sand island with individual per-turtle
-// islands (see CAGES below) — the tank itself (the water + glass cover) is
-// still one shared piece of furniture per section.
-export const TURTLE = (() => {
-  const s = sectionByKey('turtle').rect;
-  const tank = { x: s.x + 18, y: s.y + 38, w: s.w - 36, h: s.h - 56 };
-  return { tank };
-})();
-
-// Snake tank (issue #14): same glass-tank geometry as the turtle tank, minus
-// the water. Issue #20 replaced the single shared resting perch with
-// individual per-snake perches (see CAGES below).
-export const SNAKE = (() => {
-  const s = sectionByKey('snake').rect;
-  const tank = { x: s.x + 18, y: s.y + 38, w: s.w - 36, h: s.h - 56 };
-  return { tank };
-})();
-
-// ── Individual cages (issue #18, extended by issue #20) ─────────────────────
-// Every section gets a fixed grid of CAGES_PER_SECTION (6) individual cages —
-// "a cage to sleep" for every animal, auto-assigned on drop-off, one per stay
+// ── The cage grid (issue #18, reworked into one single grid by issue #32) ──
+// Every species gets a fixed CAGES_PER_SECTION (6) individual cages — "a
+// cage to sleep" for every animal, auto-assigned on drop-off, one per stay
 // (her babies/eggs share it, same as today's "near mom" rendering).
 //
-// Issue #20: turtles/snakes now get this same per-slot treatment instead of
-// one big shared island/perch — each cage slot sits inside the section's
-// shared tank and is styled with a small island (turtle) or perch (snake)
-// instead of wire-pen art (see art/props.js's CAGE_KEY building). A turtle/
-// snake mom still shares her one slot with her eggs/babies, same as before.
+// Issue #32 ("get rid of the south room and the main room floor tile areas...
+// move the modular cages to a clean consistent set of rows and columns just
+// north of the check-in desk"): the old 8 separate walled per-species rooms,
+// and later the separate south "Cage Hall" room, are both gone — there's
+// only ONE cage grid now, laid out directly in the main room, and any pet
+// can go in any open cage regardless of species (no clustering). Same
+// (sectionKey, slot) identity/bookkeeping data/roster.js already used for
+// both of those — a stay's `location`/`cageSlot` still just means "species
+// key s's Nth nominal cage" — only the physical (x, y) position changes.
 //
-// Cats/dogs used to reserve only the bottom half of their section for cages
-// (the top half held their shared playpen) — issue #20 removed the playpen
-// entirely, so they now use their whole section rect like everyone else.
-function cageAreaFor(key) {
-  const s = sectionByKey(key).rect;
-  if (key === 'turtle' || key === 'snake') {
-    const tank = key === 'turtle' ? TURTLE.tank : SNAKE.tank;
-    return { x: tank.x + 10, y: tank.y + 12, w: tank.w - 20, h: tank.h - 22 };
-  }
-  return { x: s.x + 16, y: s.y + 48, w: s.w - 32, h: s.h - 64 };
-}
+// 8 species x CAGES_PER_SECTION(6) = 48 cages, laid out as a flat 8-column x
+// 6-row grid (48 cells exactly), each cell a clean uniform 100x100 (owner:
+// "the kennels themselves need to be smaller... like 100x100"), with a
+// consistent gap between cells, centered in the room's open floor north of
+// the reception desk, spanning roughly the same overall area the old 8
+// sections used to occupy.
+const CAGE_COLS = 8;
+const CAGE_ROWS = 6; // 8*6 = 48 = SECTIONS.length * CAGES_PER_SECTION
+export const CAGE_W = 100;
+export const CAGE_H = 100;
+const CAGE_GAP = 12;
+const CAGE_GRID_W = CAGE_COLS * CAGE_W + (CAGE_COLS - 1) * CAGE_GAP;
+const CAGE_GRID_H = CAGE_ROWS * CAGE_H + (CAGE_ROWS - 1) * CAGE_GAP;
+// Centered horizontally in the room's interior; vertically just below the
+// north wall, ending well clear of the reception desk/rug below it.
+const CAGE_ORIGIN_X = ROOM.w / 2 - CAGE_GRID_W / 2;
+const CAGE_ORIGIN_Y = ROOM.y + 48;
 
-// Lays out `count` equal cage rects in a `cols`x`rows` grid across `rect`.
-function cageGrid(rect, cols = 3, rows = 2, pad = 8, gap = 8) {
-  const cellW = (rect.w - pad * 2 - gap * (cols - 1)) / cols;
-  const cellH = (rect.h - pad * 2 - gap * (rows - 1)) / rows;
-  const out = [];
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      out.push({
-        x: rect.x + pad + c * (cellW + gap),
-        y: rect.y + pad + r * (cellH + gap),
-        w: cellW,
-        h: cellH,
-      });
-    }
-  }
-  return out;
-}
-
-// sectionKey -> array of CAGES_PER_SECTION cage rects. Every section
-// (including turtle/snake as of issue #20) gets one. Used for NORMAL ("By
-// Type") mode — untouched by the Cage Hall rework below (owner note
-// 2026-07-29: normal mode stays exactly as it is today).
 export const CAGES = Object.fromEntries(
-  SECTIONS.map((s) => [s.key, cageGrid(cageAreaFor(s.key), 3, 2, 8, 8)]), // 3x2 = CAGES_PER_SECTION
-);
-
-// ── Unified cage grid (Mix Cages mode, owner note 2026-07-29) ───────────────
-// "Make the whole place just a big grid of empty cages with halls... between
-// them" — a completely separate position set (not a resize of the 8
-// sections above) laid out inside CAGE_HALL (sections.js), a brand-new room
-// appended south of the main building. Same (sectionKey, slot) identity as
-// CAGES (roster.js's occupancy bookkeeping doesn't change — a stay's
-// `location`/`cageSlot` still means "section s's Nth nominal cage"), just a
-// different on-screen position for that identity while generalized mode is
-// on. KennelScene swaps which of CAGES/UNIFIED_CAGES it reads from (and
-// re-renders every settled stay + re-positions every cage/bowl/litter sprite)
-// the instant the mode toggles — see its _activeCages().
-//
-// 8 sections x CAGES_PER_SECTION(6) = 48 cages, laid out as a flat 8-column x
-// 6-row grid (48 cells exactly) — no clustering by species (owner: "no
-// residual per-section identity in the layout"). Each cell is exactly
-// GENERALIZED_CAGE_W/H (167x167, art/props.js) with an 8px gap, sized to
-// fill CAGE_HALL's interior edge-to-edge: 8*167 + 7*8 = 1392 = CAGE_HALL.w -
-// 2*WALL, and 6*167 + 5*8 = 1042 = CAGE_HALL.h - 2*WALL.
-const UNIFIED_COLS = 8;
-const UNIFIED_ROWS = 6; // 8*6 = 48 = SECTIONS.length * CAGES_PER_SECTION
-const UNIFIED_CELL = 167; // matches art/props.js's GENERALIZED_CAGE_W/H exactly
-const UNIFIED_GAP = 8;
-const UNIFIED_ORIGIN_X = CAGE_HALL.x + WALL;
-const UNIFIED_ORIGIN_Y = CAGE_HALL.y + WALL;
-
-export const UNIFIED_CAGES = Object.fromEntries(
   SECTIONS.map((s, si) => [
     s.key,
     Array.from({ length: CAGES_PER_SECTION }, (_, slot) => {
       const idx = si * CAGES_PER_SECTION + slot;
-      const col = idx % UNIFIED_COLS;
-      const row = Math.floor(idx / UNIFIED_COLS);
+      const col = idx % CAGE_COLS;
+      const row = Math.floor(idx / CAGE_COLS);
       return {
-        x: UNIFIED_ORIGIN_X + col * (UNIFIED_CELL + UNIFIED_GAP),
-        y: UNIFIED_ORIGIN_Y + row * (UNIFIED_CELL + UNIFIED_GAP),
-        w: UNIFIED_CELL,
-        h: UNIFIED_CELL,
+        x: CAGE_ORIGIN_X + col * (CAGE_W + CAGE_GAP),
+        y: CAGE_ORIGIN_Y + row * (CAGE_H + CAGE_GAP),
+        w: CAGE_W,
+        h: CAGE_H,
       };
     }),
   ]),
@@ -131,9 +68,9 @@ export function cageAnimalSpot(cage) {
 // BOWL_SPOTS below, just gated on species === 'cat' (KennelScene
 // ._refreshLitterBoxes) rather than the whole bowl-eligible list, and one
 // spot per cage instead of two (no separate water variant). Computed for
-// every section key (not just 'cat') because in generalized mode a cat can
-// end up settled in ANY section's nominal slot — mirrors exactly how
-// BOWL_SPOTS covers every key regardless of who's actually placed there.
+// every species key (not just 'cat') because a cat can end up settled in
+// ANY cage slot — mirrors exactly how BOWL_SPOTS covers every key regardless
+// of who's actually placed there.
 export const LITTER_BOX_SIZE = { w: 40, h: 24 };
 function litterBoxSpotForCage(cage) {
   return { x: cage.x + cage.w * 0.26, y: cage.y + cage.h * 0.46 };
@@ -141,20 +78,13 @@ function litterBoxSpotForCage(cage) {
 export const LITTER_SPOTS = Object.fromEntries(
   Object.keys(CAGES).map((key) => [key, CAGES[key].map(litterBoxSpotForCage)]),
 );
-export const LITTER_SPOTS_UNIFIED = Object.fromEntries(
-  Object.keys(UNIFIED_CAGES).map((key) => [key, UNIFIED_CAGES[key].map(litterBoxSpotForCage)]),
-);
 
-// Scooper pickup prop — relocated out of the (now-removed) dog playpen to a
-// small stand in the hallway just outside the dog section's opening, since
-// that's the section it was tucked into before (issue #20). Dogs no longer
-// have an indoor mess of their own to scoop (their only potty pathway is the
-// leash walk outside — see needs.bathroom); the scooper is now purely for the
-// cat litter box.
-export const SCOOPER_SPOT = (() => {
-  const s = sectionByKey('dog').rect;
-  return { x: s.x - 22, y: s.y + s.h - 30 };
-})();
+// Scooper pickup prop (issue #32: the dog section it used to be tucked into
+// no longer exists — relocated to a small stand just outside the cage
+// grid's entrance, on the walk-in side facing reception). Purely for the cat
+// litter box now — dogs' only potty pathway is the outside leash walk (see
+// needs.bathroom).
+export const SCOOPER_SPOT = { x: CAGE_ORIGIN_X - 22, y: CAGE_ORIGIN_Y + CAGE_GRID_H - 30 };
 
 // One food/water bowl SPRITE spot per individual cage slot (issue #22 #6,
 // refined by owner note 2026-07-29: "the interact point should be the cage,
@@ -163,11 +93,11 @@ export const SCOOPER_SPOT = (() => {
 // targets the cage's own rect (cageAnimalSpot) for the feeding INTERACTION,
 // and only creates a bowl sprite here once a stay is actually settled in
 // that cage slot (destroying it again once the cage goes empty) — see
-// KennelScene._refreshBowls. Turtles are excluded: a turtle on its
-// water-tank island can't walk over to a bowl the way a land animal can, so
-// they're fed differently (a piece of lettuce dropped into the tank — see
-// KennelScene._feedTurtleTank). Snakes stay on dry sand/perch, so a regular
-// per-cage bowl still works fine for them.
+// KennelScene._refreshBowls.
+//
+// Issue #32 #4: turtles now get the exact same per-cage bowl as everyone
+// else (the old shared-tank/lettuce-drop mechanic is gone — see
+// BOWL_ELIGIBLE_KEYS below).
 //
 // Issue #32 #6: recentered from a corner to bottom-center (owner note
 // 2026-07-29: "food water bowls should be more centered on each cage") —
@@ -177,15 +107,9 @@ export const SCOOPER_SPOT = (() => {
 function bowlSpotForCage(cage) {
   return { x: cage.x + cage.w / 2 - 12, y: cage.y + cage.h - 8 };
 }
-const BOWL_ELIGIBLE_KEYS = ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'];
+const BOWL_ELIGIBLE_KEYS = ['turtle', 'guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'];
 export const BOWL_SPOTS = Object.fromEntries(
   BOWL_ELIGIBLE_KEYS.map((key) => [key, CAGES[key].map(bowlSpotForCage)]),
-);
-// Mix Cages counterpart (owner note 2026-07-29) — same per-slot corner spot,
-// computed against UNIFIED_CAGES' hall positions instead. KennelScene picks
-// whichever of these matches the live mode (see _activeBowlSpots).
-export const BOWL_SPOTS_UNIFIED = Object.fromEntries(
-  BOWL_ELIGIBLE_KEYS.map((key) => [key, UNIFIED_CAGES[key].map(bowlSpotForCage)]),
 );
 
 // Water bowl SPRITE spot (owner note 2026-07-29: "same with water bowls" —
@@ -193,27 +117,15 @@ export const BOWL_SPOTS_UNIFIED = Object.fromEntries(
 // interactable). Issue #32 #6: sits just right of bottom-center, right next
 // to the (also recentered) food bowl at cage.w/2 - 12 — same y, mirrored
 // x-offset, so the two sit side by side near the cage's bottom-center
-// without overlapping. Same species list/turtle exclusion as BOWL_SPOTS
-// (turtles have no bowl of any kind — see the comment above).
+// without overlapping. Same species list as BOWL_SPOTS.
 function waterBowlSpotForCage(cage) {
   return { x: cage.x + cage.w / 2 + 12, y: cage.y + cage.h - 8 };
 }
 export const WATER_BOWL_SPOTS = Object.fromEntries(
   BOWL_ELIGIBLE_KEYS.map((key) => [key, CAGES[key].map(waterBowlSpotForCage)]),
 );
-export const WATER_BOWL_SPOTS_UNIFIED = Object.fromEntries(
-  BOWL_ELIGIBLE_KEYS.map((key) => [key, UNIFIED_CAGES[key].map(waterBowlSpotForCage)]),
-);
 
-// Turtle feeding spot (issue #20 follow-up): a little lettuce-leaf marker at
-// the tank's edge — interact here to drop in a piece of lettuce, which every
-// hungry turtle in the tank drifts over to eat (KennelScene._feedTurtleTank).
-export const TURTLE_FEED_SPOT = {
-  x: TURTLE.tank.x + TURTLE.tank.w - 18,
-  y: TURTLE.tank.y + 18,
-};
-
-// ── Outside yard (issue #20) ─────────────────────────────────────────────────
+// ── Outside yard (issue #20, yard bowls added by issue #32's follow-up) ────
 // The outside grass strip (data/sections.js's OUTSIDE/WORLD) is the real play
 // space for any species now. A single movable divider prop splits it into two
 // zones by default ("two zones, but generalizable so they can be split
@@ -225,6 +137,25 @@ export const YARD_MARGIN = 40;
 export const YARD_DIVIDER_DEFAULT_Y = ROOM.y + ROOM.h / 2;
 export const YARD_DIVIDER_X0 = OUTSIDE.x + YARD_MARGIN;
 export const YARD_DIVIDER_X1 = OUTSIDE.x + OUTSIDE.w - YARD_MARGIN;
+
+// Issue #32 follow-up ("in the outdoor play area, there should be food and
+// water bowls available for general animal use"): one food+water pair per
+// yard zone. Fixed, not derived from the divider's current y — the divider
+// only ever clamps to ROOM.y+64..ROOM.y+ROOM.h-64 (KennelScene._dropDivider),
+// so a spot near the very top of the yard is always above even the highest
+// the divider can sit (always in the "top" zone), and a spot near the very
+// bottom is always below even the lowest the divider can sit (always in the
+// "bottom" zone) — no per-frame recomputation needed as the fence moves.
+export const YARD_BOWL_SPOTS = {
+  top: {
+    food:  { x: YARD_DIVIDER_X0 + 40, y: ROOM.y + 40 },
+    water: { x: YARD_DIVIDER_X0 + 70, y: ROOM.y + 40 },
+  },
+  bottom: {
+    food:  { x: YARD_DIVIDER_X0 + 40, y: ROOM.y + ROOM.h - 40 },
+    water: { x: YARD_DIVIDER_X0 + 70, y: ROOM.y + ROOM.h - 40 },
+  },
+};
 
 // The reception computer (issue #10) — "the player has a computer... to send
 // a message with a picture of the babies to the owners" (DESIGN.md). Sits on

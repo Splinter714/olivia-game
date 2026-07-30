@@ -1,20 +1,19 @@
 import Phaser from 'phaser';
 import {
   WALL, ROOM, OUTSIDE, WORLD, BACK_DOOR, FRONT_DOOR, RECEPTION, SECTIONS,
-  BACK_WING, STAFF_DOOR, WING_DOOR, STORAGE_ROOM, HOUSE_ROOM, CAGE_HALL, CAGE_HALL_DOOR,
-  penRects, wallRects, backWingWallRects, outsideFenceRects, cageHallWallRects,
+  BACK_WING, STAFF_DOOR, WING_DOOR, STORAGE_ROOM, HOUSE_ROOM,
+  wallRects, backWingWallRects, outsideFenceRects,
 } from '../data/sections.js';
 import {
-  TURTLE, SNAKE, SCOOPER_SPOT, BOWL_SPOTS, WATER_BOWL_SPOTS, TURTLE_FEED_SPOT, COMPUTER_SPOT,
+  SCOOPER_SPOT, BOWL_SPOTS, WATER_BOWL_SPOTS, COMPUTER_SPOT,
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS, BED, BED_SPOT,
-  CAGES, UNIFIED_CAGES, BOWL_SPOTS_UNIFIED, WATER_BOWL_SPOTS_UNIFIED,
-  LITTER_SPOTS, LITTER_SPOTS_UNIFIED,
+  CAGES, LITTER_SPOTS, YARD_BOWL_SPOTS,
   cageAnimalSpot, YARD_DIVIDER_DEFAULT_Y, YARD_DIVIDER_X0, YARD_DIVIDER_X1,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
 import { findPath } from '../data/path.js';
-import { tickNeeds, clearNeed } from '../data/needs.js';
+import { tickNeeds, clearNeed, createBowlState } from '../data/needs.js';
 import { tickBirth, attachBirthTimer } from '../data/births.js';
 import { SPECIES, FAMILY } from '../data/species.js';
 import { pickWakeEvent, WAKE_REASON } from '../data/night.js';
@@ -33,12 +32,12 @@ import { resolveTieBreakers, effectiveLook } from '../data/distinguish.js';
 import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY, CARRY_DISPLAY_SCALE } from '../art/carry.js';
 import {
-  buildPropTextures, TANK_KEY, SNAKE_TANK_KEY, LITTER_BOX_KEY,
+  buildPropTextures, LITTER_BOX_KEY,
   SCOOPER_KEY, BOWL_KEY, BOWL_KEY_BY_SPECIES, BOWL_EMPTY_KEY, BOWL_EMPTY_KEY_BY_SPECIES,
   WATER_BOWL_KEY, WATER_BOWL_EMPTY_KEY,
-  MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_KEY_UNIFORM, EMPTY_CAGE_KEY,
+  MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY, BED_KEY,
-  LETTUCE_KEY, YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
+  YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
 import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
@@ -55,10 +54,6 @@ import { WithSecretDragon } from '../dev/secretDragon.js';
 // override convention — createAnimal({ name: BABY_PLACEHOLDER }).
 const BABY_PLACEHOLDER = '???';
 
-// TEMP DEBUG (owner request 2026-07-29, bowl-visibility investigation) —
-// flip off and delete once the actual bowl-visibility bug is root-caused.
-const BOWL_DEBUG = true;
-
 const SPEED = 160; // px/s, world (logical) units
 const PICKUP_RADIUS = 50; // px, how close the player must be to interact with anything
 const NAME_TAG_RADIUS = 80; // px, how close the player must be to read a name tag (issue #22 #2)
@@ -67,7 +62,6 @@ const NAME_TAG_RADIUS = 80; // px, how close the player must be to read a name t
 // only potty pathway is the leash walk outside (needs.bathroom). Only the
 // cat litter box still spawns periodic messes indoors.
 const CAT_LITTER_INTERVAL = () => 25_000 + Math.random() * 25_000;
-const TANK_WATER_INTERVAL = () => 30_000 + Math.random() * 25_000; // turtles need "a lot of water"
 
 // Night sequence timings (issue #11) — the screen fades to black once
 // everyone's tucked in, fades back for each wake-up so the player can act,
@@ -111,22 +105,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // below, so the registry can't drift from the real world.
     this._devRegistry = [];
 
-    // Issue #27: "generalized cages" toggle — ON by default (owner request,
-    // 2026-07-29: "make mixed cages default"). See _buildModeToggle for the
-    // on-screen button and _applyCageMode/_refreshCageArt for the live
-    // visual + placement-logic switch — _buildModeToggle also applies the
-    // matching visuals once at boot, since world/collision is always built
-    // in normal-mode form first and only _applyCageMode() neutralizes it.
-    this.generalizedCages = true;
-
     buildKennelTextures(this);
-    for (const s of SECTIONS) buildFloorTile(this, `floor-${s.key}`, s.floor, s.floorDark);
     buildFloorTile(this, 'floor-storage', 0xcbb994, 0xbfa987);
     buildFloorTile(this, 'floor-house', 0xf5ecd8, 0xe8dfc8);
-    // Neutral, un-themed floor tone shown across every section while
-    // generalized mode is on, so the room visually reads as "no sections"
-    // even though the walls/cage positions haven't moved.
-    buildFloorTile(this, 'floor-neutral', 0xd8d2c4, 0xccc6b8);
     buildPlayerTexture(this);
     buildOwnerTexture(this);
     buildAnimalTextures(this);
@@ -160,11 +141,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.buildDevDrag(); // F9 to toggle — see src/dev/dragTool.js
     this.buildSecretDragon(); // type "DRAGON" — see src/dev/secretDragon.js
 
-    // Issue #27: small on-screen toggle button, top-right (clear of the
-    // top-left clock/money HUD and the bottom-right touch interact button).
-    this._buildModeToggle();
-
-    // Issue #34: pause menu button, sitting right beside the Mix Cages toggle.
+    // Issue #34: pause menu button, top-right (clear of the top-left
+    // clock/money HUD and the bottom-right touch interact button).
     this._buildPauseButton();
 
     this.clock = createClock(this._save
@@ -191,7 +169,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment she starts walking in until her pet is picked up (issue #25)
 
     // ── Night: tuck-in / staying awake / wake-ups (issue #11) ──────────────
-    // Issue #34 regression fix: this has to exist BEFORE _applyCageMode()
+    // Issue #34 regression fix: this has to exist BEFORE _refreshCageArt()
     // below — with a restored save, that call already has settled stays to
     // render, and _renderStay reads this.night.active while restoring each
     // one's tuck-in indicator.
@@ -208,19 +186,19 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.sleepGfx = this.add.graphics().setScrollFactor(0).setDepth(10000);
     this.sleepAlpha = 0;
 
-    // Now that this.roster/this._staySprites exist, apply the Mix Cages
-    // toggle's visuals to match its default (see _buildModeToggle, which
-    // builds the button earlier but can't call this yet at that point).
-    this._applyCageMode();
+    // Now that this.roster/this._staySprites exist, do the initial cage-art
+    // pass (bowls/litter boxes are occupancy-driven, so they can't be drawn
+    // any earlier than this — see _buildProps' own comment).
+    this._refreshCageArt();
 
     // (yardDividerY/carryingDivider/_dividerVisual and the scooper-rest state
     // are set earlier, above _buildProps() — see that comment.)
     this.messes = [];              // { kind: 'cat', x, y, sprite } — issue #20: dogs no longer mess indoors
     this._catLitterTimer = CAT_LITTER_INTERVAL();
-    this.turtleTankNeedsWater = false;
-    this._tankTimer = TANK_WATER_INTERVAL();
-    this._tankNeedIcon = null;
-    this._turtleFeeding = false;   // mid lettuce-feeding animation (issue #20 follow-up)
+    // Issue #32 follow-up: shared per-zone yard bowls (top/bottom) — high
+    // capacity, unlike a per-cage bowl (see _autoResolveYardBowls).
+    this.yardBowls = { top: createBowlState(), bottom: createBowlState() };
+    this._refreshYardBowls();
 
     // ── Births / computer announcements (issues #9, #10) ──────────────────
     this._computerNeedIcon = null;
@@ -350,7 +328,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
     // Bowl/litter-box/cage-art sprites are occupancy-driven and don't exist
     // yet for a stay that was just placed by the loop above — one refresh
-    // catches every cage at once (same call _dropOff/_applyCageMode make).
+    // catches every cage at once (same call _dropOff makes).
     this._refreshCageArt();
   }
 
@@ -361,51 +339,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.add.tileSprite(0, ROOM.y, ROOM.w, ROOM.h, 'tile-wood').setOrigin(0, 0).setDepth(-3);
     this.add.tileSprite(OUTSIDE.x, ROOM.y, OUTSIDE.w, ROOM.h, 'tile-grass').setOrigin(0, 0).setDepth(-3);
 
-    // Issue #27: keep a handle on each section's floor tile + label so
-    // _applyCageMode can swap the floor to the neutral tone and hide the
-    // label live, without rebuilding any wall/cage geometry.
-    this._sectionFloors = {};
-    this._sectionLabels = {};
-    for (const s of SECTIONS) {
-      const { x, y, w, h } = s.rect;
-      this._sectionFloors[s.key] = this.add.tileSprite(x, y, w, h, `floor-${s.key}`).setOrigin(0, 0).setDepth(-2);
-      this._sectionLabels[s.key] = this.add.text(x + w / 2, y + 10, s.label, {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: '15px',
-        color: '#2b2b2b',
-        backgroundColor: '#ffffffcc',
-        padding: { x: 6, y: 3 },
-      }).setOrigin(0.5, 0).setDepth(50);
-
-      // Dev tool (src/dev/dragTool.js): a draggable "area handle" standing in
-      // for this whole section's rect — the floor tile above is Graphics-
-      // backed, not a movable Image, so there's nothing else to grab that
-      // represents "the section" as a whole (only its individual furniture,
-      // registered separately in _buildProps). The handle is a plain {x, y}
-      // — no texture, no footprint on the scene when the tool is off — kept
-      // at the rect's own origin so its exported {x, y} pastes straight over
-      // SECTIONS[i].rect.x/.rect.y in sections.js.
-      this._devRegistry.push({
-        name: `SECTIONS.${s.key}.rect`,
-        obj: { x, y },
-        kind: 'area',
-        rectSize: { w, h },
-      });
-    }
-
-    // Outer building walls (perimeter, back-wing, yard fence) — these never
-    // toggle with generalized mode, only the internal section-dividing pen
-    // walls below do (owner note 2026-07-29: "By Type" mode should read as
-    // one open room, no separator areas).
+    // Outer building walls (perimeter, back-wing, yard fence). Issue #32: the
+    // old per-species walled rooms (and their internal pen walls) are gone
+    // entirely — the main room is now one open floor with a single cage grid
+    // in it (see _buildProps/_refreshCageArt), so there's nothing left here
+    // but the building's own outer shell.
     for (const r of wallRects()) {
       this.add.tileSprite(r.x, r.y, r.w, r.h, 'tile-wall').setOrigin(0, 0).setDepth(0);
     }
-
-    // Internal pen walls dividing the sections from each other — kept as a
-    // handle list so _applyCageMode can hide/show them live (their arcade
-    // colliders are toggled the same way in _rebuildPenCollision).
-    this._penWallSprites = SECTIONS.flatMap((s) => penRects(s)).map((r) =>
-      this.add.tileSprite(r.x, r.y, r.w, r.h, 'tile-wall').setOrigin(0, 0).setDepth(0));
 
     // Outside fence.
     for (const r of outsideFenceRects()) {
@@ -434,34 +375,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // leading up into the back wing (issue #13, repositioned north by #23).
     doorGfx.fillStyle(0xe8c68f, 1).fillRect(STAFF_DOOR.x0, ROOM.y, STAFF_DOOR.x1 - STAFF_DOOR.x0, WALL);
 
-    // Cage Hall door — the gap in the south wall leading down into the new
-    // unified-cage-grid room (Mix Cages mode).
-    doorGfx.fillStyle(0xe8c68f, 1).fillRect(CAGE_HALL_DOOR.x0, ROOM.y + ROOM.h - WALL, CAGE_HALL_DOOR.x1 - CAGE_HALL_DOOR.x0, WALL);
-
     this._drawBackWing(doorGfx);
-    this._drawCageHall();
-  }
-
-  // Cage Hall (Mix Cages mode): a brand-new room south of ROOM, existing
-  // purely to hold the unified 48-cage grid (data/props.js's UNIFIED_CAGES)
-  // — see CAGE_HALL/CAGE_HALL_DOOR in data/sections.js. Always physically
-  // built (walls/floor never toggle), same as the back wing; only the cage
-  // sprites that live inside it (built in _buildProps, positioned by
-  // _refreshCageArt) actually toggle with generalizedCages. Plain floor, no
-  // per-species theming of its own — deliberately reads as "just a hall".
-  _drawCageHall() {
-    const { x, y, w, h } = CAGE_HALL;
-    this.add.tileSprite(x, y, w, h, 'tile-wood').setOrigin(0, 0).setDepth(-3);
-    this.add.text(x + w / 2, y + 8, '🗄️ Cages', {
-      fontFamily: 'system-ui, sans-serif',
-      fontSize: '15px',
-      color: '#2b2b2b',
-      backgroundColor: '#ffffffcc',
-      padding: { x: 6, y: 3 },
-    }).setOrigin(0.5, 0).setDepth(50);
-    for (const r of cageHallWallRects()) {
-      this.add.tileSprite(r.x, r.y, r.w, r.h, 'tile-wall').setOrigin(0, 0).setDepth(0);
-    }
   }
 
   // Back wing (issue #13): base hallway floor, the storage/house rooms' own
@@ -497,25 +411,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // dressing), and the yard divider. All positions come from data/props.js
   // so interaction code below reads the exact same rects.
   _buildProps() {
-    const turtleTank = this.add.image(TURTLE.tank.x, TURTLE.tank.y, TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
-    this._devRegistry.push({ name: 'TURTLE.tank', obj: turtleTank });
-    // Water-topping marker (section-level resource) stays separate from the
-    // lettuce-feeding marker below — different chores, different spots.
-    this._tankMarker = { x: TURTLE.tank.x + TURTLE.tank.w / 2, y: TURTLE.tank.y + TURTLE.tank.h - 6 };
-
-    // Snake tank (issue #14) — same tank silhouette as the turtle's, no
-    // water-topping chore. Both tanks' individual islands/perches are drawn
-    // below alongside every other section's cage grid (CAGE_KEY covers all
-    // three art styles now — see art/props.js).
-    const snakeTank = this.add.image(SNAKE.tank.x, SNAKE.tank.y, SNAKE_TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
-    this._devRegistry.push({ name: 'SNAKE.tank', obj: snakeTank });
-
     // Per-cage litter boxes (issue: "each cat cage should have a small
     // litter box, not a corner everyone litter box") — same occupancy-driven
     // create/destroy/reskin pattern as bowls below; no sprite exists here at
     // build time, _refreshLitterBoxes creates one only for a cage currently
-    // holding a cat. Covers every section key (a cat can settle in any
-    // section's nominal slot in generalized mode), not just 'cat'.
+    // holding a cat. Covers every species key (a cat can settle in any
+    // open cage slot), not just 'cat'.
     this._litterImgs = {};
     const hallScene = this;
     for (const key of Object.keys(CAGES)) {
@@ -538,8 +439,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // that cage. No sprite is created here — this._bowlImgs just tracks the
     // (initially empty) per-slot sprite so _refreshBowls can create/destroy/
     // re-skin it as occupancy changes (see that method for the full story).
-    // Turtles are fed via lettuce dropped in the tank instead (see
-    // TURTLE_FEED_SPOT below), so they have no bowl slots at all.
+    // Issue #32 #4: turtles now get one too (BOWL_SPOTS covers every species
+    // key, no exclusions).
     this._bowlImgs = {};
     this._waterBowlImgs = {};
     const scopedScene = this;
@@ -554,23 +455,43 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       });
     }
     // Not calling _refreshBowls() here: this.roster doesn't exist yet at this
-    // point in create() (see the comment above _applyCageMode's own call
-    // below) — _refreshCageArt() now calls _refreshBowls() itself, and that
-    // first runs from _applyCageMode() further down, after the roster is built.
+    // point in create() — _refreshCageArt() calls _refreshBowls() itself, and
+    // that first runs right after the roster is built (see create()'s own
+    // comment).
 
-    // Turtle lettuce-feeding marker (issue #20 follow-up).
-    const feedSpot = this.add.image(TURTLE_FEED_SPOT.x, TURTLE_FEED_SPOT.y, LETTUCE_KEY).setOrigin(0.5, 0.5).setDepth(TURTLE.tank.y - 1);
-    this._devRegistry.push({ name: 'TURTLE_FEED_SPOT', obj: feedSpot });
+    // Issue #32 follow-up: the outside yard's shared food+water bowl pair per
+    // zone (top/bottom) — always present (not occupancy-gated like a cage
+    // bowl), starting empty. _refreshYardBowls (called once the roster
+    // exists) sets their real full/empty textures.
+    this._yardBowlImgs = {
+      top: {
+        food: this.add.image(YARD_BOWL_SPOTS.top.food.x, YARD_BOWL_SPOTS.top.food.y, BOWL_EMPTY_KEY)
+          .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.top.food.y),
+        water: this.add.image(YARD_BOWL_SPOTS.top.water.x, YARD_BOWL_SPOTS.top.water.y, WATER_BOWL_EMPTY_KEY)
+          .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.top.water.y),
+      },
+      bottom: {
+        food: this.add.image(YARD_BOWL_SPOTS.bottom.food.x, YARD_BOWL_SPOTS.bottom.food.y, BOWL_EMPTY_KEY)
+          .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.bottom.food.y),
+        water: this.add.image(YARD_BOWL_SPOTS.bottom.water.x, YARD_BOWL_SPOTS.bottom.water.y, WATER_BOWL_EMPTY_KEY)
+          .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.bottom.water.y),
+      },
+    };
+    for (const zoneKey of ['top', 'bottom']) {
+      this._devRegistry.push({ name: `YARD_BOWL_SPOTS.${zoneKey}.food`, obj: this._yardBowlImgs[zoneKey].food });
+      this._devRegistry.push({ name: `YARD_BOWL_SPOTS.${zoneKey}.water`, obj: this._yardBowlImgs[zoneKey].water });
+    }
 
     // Reception computer (issue #10) — baby-announcement messages to owners.
     const computer = this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
     this._devRegistry.push({ name: 'COMPUTER_SPOT', obj: computer });
 
-    // Individual cages (issue #18) — 6 per section, including turtles/snakes
-    // as of issue #20 (styled as islands/perches instead of wire pens).
-    // Issue #27: keep a handle on each cage's image (this._cageImgs) so
-    // _refreshCageArt can re-texture it per-occupant once generalized mode
-    // is on, without touching its position/size.
+    // Individual cages (issue #18, single grid as of issue #32) — 6 per
+    // species, including turtles/snakes (issue #20 — styled as islands/
+    // perches instead of wire pens) and the secret dragon (issue #32 #5 — a
+    // little stone castle). Keep a handle on each cage's image
+    // (this._cageImgs) so _refreshCageArt can re-texture it per-occupant
+    // without touching its fixed position/size.
     this._cageImgs = {};
     for (const key of Object.keys(CAGES)) {
       this._cageImgs[key] = [];
@@ -629,71 +550,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._scooperRestSprite = this.add.image(x, y, SCOOPER_KEY).setOrigin(0.5, 1).setDepth(y);
   }
 
-  // ── Generalized-cages toggle (issue #27) ─────────────────────────────────
-  // "In case my daughter hates it" — a small, clearly-labeled on-screen
-  // button so Olivia can flip the experiment herself, live, no reload. Top-
-  // right corner: clear of HudScene's top-left clock/money panel and
-  // Controls' bottom-right touch interact button.
-
-  _buildModeToggle() {
-    const g = this.add.graphics().setScrollFactor(0).setDepth(9998);
-    const label = this.add.text(0, 0, '', {
-      fontFamily: 'system-ui, sans-serif',
-      fontSize: '13px',
-      fontStyle: 'bold',
-      color: '#ffffff',
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(9999);
-    // A separate invisible interactive zone (graphics objects don't take
-    // pointer input directly) sized/positioned to match the drawn button.
-    const zone = this.add.zone(0, 0, 10, 10).setScrollFactor(0).setDepth(9999)
-      .setInteractive({ useHandCursor: true });
-    zone.on('pointerdown', () => this._toggleGeneralizedCages());
-    this._modeToggle = { g, label, zone, w: 168, h: 34 };
-    this._layoutModeToggle();
-    // Re-anchor on resize, same convention as HudScene's top-left panel and
-    // Controls' bottom-right interact button.
-    this.scale.on('resize', () => this._layoutModeToggle());
-    // NOTE: applying the mode's visuals (_applyCageMode) has to wait until
-    // this.roster exists — _refreshCageArt reads this.roster.stays, which
-    // isn't created yet at this point in create(). See the call right after
-    // roster/staySprites setup below instead of calling it here.
-  }
-
-  _layoutModeToggle() {
-    const t = this._modeToggle;
-    if (!t) return;
-    const off = worldUiOffset(this);
-    t.x = off.x + logicalW(this) - t.w / 2 - 16;
-    t.y = off.y + 16 + t.h / 2;
-    t.zone.setPosition(t.x, t.y).setSize(t.w, t.h);
-    this._renderModeToggle();
-  }
-
-  _renderModeToggle() {
-    const t = this._modeToggle;
-    if (!t) return;
-    t.g.clear();
-    t.g.fillStyle(0x2a3648, 0.75).fillRoundedRect(t.x - t.w / 2, t.y - t.h / 2, t.w, t.h, 8);
-    t.g.lineStyle(2, 0xffffff, 0.85).strokeRoundedRect(t.x - t.w / 2, t.y - t.h / 2, t.w, t.h, 8);
-    t.label.setPosition(t.x, t.y);
-    t.label.setText(this.generalizedCages ? '🔀 Mix Cages' : '🏠 By Type');
-  }
-
-  _toggleGeneralizedCages() {
-    this.generalizedCages = !this.generalizedCages;
-    this._renderModeToggle();
-    this._applyCageMode();
-    this.game.events.emit(EVENTS.NOTIFY,
-      this.generalizedCages ? 'Cages mixed — any pet can go in any open cage!' : 'Back to cages by type!');
-  }
-
   // ── Pause menu (issue #34) ────────────────────────────────────────────────
-  // Same small on-screen-button style as _buildModeToggle above, sitting
-  // right next to it. Opening it actually pauses KennelScene (this.scene.pause
-  // stops Phaser from calling update() at all here, which is where the
-  // clock/needs/birth timers/wandering all live) while PauseScene runs in
-  // parallel on top, same "always-on-top overlay scene" pattern as
-  // HudScene/NotificationScene, so its own buttons stay clickable.
+  // Top-right corner: clear of HudScene's top-left clock/money panel and
+  // Controls' bottom-right touch interact button. Opening it actually pauses
+  // KennelScene (this.scene.pause stops Phaser from calling update() at all
+  // here, which is where the clock/needs/birth timers/wandering all live)
+  // while PauseScene runs in parallel on top, same "always-on-top overlay
+  // scene" pattern as HudScene/NotificationScene, so its own buttons stay
+  // clickable.
 
   _buildPauseButton() {
     const g = this.add.graphics().setScrollFactor(0).setDepth(9998);
@@ -713,8 +577,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const b = this._pauseButton;
     if (!b) return;
     const off = worldUiOffset(this);
-    const modeToggleW = this._modeToggle ? this._modeToggle.w + 8 : 0;
-    b.x = off.x + logicalW(this) - modeToggleW - b.w / 2 - 16;
+    b.x = off.x + logicalW(this) - b.w / 2 - 16;
     b.y = off.y + 16 + b.h / 2;
     b.zone.setPosition(b.x, b.y).setSize(b.w, b.h);
     this._renderPauseButton();
@@ -735,100 +598,21 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.scene.launch('Pause');
   }
 
-  // Owner note 2026-07-29 ("make the whole place just a big grid of empty
-  // cages... get rid of the area backgrounds and stuff, but only in
-  // multi-cage mode"): Mix Cages mode is no longer a re-skin of the original
-  // 8 sections in place — it's a genuinely different position set, the
-  // unified 48-cage grid in the new Cage Hall room (data/props.js's
-  // UNIFIED_CAGES). Normal ("By Type") mode keeps reading from the original
-  // per-section CAGES untouched. Every position-dependent lookup in this
-  // scene (cage/bowl/litter-box sprites, animal placement, nameplate anchor,
-  // the generalized-mode placement-acceptance test) goes through these
-  // three helpers instead of reading CAGES/BOWL_SPOTS/etc. directly, so the
-  // whole scene swaps geometry consistently the instant the toggle flips.
-  _activeCages() {
-    return this.generalizedCages ? UNIFIED_CAGES : CAGES;
-  }
-
-  _activeBowlSpots() {
-    return this.generalizedCages ? BOWL_SPOTS_UNIFIED : BOWL_SPOTS;
-  }
-
-  _activeWaterBowlSpots() {
-    return this.generalizedCages ? WATER_BOWL_SPOTS_UNIFIED : WATER_BOWL_SPOTS;
-  }
-
-  _activeLitterSpots() {
-    return this.generalizedCages ? LITTER_SPOTS_UNIFIED : LITTER_SPOTS;
-  }
-
-  // Neutralizes (or restores) the section-level species theming: floor
-  // colours + labels, the internal pen walls (drawn art + arcade colliders),
-  // and every cage/bowl/litter-box's own position + art. Normal mode always
-  // shows the original 8 sections exactly as before; generalized mode moves
-  // everything cage-related into the unified Cage Hall grid and reads as one
-  // open room with no per-section identity left in the old section
-  // footprints (owner note 2026-07-29).
-  _applyCageMode() {
-    for (const s of SECTIONS) {
-      this._sectionFloors[s.key]?.setTexture(this.generalizedCages ? 'floor-neutral' : `floor-${s.key}`);
-      this._sectionLabels[s.key]?.setVisible(!this.generalizedCages);
-    }
-    // Owner note 2026-07-29: "By Type" (generalized) mode should read as one
-    // open room — hide the section-dividing pen walls (both the drawn tiles
-    // and their arcade colliders) while it's on, restore them the instant
-    // it's switched back off.
-    this._penWallSprites?.forEach((spr) => spr.setVisible(!this.generalizedCages));
-    this._rebuildPenCollision();
-    this._refreshCageArt();
-    // Every already-settled stay's on-screen position (her sprite, name tag,
-    // companions) depends on which cage grid is active — re-render her at
-    // her cage's CURRENT position so she visibly relocates to/from the Cage
-    // Hall the instant the toggle flips, instead of appearing to still stand
-    // in the old (now cage-less, in generalized mode) section footprint.
-    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
-    for (const stay of this.roster.stays) {
-      if (!sectionKeys.has(stay.location)) continue; // reception/carrying/yard unaffected
-      const section = SECTIONS.find((s) => s.key === stay.location);
-      const pos = this._sectionSlot(section, stay);
-      this._renderStay(stay, pos.x, pos.y);
-    }
-  }
-
-  // Re-textures (and positions) every individual cage.
-  //
-  // Normal mode: always the section's own native look, at that section's own
-  // historical position/cell size (unchanged from before this pass) — CAGES.
-  //
-  // Generalized mode (owner note 2026-07-29): every cage lives in the unified
-  // Cage Hall grid (UNIFIED_CAGES) at the same uniform 167x167 size
-  // (GENERALIZED_CAGE_W/H, art/props.js — exactly the grid's own cell size,
-  // so the image fills its cell with no centering/inset math needed).
-  // Whoever's actually settled there "snaps to" her OWN species' cage art at
-  // that uniform size (a turtle always gets a little water-tank-with-sand
-  // island, a snake her tank perch, etc.) with a quick scale-pop tween the
-  // moment the art actually changes; an empty slot gets the single shared
-  // neutral empty-cage look.
+  // Re-textures every individual cage (no positioning left to do — the
+  // single grid's cage positions are permanent, set once in _buildProps).
+  // Whoever's actually settled there shows her OWN species' cage art (a
+  // turtle always gets a little water-tank-with-sand island, a snake her
+  // tank perch, the secret dragon her stone castle, etc. — see CAGE_KEY,
+  // art/props.js) with a quick scale-pop tween the moment the art actually
+  // changes; an empty slot gets the single shared neutral empty-cage look.
   _refreshCageArt() {
     if (!this._cageImgs) return;
-    const cages = this._activeCages();
     for (const key of Object.keys(this._cageImgs)) {
       this._cageImgs[key].forEach((img, slot) => {
-        const cage = cages[key][slot];
-        if (!this.generalizedCages) {
-          img.setTexture(CAGE_KEY[key]).setOrigin(0, 0).setPosition(cage.x, cage.y);
-          return;
-        }
         const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
-        // The secret bonus dragon (src/dev/secretDragon.js) has no
-        // CAGE_KEY_UNIFORM entry of her own — she has no section/tank art
-        // style, unlike every regular species — so she just keeps whichever
-        // section's own uniform cage look the cage she's actually in already
-        // has, instead of "snapping to" a look that doesn't exist for her.
-        const texKey = occupant ? (CAGE_KEY_UNIFORM[occupant.animal.species] ?? CAGE_KEY_UNIFORM[key]) : EMPTY_CAGE_KEY;
-        const moved = img.x !== cage.x || img.y !== cage.y;
-        const changed = img.texture.key !== texKey || moved;
-        img.setTexture(texKey).setOrigin(0, 0).setPosition(cage.x, cage.y);
+        const texKey = occupant ? (CAGE_KEY[occupant.animal.species] ?? CAGE_KEY[key]) : EMPTY_CAGE_KEY;
+        const changed = img.texture.key !== texKey;
+        if (changed) img.setTexture(texKey);
         if (changed) this._snapCagePop(img);
       });
     }
@@ -841,11 +625,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // styled per the species actually settled there ("informed based on the
   // animal that's placed" — see BOWL_KEY_BY_SPECIES in art/props.js). Mirrors
   // _refreshCageArt's occupancy-driven redraw: called from every site that
-  // already calls _refreshCageArt (drop-off, checkout, yard recall, mode
-  // toggle) — that covers every way a cage's occupant can change EXCEPT
-  // picking her back up (_pickUp calls this directly too, since cage ART
-  // itself doesn't need refreshing there in normal mode, but her bowl does).
-  // Turtles have no bowl slots at all (BOWL_SPOTS excludes them).
+  // already calls _refreshCageArt (drop-off, checkout, yard recall) — that
+  // covers every way a cage's occupant can change EXCEPT picking her back up
+  // (_pickUp calls this directly too, since cage ART itself doesn't need
+  // refreshing there, but her bowl does). Every species gets a bowl now,
+  // including turtles (issue #32 #4 — the old shared-tank/lettuce mechanic
+  // is gone; BOWL_SPOTS has no exclusions left).
   //
   // Owner note 2026-07-29: bowls now also track full-vs-empty stock
   // (stay.bowl.food/water, set by _fillBowl/consumed automatically by
@@ -856,23 +641,36 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   //
   // Issue #32 #6 (owner: "I see the bowls for guinea pig and dog, but they
   // don't appear visible for some other animals — is it a z order issue?").
-  // It was: _updateWander lets a settled stay's sprite drift anywhere inside
-  // her own cage rect and re-sets her depth to her CURRENT y every frame
-  // (rec.sprite.setDepth(rec.sprite.y)), clamped as far down as
-  // cage.y + cage.h - 4 (the cage's own bottom edge). The bowl's depth used
-  // to be derived from its own spot y (also anchored near that same bottom
-  // edge) minus 1 — so the instant she wandered near the front of her cage
-  // (species/timing-dependent, which is why only some species/moments
-  // showed it), her depth caught up to and passed the bowl's fixed depth and
-  // she rendered in front of it. Anchoring the bowl's depth to the CAGE's
-  // bottom edge instead of the bowl's own (now re-centered) spot guarantees
-  // it always exceeds the max depth her wander can ever reach, regardless of
-  // species/cage size/where the bowl sits within the cage.
+  // Two real bugs, both fixed here:
+  //  1. A DEPTH bug: _updateWander lets a settled stay's sprite drift
+  //     anywhere inside her own cage rect and re-sets her depth to her
+  //     CURRENT y every frame, clamped as far down as cage.y + cage.h - 4
+  //     (the cage's own bottom edge). The bowl's depth used to be derived
+  //     from its own spot y (also anchored near that same bottom edge) minus
+  //     1 — so the instant she wandered near the front of her cage, her
+  //     depth caught up to and passed the bowl's, and she rendered in front
+  //     of it. Fixed by anchoring the bowl's depth to the CAGE's bottom edge
+  //     instead of the bowl's own spot, always exceeding the max depth her
+  //     wander can reach.
+  //  2. A COVERAGE bug (this is what was still hiding bird/bunny bowls after
+  //     fix #1 shipped): a stay's `location` is which CAGE SLOT KEY she's
+  //     nominally assigned to, not necessarily her own species — "any pet,
+  //     any open cage" placement could put a bird in what used to be the
+  //     'turtle' key's nominal slot, and the old BOWL_SPOTS/BOWL_ELIGIBLE_KEYS
+  //     list excluded 'turtle' (turtles used to be fed via the shared tank
+  //     instead). Since that key had no bowl bookkeeping AT ALL, whoever
+  //     ended up nominally housed there — regardless of her real species —
+  //     got no bowl sprite, not a mispositioned one. This is why it looked
+  //     "random by species": guinea pig/dog happened to be tested while
+  //     housed under a covered key, bird/bunny happened to land under the
+  //     one uncovered key. Issue #32 folds turtles into the same single cage
+  //     grid with their own regular per-cage bowl (item #4), so every key
+  //     now has full bowl bookkeeping — this coverage gap can't recur.
   _refreshBowls() {
     if (!this._bowlImgs || !this.roster) return;
-    const bowlSpots = this._activeBowlSpots();
-    const waterSpots = this._activeWaterBowlSpots();
-    const cages = this._activeCages();
+    const bowlSpots = BOWL_SPOTS;
+    const waterSpots = WATER_BOWL_SPOTS;
+    const cages = CAGES;
     for (const key of Object.keys(this._bowlImgs)) {
       this._bowlImgs[key].forEach((existing, slot) => {
         const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
@@ -887,17 +685,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
           : (BOWL_EMPTY_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_EMPTY_KEY);
         const { x, y } = bowlSpots[key][slot];
         const depth = cages[key][slot].y + cages[key][slot].h + 1;
-        // Skip only if already showing the right bowl in the right place —
-        // a Mix Cages toggle moves the spot even when the texture doesn't
-        // change, so both need checking (see _activeBowlSpots).
+        // Skip only if already showing the right bowl in the right place.
         if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
         existing?.destroy();
         const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
-        // TEMP DEBUG (owner request 2026-07-29, bowl-visibility investigation
-        // — remove once root-caused): neon tint + depth maxed out, so a bowl
-        // that's actually being created is unmistakable regardless of
-        // z-order/occlusion, distinguishing that from "never created at all".
-        if (BOWL_DEBUG) bowl.setTint(0xff0000).setDepth(999999);
         this._bowlImgs[key][slot] = bowl;
         this._snapCagePop(bowl);
       });
@@ -915,7 +706,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
         existing?.destroy();
         const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
-        if (BOWL_DEBUG) bowl.setTint(0x00ff00).setDepth(999999); // TEMP DEBUG — see food-bowl comment above
         this._waterBowlImgs[key][slot] = bowl;
         this._snapCagePop(bowl);
       });
@@ -927,11 +717,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // _refreshBowls exactly: exists only while the cage is occupied, and only
   // when the occupant is specifically a cat (any other species in that slot
   // means no litter box there). Same species-check-not-key-check reasoning
-  // as bowls: in generalized mode a cat can be settled in ANY section's
-  // nominal slot, so every key is checked, not just 'cat'.
+  // as bowls: a cat can settle in ANY open cage slot, so every key is
+  // checked, not just 'cat'.
   _refreshLitterBoxes() {
     if (!this._litterImgs || !this.roster) return;
-    const spots = this._activeLitterSpots();
+    const spots = LITTER_SPOTS;
     for (const key of Object.keys(this._litterImgs)) {
       this._litterImgs[key].forEach((existing, slot) => {
         const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
@@ -965,18 +755,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   }
 
   _buildCollision() {
-    // Obstacles that ALWAYS block movement, regardless of cage mode — the
-    // outer building walls, big furniture, and outside fence. Internal pen
-    // walls are handled separately below (_rebuildPenCollision) since only
-    // those toggle off in generalized mode.
+    // Obstacles that block movement — the outer building walls, big
+    // furniture, and outside fence. Issue #32: no more internal pen walls
+    // (the old per-species walled rooms are gone), so this is the whole
+    // list — nothing left to rebuild live.
     this._outerObstacleRects = [
       ...wallRects(),
       RECEPTION.desk,
-      TURTLE.tank,
-      SNAKE.tank,
       ...outsideFenceRects(),
       ...backWingWallRects(),
-      ...cageHallWallRects(),
       OVEN,
       BED,
     ];
@@ -985,11 +772,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.walls = this.physics.add.staticGroup();
     for (const r of this._outerObstacleRects) this._addWallZone(r, this.walls);
 
-    // Internal section-dividing pen walls — their own static group so they
-    // can be cleared/rebuilt live when generalized mode toggles, without
-    // touching the always-on `this.walls` group above.
-    this.penWalls = this.physics.add.staticGroup();
-    this._rebuildPenCollision();
+    // Shared "what blocks a body" list used by both arcade physics and
+    // findPath's routing.
+    this.obstacleRects = [...this._outerObstacleRects];
+    this._collides = (x, y, r) => this.obstacleRects.some((rect) => circleRectOverlap(x, y, r, rect));
   }
 
   _addWallZone(r, group) {
@@ -997,20 +783,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.physics.add.existing(zone, true);
     group.add(zone);
     return zone;
-  }
-
-  // (Re)builds the internal pen-wall colliders: present in normal mode,
-  // absent in generalized mode (owner note 2026-07-29 — see _applyCageMode).
-  // Also recomputes this.obstacleRects/this._collides, the shared "what
-  // blocks a body" list used by both arcade physics and findPath's routing.
-  _rebuildPenCollision() {
-    this.penWalls.clear(true, true);
-    this._penObstacleRects = SECTIONS.flatMap((s) => penRects(s));
-    if (!this.generalizedCages) {
-      for (const r of this._penObstacleRects) this._addWallZone(r, this.penWalls);
-    }
-    this.obstacleRects = [...this._outerObstacleRects, ...(this.generalizedCages ? [] : this._penObstacleRects)];
-    this._collides = (x, y, r) => this.obstacleRects.some((rect) => circleRectOverlap(x, y, r, rect));
   }
 
   _buildPlayer() {
@@ -1026,9 +798,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.player.setDepth(startY);
 
     this.physics.add.collider(this.player, this.walls);
-    // Internal pen walls are their own group (see _buildCollision) so they
-    // can be cleared/rebuilt live when generalized mode toggles.
-    this.physics.add.collider(this.player, this.penWalls);
   }
 
   // ── Roster rendering (issues #4 arrivals, #5 carrying) ──────────────────────
@@ -1059,25 +828,22 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // roll below could let a 4th owner start walking in before the 3rd has
     // been counted.
     if (this._lingeringOwners.size >= 3) return;
-    // Issue #27: in generalized mode there's no more per-species territory —
-    // a species keeps arriving as long as ANY cage anywhere is open.
-    const stay = this.roster.spawnArrival({ day, hour, generalized: this.generalizedCages });
-    // Issue #18: null means that species' section is full (all 6 cages
-    // taken) — quietly skip this roll, no queue/penalty/notification.
+    // Issue #32: any pet can go in any open cage, so a species keeps
+    // arriving as long as ANY cage anywhere is open.
+    const stay = this.roster.spawnArrival({ day, hour });
+    // null means the whole kennel is full right now — quietly skip this
+    // roll, no queue/penalty/notification.
     if (!stay) return;
     this._runOwnerDropOff(stay);
   }
 
   // Secret bonus guest (src/dev/secretDragon.js's "DRAGON" cheat code). She
-  // has no section of her own (data/sections.js's SECTIONS is untouched by
-  // this), so this only bails out if the whole kennel is genuinely full —
-  // issue #27's `anyOpenCageAnywhere` already answers exactly that. She then
-  // arrives through the exact same owner-walks-her-in sequence as any other
-  // guest, and settles into an existing section's cage the moment the player
-  // carries her in — see _checkDropoff's reception branch, which treats any
-  // species with no matching SECTIONS entry the same way generalized mode
-  // treats everyone (any open cage anywhere accepts the drop), regardless of
-  // whether Mix Cages is actually toggled on.
+  // has no species section of her own, so this only bails out if the whole
+  // kennel is genuinely full — `anyOpenCageAnywhere` already answers exactly
+  // that. She then arrives through the exact same owner-walks-her-in
+  // sequence as any other guest, and settles into any open cage the moment
+  // the player carries her in — see _checkDropoff, which treats every guest
+  // this same "any pet, any open cage" way (issue #32).
   _triggerSecretDragon() {
     if (!anyOpenCageAnywhere(this.roster.stays)) {
       this.game.events.emit(EVENTS.NOTIFY, 'A mythical dragon wanted to visit, but the kennel is full right now!');
@@ -1338,7 +1104,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // room" without spilling out of a small individual cage. `spread` is a
     // multiplier around a ~90px baseline cage width; opts.yardBounds covers
     // the yard-play case (no cage lookup, but still bounded).
-    const cage = this._activeCages()[stay.location]?.[stay.cageSlot];
+    const cage = CAGES[stay.location]?.[stay.cageSlot];
 
     // Nameplate anchor: a caged/tanked/nested stay (per issue #20's
     // unification, turtle islands/snake perches/bird nests all count) gets a
@@ -1571,99 +1337,53 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     });
   }
 
-  // `interactPressed` is only consulted by the generalized-mode reception
-  // branch below (owner note 2026-07-29: placing a fresh arrival into a
-  // specific open cage needs an explicit interact press — same convention as
-  // every other interaction in the game — instead of happening automatically
-  // just from walking near an open cage). Every other drop-off path (normal
-  // mode's species-section walk-in, and bringing an animal back in from the
-  // yard) is unaffected and keeps its existing walk-up-and-it-happens feel.
+  // Issue #32: "By Type" mode is gone — there's only one cage layout now, so
+  // every drop-off path uses the same "any pet, any open cage" placement:
+  // walking up to a specific empty cage anywhere targets THAT exact cage
+  // (_findOpenCageNear), and an explicit interact press is required to
+  // actually place her there (proximity alone only highlights the target) —
+  // same convention as every other interaction in the game. The one
+  // exception is bringing her back in from the yard, which keeps its
+  // original walk-up-and-it-happens feel (no interact needed), same as
+  // before.
   _checkDropoff(interactPressed) {
     const stay = this.carrying;
     if (this._carryOrigin === LOCATION.YARD) {
       // Picked up from the yard — she can go right back into the yard
       // (change your mind / move her to a different spot), OR come back
-      // inside to her cage. Only the "bring inside" path existed before, so
-      // there was no way to just set her back down outside.
+      // inside to any open cage.
       if (this.player.x >= OUTSIDE.x + 8) {
         if (!interactPressed) return;
         this._dropOffToYard(stay);
         this._carryOrigin = null;
         return;
       }
-      // Bringing her back inside — only her own section (cage) will accept
-      // her. Issue #27: "her own section" means wherever her cage actually
-      // IS (stay.cageSection, set the moment she was last assigned a cage),
-      // not necessarily her species' section — in generalized mode those can
-      // differ, and the secret bonus dragon (no section of her own) always
-      // differs. Falls back to species for a stay that somehow never got a
-      // cageSection (shouldn't happen — she can't reach the yard without
-      // having been dropped into a cage first).
-      const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.animal.species));
-      // Owner note 2026-07-29 (Mix Cages unified grid): her cage physically
-      // lives in the Cage Hall now, not in the old section footprint — the
-      // walk-into-the-section-rect check only still makes sense in normal
-      // mode. Generalized mode (or the secret bonus dragon, who has no
-      // section of her own to fall back to at all) uses the same
-      // any-open-cage proximity test reception uses, same walk-up-and-it-
-      // happens feel (no interact needed), just aimed at the live cage grid.
-      if (this.generalizedCages || !section) {
-        const found = this._findOpenCageNear(this.player.x, this.player.y);
-        if (!found) return;
-        if (this._dropOff(stay, found.section, { cageSlot: found.slot })) this._carryOrigin = null;
-        return;
-      }
-      const { x, y, w, h } = section.rect;
-      if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
-      // _dropOff returns false (and leaves her in the player's hands) if the
-      // section's 6 cages are all already taken — see its own comment.
-      if (this._dropOff(stay, section)) this._carryOrigin = null;
+      const found = this._findOpenCageNear(this.player.x, this.player.y);
+      if (!found) return;
+      if (this._dropOff(stay, found.section, { cageSlot: found.slot })) this._carryOrigin = null;
     } else if (this._carryOrigin === LOCATION.RECEPTION) {
       // Owner note 2026-07-29 ("why can't I take a pet directly to the play
       // yard?"): a fresh arrival can go straight to the yard instead of a
       // cage — checked FIRST, as an ADDITIONAL option alongside (not instead
-      // of) the cage-placement paths below, same walk-up-and-it-happens feel
-      // as every other yard drop-off (no interact needed). She doesn't get a
-      // cageSection this way, so bringing her back inside later falls back
-      // to her species' section (normal regular species) or the any-open-
-      // cage path above (no section — the secret dragon).
+      // of) cage placement below, same walk-up-and-it-happens feel as every
+      // other yard drop-off (no interact needed).
       if (this.player.x >= OUTSIDE.x + 8) {
         this._dropOffToYard(stay);
         this._carryOrigin = null;
         return;
       }
-      // A fresh arrival choosing a cage instead. Issue #27: in generalized
-      // mode there's no themed section to walk into at all — instead,
-      // walking up to ANY specific currently-empty cage anywhere accepts the
-      // drop into THAT exact cage. Normal mode keeps the original
-      // species-locked-section behavior completely unchanged for the
-      // regular 8 species. The secret bonus dragon (src/dev/secretDragon.js)
-      // has no section of her own in EITHER mode (species.js's SPECIES has
-      // no matching SECTIONS entry for 'dragon'), so she always takes this
-      // same "any open cage anywhere" path even with generalizedCages off —
-      // that's how she settles into an existing section's cage without
-      // needing one of her own.
-      const hasOwnSection = SECTIONS.some((s) => s.key === stay.animal.species);
-      if (this.generalizedCages || !hasOwnSection) {
-        const found = this._findOpenCageNear(this.player.x, this.player.y);
-        if (!found) return;
-        // Owner note 2026-07-29: proximity alone only highlights/targets the
-        // nearest open cage — actually placing her there needs an interact
-        // press, same as picking up an arrival or feeding a bowl.
-        if (!interactPressed) return;
-        if (this._dropOff(stay, found.section, { fromReception: true, cageSlot: found.slot })) this._carryOrigin = null;
-        return;
-      }
-      const section = SECTIONS.find((s) => s.key === stay.animal.species);
-      if (!section) return;
-      const { x, y, w, h } = section.rect;
-      if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
-      if (this._dropOff(stay, section, { fromReception: true })) this._carryOrigin = null;
+      // A fresh arrival choosing a cage instead — walking up to ANY specific
+      // currently-empty cage anywhere accepts the drop into THAT exact cage,
+      // regardless of species (no clustering — this also covers the secret
+      // bonus dragon, who has no species-matching cage art of her own until
+      // she's actually settled somewhere).
+      const found = this._findOpenCageNear(this.player.x, this.player.y);
+      if (!found) return;
+      if (!interactPressed) return;
+      if (this._dropOff(stay, found.section, { fromReception: true, cageSlot: found.slot })) this._carryOrigin = null;
     } else {
       // Picked up from her own cage — she can go out to the yard to play, OR
-      // right back into a cage (change your mind / just put her back). Only
-      // the yard branch existed before, so there was no way to set her back
-      // down without a pointless round trip through the yard first.
+      // right back into any open cage (change your mind / just put her back).
       if (this.player.x >= OUTSIDE.x + 8) {
         // Owner note 2026-07-29: being in the yard should only highlight/
         // enable setting her down there — an explicit interact press is
@@ -1674,17 +1394,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         this._carryOrigin = null;
         return;
       }
-      if (this.generalizedCages) {
-        const found = this._findOpenCageNear(this.player.x, this.player.y);
-        if (!found || !interactPressed) return;
-        if (this._dropOff(stay, found.section, { cageSlot: found.slot })) this._carryOrigin = null;
-        return;
-      }
-      const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.animal.species));
-      if (!section) return;
-      const { x, y, w, h } = section.rect;
-      if (this.player.x < x || this.player.x > x + w || this.player.y < y || this.player.y > y + h) return;
-      if (this._dropOff(stay, section)) this._carryOrigin = null;
+      const found = this._findOpenCageNear(this.player.x, this.player.y);
+      if (!found || !interactPressed) return;
+      if (this._dropOff(stay, found.section, { cageSlot: found.slot })) this._carryOrigin = null;
     }
   }
 
@@ -1785,20 +1497,24 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   // Placement spot for a stay settling into `section` — her assigned
   // individual cage (issue #18), including turtles/snakes as of issue #20
-  // (their "cage" is a small island/perch inside the shared tank). Falls
-  // back to a plain grid spot if every cage is somehow taken.
+  // (their "cage" is a small island/perch) and the dragon (issue #32 #5, her
+  // own little castle). Falls back to a plain grid spot near reception if
+  // every cage is somehow taken — every call site above already checks
+  // assignCageSlot/_findOpenCageNear before assigning a stay to a section,
+  // so this should never actually trigger; it's just a safety net against a
+  // crash instead of a misplacement.
   _sectionSlot(section, stay) {
-    const cage = this._activeCages()[section.key]?.[stay?.cageSlot];
+    const cage = CAGES[section.key]?.[stay?.cageSlot];
     if (cage) return cageAnimalSpot(cage);
     const already = this.roster.stays.filter((s) => s !== stay && s.location === section.key).length;
-    return this._gridSlot(section.rect, already, 30, 46, 60);
+    return this._gridSlot(RECEPTION.rug, already, 20, 30, 40);
   }
 
-  // Issue #27 (generalized mode): the closest currently-EMPTY cage slot,
-  // anywhere in the whole kennel (not just the carried animal's own
-  // species' section), within pickup range of (px, py) — or null if nothing
-  // open is close enough. Used by _checkDropoff's reception branch so
-  // walking up to any specific open cage targets THAT exact cage.
+  // The closest currently-EMPTY cage slot, anywhere in the whole kennel (not
+  // just the carried animal's own species), within pickup range of (px, py)
+  // — or null if nothing open is close enough. Used by _checkDropoff so
+  // walking up to any specific open cage targets THAT exact cage — any pet
+  // can go in any open cage, no species clustering.
   //
   // Owner note 2026-07-29 ("interact... should accept the placement anywhere
   // within the cage, not just towards the bottom"): the acceptance test
@@ -1808,7 +1524,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // shouldn't gate whether the placement itself is accepted.
   _findOpenCageNear(px, py) {
     let best = null, bestD = PICKUP_RADIUS;
-    const cages = this._activeCages();
+    const cages = CAGES;
     for (const key of Object.keys(cages)) {
       cages[key].forEach((cage, slot) => {
         if (!isCageSlotOpen(this.roster.stays, key, slot)) return;
@@ -1897,48 +1613,63 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     return true;
   }
 
-  // Turtles can't reach a regular bowl from their water-tank island, so
-  // feeding them means dropping a piece of lettuce into the tank instead
-  // (issue #20 follow-up): every hungry turtle in the section drifts toward
-  // it, "eats", and the need clears — one lettuce feeds the whole tank, same
-  // as any other multi-occupant cage.
-  _feedTurtleTank() {
-    if (this._turtleFeeding) return false;
-    // Issue #27: in generalized mode a turtle can end up housed in ANY
-    // cage, not just the 'turtle' section — so match on species (wherever
-    // she actually is) as well as the plain section-location check (which
-    // also covers the generalized-mode reverse case: some OTHER species
-    // sharing the turtle tank's cages, who still needs feeding and has no
-    // regular bowl there — see BOWL_SPOTS' turtle exclusion).
-    const hungry = this.roster.stays.filter((s) => s.needs.food && (s.animal.species === 'turtle' || s.location === 'turtle'));
-    if (!hungry.length) return false;
-    this._turtleFeeding = true;
-    const { x, y } = TURTLE_FEED_SPOT;
-    const lettuce = this.add.image(x, y, LETTUCE_KEY).setDepth(9001);
-    for (const stay of hungry) {
-      const rec = this._staySprites.get(stay);
-      if (!rec) continue;
-      this.tweens.add({
-        targets: rec.sprite, x, y: y + 6, duration: 500, hold: 300, yoyo: true, ease: 'Sine.easeInOut',
-      });
-    }
-    this.time.delayedCall(1400, () => {
-      lettuce.destroy();
-      for (const stay of hungry) {
-        clearNeed(stay, 'food');
-        this._setNeedIcon(stay, 'food', false);
-      }
-      this._turtleFeeding = false;
-      this.game.events.emit(EVENTS.NOTIFY, hungry.length > 1 ? 'The turtles got fed!' : `${hungry[0].animal.name} got fed!`);
-    });
+  // ── Outside yard bowls (issue #32 follow-up) ─────────────────────────────
+  // High-capacity, shared per zone — unlike a per-cage bowl (single-serve,
+  // consumed by whichever one occupant eats), a yard bowl fill resolves
+  // EVERY currently hungry/thirsty animal settled in that zone at once (see
+  // _autoResolveYardBowls), mirroring the old turtle-shared-tank precedent
+  // this replaces — "one fill event satisfies every current occupant", just
+  // reapplied to the yard instead of a tank. Filling itself works exactly
+  // like _fillBowl: a player action, any time, regardless of who's hungry.
+  _fillYardBowl(zoneKey, kind) {
+    const bowl = this.yardBowls[zoneKey];
+    if (bowl[kind]) return true;
+    bowl[kind] = true;
+    this._refreshYardBowls();
     return true;
   }
 
-  _topOffTank() {
-    this.turtleTankNeedsWater = false;
-    this._tankTimer = TANK_WATER_INTERVAL();
-    if (this._tankNeedIcon) { this._tankNeedIcon.destroy(); this._tankNeedIcon = null; }
-    this.game.events.emit(EVENTS.NOTIFY, 'Topped off the turtle tank!');
+  _refreshYardBowls() {
+    for (const zoneKey of ['top', 'bottom']) {
+      const bowl = this.yardBowls[zoneKey];
+      const imgs = this._yardBowlImgs[zoneKey];
+      imgs.food.setTexture(bowl.food ? BOWL_KEY : BOWL_EMPTY_KEY);
+      imgs.water.setTexture(bowl.water ? WATER_BOWL_KEY : WATER_BOWL_EMPTY_KEY);
+    }
+  }
+
+  // Mirrors _autoResolveBowlNeeds, but scoped per yard zone instead of per
+  // cage: every settled-in-yard stay's food/water need resolves against
+  // whichever zone she's CURRENTLY in (top or bottom of the movable divider
+  // — same zone test _dropOffToYard/stay.yardZone already uses), and a fill
+  // satisfies every current occupant of that zone in the same tick before
+  // emptying again — not a single-serve per-animal drain like a cage bowl.
+  _autoResolveYardBowls() {
+    let changed = false;
+    for (const zoneKey of ['top', 'bottom']) {
+      const bowl = this.yardBowls[zoneKey];
+      if (!bowl.food && !bowl.water) continue;
+      const occupants = this.roster.stays.filter(
+        (s) => s.location === LOCATION.YARD && (s.yardZone || 'top') === zoneKey,
+      );
+      if (bowl.food) {
+        const hungry = occupants.filter((s) => s.needs.food);
+        if (hungry.length) {
+          for (const s of hungry) { clearNeed(s, 'food'); this._setNeedIcon(s, 'food', false); }
+          bowl.food = false;
+          changed = true;
+        }
+      }
+      if (bowl.water) {
+        const thirsty = occupants.filter((s) => s.needs.water);
+        if (thirsty.length) {
+          for (const s of thirsty) { clearNeed(s, 'water'); this._setNeedIcon(s, 'water', false); }
+          bowl.water = false;
+          changed = true;
+        }
+      }
+    }
+    return changed;
   }
 
   // ── Potty: scooper / litter box / dogs outside (issue #7, #20, #22 #5) ──
@@ -2620,30 +2351,34 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         this._setNeedIcon(stay, key, true);
         if (key === 'bathroom') {
           this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} needs to go to the bathroom!`);
-        } else if ((key === 'food' || key === 'water') && !stay.bowl?.[key]) {
+        } else if (key === 'food' || key === 'water') {
           // Owner note 2026-07-29: "we don't need notifications every time an
           // animal eats or drinks, only if they are thirsty or hungry and
           // their bowl is empty" — only worth a heads-up when there's
-          // actually nothing there for her; if the bowl's already stocked
-          // she resolves it silently the same tick (_autoResolveBowlNeeds).
-          this.game.events.emit(EVENTS.NOTIFY,
-            key === 'food' ? `${stay.animal.name} is hungry — her bowl is empty!` : `${stay.animal.name} is thirsty — her bowl is empty!`);
+          // actually nothing there for her; if a stocked bowl is available
+          // she resolves it silently the same tick (_autoResolveBowlNeeds /
+          // _autoResolveYardBowls). A yard-placed stay checks her current
+          // zone's shared bowl instead of her own personal cage bowl.
+          const stocked = stay.location === LOCATION.YARD
+            ? !!this.yardBowls[stay.yardZone || 'top'][key]
+            : !!stay.bowl?.[key];
+          if (!stocked) {
+            this.game.events.emit(EVENTS.NOTIFY,
+              key === 'food' ? `${stay.animal.name} is hungry — her bowl is empty!` : `${stay.animal.name} is thirsty — her bowl is empty!`);
+          }
         }
       }
       // Owner note 2026-07-29: eating/drinking is decoupled from filling —
       // she resolves her own hunger/thirst here, automatically, the instant
       // a stocked bowl is available, with no player proximity/interaction
-      // required (see _autoResolveBowlNeeds).
-      if (this._autoResolveBowlNeeds(stay)) bowlsChanged = true;
+      // required (see _autoResolveBowlNeeds). Yard-placed stays resolve
+      // against their zone's shared bowl instead (_autoResolveYardBowls,
+      // called once below, not per-stay — one fill can satisfy everyone in
+      // the zone at once).
+      if (stay.location !== LOCATION.YARD && this._autoResolveBowlNeeds(stay)) bowlsChanged = true;
     }
     if (bowlsChanged) this._refreshBowls();
-
-    this._tankTimer -= delta;
-    if (this._tankTimer <= 0 && !this.turtleTankNeedsWater) {
-      this.turtleTankNeedsWater = true;
-      this._tankNeedIcon = this.add.image(this._tankMarker.x, this._tankMarker.y - 30, NEED_KEY.water)
-        .setDepth(9002);
-    }
+    if (this._autoResolveYardBowls()) this._refreshYardBowls();
   }
 
   // Owner note 2026-07-29 ("you should be able to fill food bowls
@@ -2651,11 +2386,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // whenever a settled stay is hungry/thirsty AND her bowl is currently
   // stocked, she resolves it herself — no player proximity or interaction
   // needed, exactly like the owner described. Empties the bowl again so the
-  // next fill is a fresh player action. Turtles have no stay.bowl at all
-  // (BOWL_SPOTS/WATER_BOWL_SPOTS exclude them — they're fed via lettuce
-  // dropped in the tank instead, see _feedTurtleTank), so this is a no-op
-  // for them. Returns true if a bowl was consumed, so the caller can batch
-  // the sprite refresh instead of doing it per-stay.
+  // next fill is a fresh player action. Returns true if a bowl was consumed,
+  // so the caller can batch the sprite refresh instead of doing it per-stay.
   _autoResolveBowlNeeds(stay) {
     if (!stay.bowl) return false;
     let changed = false;
@@ -2683,8 +2415,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // cat litter box still spawns a periodic indoor mess.
   //
   // Issue #5 (per-cage litter box): a mess now targets a SPECIFIC settled
-  // cat's own litter box (data/props.js's LITTER_SPOTS/_UNIFIED) instead of
-  // the old single shared section-wide spot. Owner note 2026-07-29: "'litter
+  // cat's own litter box (data/props.js's LITTER_SPOTS) instead of the old
+  // single shared section-wide spot. Owner note 2026-07-29: "'litter
   // box cleaned' is an unnecessary notification; but maybe we should add
   // '...'s litter box needs cleaned' if they try to go potty and it's dirty
   // still" — each tick picks one settled cat at random; if HER box already
@@ -2708,8 +2440,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         this.game.events.emit(EVENTS.NOTIFY, `${cat.animal.name}'s litter box needs cleaning!`);
         return;
       }
-      const spots = this._activeLitterSpots();
-      const spot = spots[cat.location]?.[cat.cageSlot];
+      const spot = LITTER_SPOTS[cat.location]?.[cat.cageSlot];
       if (spot) this._spawnMess('cat', spot, cat);
     }
   }
@@ -2779,19 +2510,23 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // than the cage's own rect. Filling works regardless of hunger/thirst
     // (see _fillBowl); actually eating/drinking happens on its own
     // background tick (_autoResolveBowlNeeds), not through this interaction.
-    const bowlSpots = this._activeBowlSpots();
-    const waterSpots = this._activeWaterBowlSpots();
-    for (const key of Object.keys(bowlSpots)) {
-      bowlSpots[key].forEach((spot, slot) => {
+    for (const key of Object.keys(BOWL_SPOTS)) {
+      BOWL_SPOTS[key].forEach((spot, slot) => {
         consider(spot.x, spot.y, () => this._fillBowl(key, slot, 'food'));
       });
-      waterSpots[key].forEach((spot, slot) => {
+      WATER_BOWL_SPOTS[key].forEach((spot, slot) => {
         consider(spot.x, spot.y, () => this._fillBowl(key, slot, 'water'));
       });
     }
 
-    consider(this._tankMarker.x, this._tankMarker.y, () => this._topOffTank());
-    consider(TURTLE_FEED_SPOT.x, TURTLE_FEED_SPOT.y, () => this._feedTurtleTank());
+    // Issue #32 follow-up: the outside yard's shared food/water bowl pair
+    // per zone — filling works the same way as a cage bowl (any time,
+    // regardless of who's hungry); see _fillYardBowl/_autoResolveYardBowls.
+    for (const zoneKey of ['top', 'bottom']) {
+      const spots = YARD_BOWL_SPOTS[zoneKey];
+      consider(spots.food.x, spots.food.y, () => this._fillYardBowl(zoneKey, 'food'));
+      consider(spots.water.x, spots.water.y, () => this._fillYardBowl(zoneKey, 'water'));
+    }
 
     if (!this.hasScooper) consider(this.scooperRestPos.x, this.scooperRestPos.y, () => this._pickUpScooper());
 

@@ -1,17 +1,16 @@
 // Per-stay "needs" — simple boolean flags that build up over real time while
-// an animal is settled in its section (DESIGN.md's feeding/potty chores).
-// Deliberately tiny: everyone gets `food` and `water` (except turtles, whose
-// water is a section-level tank resource — see below); dogs additionally get
-// `bathroom` (DESIGN.md's "Cupcake needs to go to the bathroom!" bottom-left
-// call-out). Never punishing — timers are long and a need just sits there
-// patiently (showing a small indicator) until it's resolved.
+// an animal is settled in its cage (DESIGN.md's feeding/potty chores).
+// Deliberately tiny: everyone gets `food` and `water` (issue #32: turtles used
+// to have a section-level shared-tank water resource instead of their own
+// `water` need — that's gone now, turtles get the exact same per-cage bowl
+// as everyone else); dogs additionally get `bathroom` (DESIGN.md's "Cupcake
+// needs to go to the bathroom!" bottom-left call-out). Never punishing —
+// timers are long and a need just sits there patiently (showing a small
+// indicator) until it's resolved.
 //
 // This is the shape issue #11's night wake-up reasons (bathroom/cold/bad
 // dream/having babies) should extend: add a new `needs.<key>`/`timers.<key>`
 // pair and reuse tickNeeds()/clearNeed() rather than inventing new plumbing.
-// (Turtles' tank water level is deliberately NOT modeled here — it's a
-// section-level resource, not a per-animal need; see KennelScene's
-// turtleTankNeedsWater.)
 //
 // Owner note 2026-07-29 (issue #30): "food and water bowls should only need
 // filled maybe at MOST 3x per day" — food and water flip due TOGETHER, at
@@ -33,11 +32,8 @@ function nextFeedAbsHour(afterAbs) {
 }
 
 export function createNeeds(speciesKey, day = 0, hour = 0) {
-  const needs = { food: false };
+  const needs = { food: false, water: false };
   const timers = { nextFeedAt: nextFeedAbsHour(absHour(day, hour)) };
-  if (speciesKey !== 'turtle') {
-    needs.water = false;
-  }
   if (speciesKey === 'dog') {
     needs.bathroom = false;
     timers.bathroom = BATHROOM_INTERVAL();
@@ -50,8 +46,8 @@ export function createNeeds(speciesKey, day = 0, hour = 0) {
 // action, any time) and eating from it (automatic, whenever she's hungry AND
 // it's stocked) are two decoupled events. `stay.bowl` tracks whether each
 // bowl is currently stocked; `true` means full, `false` means empty and
-// needs refilling. Same species exclusion as `needs.water` above — turtles
-// have no bowl at all (fed via lettuce dropped in the tank instead).
+// needs refilling. Every settled stay has one now, including turtles (issue
+// #32 — the old shared-tank/lettuce mechanic is gone).
 export function createBowlState() {
   return { food: false, water: false };
 }

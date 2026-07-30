@@ -208,30 +208,17 @@ export function createRoster(saved = null) {
     return [primary]; // solo
   }
 
-  // Issue #18: a section has a fixed CAGES_PER_SECTION (6) individual cages —
-  // once every cage is taken by a settled stay, that species quietly stops
-  // arriving (no queue, no penalty, no notification) until a checkout frees
-  // one up. Reception/carrying stays don't count — they haven't taken a cage
-  // yet. A stay out in the yard DOES still count against her own section
-  // (see belongsToSection above) — she still owns her cage, she's just out
-  // playing in it for now.
-  function isSectionFull(sectionKey) {
-    return stays.filter((s) => belongsToSection(s, sectionKey)).length >= CAGES_PER_SECTION;
-  }
-
   // Spawns one new arrival (an owner dropping off a pet). ~40% of the time it's
   // a returning-pool animal (if one of that species is currently available),
   // otherwise a fresh family/individual. Adds a new stay to `stays` and returns
-  // it — or returns null if that species' section is already full (issue #18);
-  // the caller (KennelScene) just skips that particular roll, quietly.
-  //
-  // Issue #27: `generalized` (passed by KennelScene from its
-  // `generalizedCages` toggle) swaps the gating check — there's no more
-  // per-species territory in that mode, so a species keeps arriving as long
-  // as ANY cage anywhere is open, not just one nominally "hers".
-  function spawnArrival({ day, hour, rng = Math.random, generalized = false } = {}) {
+  // it — or returns null if the whole kennel is full right now (issue #18,
+  // generalized by issue #32: since any pet can go in any open cage, there's
+  // no more per-species territory — a species keeps arriving as long as ANY
+  // cage anywhere is open, not just one nominally "hers"); the caller
+  // (KennelScene) just skips that particular roll, quietly.
+  function spawnArrival({ day, hour, rng = Math.random } = {}) {
     const speciesKey = pickSpecies(rng);
-    if (generalized ? !anyOpenCageAnywhere(stays) : isSectionFull(speciesKey)) return null;
+    if (!anyOpenCageAnywhere(stays)) return null;
     let group = null;
 
     if (rng() < 0.4) {

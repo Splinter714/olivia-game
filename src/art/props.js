@@ -1,15 +1,15 @@
 // Procedural textures for kennel furniture added by issues #6/#7/#8/#13/#14/
-// #20: the turtle/snake tanks + individual islands/perches, litter box,
-// scooper, food/water bowls, potty messes, the yard divider, the back-wing
-// kitchen/storage dressing, and the small "needs attention" bubbles. Same
-// gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
+// #20/#32: the single modular cage grid (with turtle/snake islands/perches
+// and the secret dragon's castle as per-species cage looks), litter box,
+// scooper, food/water bowls (cage + yard), potty messes, the yard divider,
+// the back-wing kitchen/storage dressing/bed, and the small "needs
+// attention" bubbles. Same gen()-into-a-texture pattern as art/kennel.js /
+// art/animals.js.
 import { gen } from './_gen.js';
 import {
-  TURTLE, SNAKE, LITTER_BOX_SIZE, CAGES, OVEN, BED, YARD_DIVIDER_X1, YARD_DIVIDER_X0,
+  LITTER_BOX_SIZE, CAGES, CAGE_W, CAGE_H, OVEN, BED, YARD_DIVIDER_X1, YARD_DIVIDER_X0,
 } from '../data/props.js';
 
-export const TANK_KEY = 'prop-tank';
-export const SNAKE_TANK_KEY = 'prop-snake-tank';
 export const LITTER_BOX_KEY = 'prop-litter-box';
 export const SCOOPER_KEY = 'prop-scooper';
 export const BOWL_KEY = 'prop-bowl';
@@ -34,6 +34,10 @@ export const BOWL_KEY_BY_SPECIES = {
   cat: BOWL_KIBBLE_KEY,
   dog: BOWL_KIBBLE_KEY,
   hamster: BOWL_SIMPLE_KEY,
+  // Issue #32 #4: turtles get a regular per-cage bowl now too (the old
+  // shared-tank/lettuce mechanic is gone) — a small plain dish, same as
+  // hamster, since no turtle-specific look was called out.
+  turtle: BOWL_SIMPLE_KEY,
 };
 // Empty counterparts of every food-bowl variant above (owner note 2026-07-29:
 // "filling a bowl and an animal eating from it should be decoupled" — the
@@ -52,6 +56,7 @@ export const BOWL_EMPTY_KEY_BY_SPECIES = {
   cat: BOWL_KIBBLE_EMPTY_KEY,
   dog: BOWL_KIBBLE_EMPTY_KEY,
   hamster: BOWL_SIMPLE_EMPTY_KEY,
+  turtle: BOWL_SIMPLE_EMPTY_KEY,
 };
 // Water bowl (owner note 2026-07-29: "same with water bowls") — one shared
 // blue-tinted dish look, full/empty, for every bowl-eligible species (no
@@ -69,80 +74,44 @@ export const TREAT_TRAY_KEY = 'prop-treat-tray';
 export const SHELF_KEY = 'prop-shelf';
 export const BOX_KEY = 'prop-boxes';
 export const BAG_KEY = 'prop-bag';
-export const LETTUCE_KEY = 'prop-lettuce';
 export const YARD_DIVIDER_POST_KEY = 'prop-yard-divider-post';
 export const YARD_DIVIDER_LINE_KEY = 'prop-yard-divider-line';
 export const NEED_KEY = { food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail', tuck: 'need-tuck', babies: 'need-babies' };
 
-// One individual-cage texture key per section (issue #18, extended to
-// turtle/snake by issue #20) — every cage in a section is the same size
-// (data/props.js's CAGES grid), so one texture per section covers all 6.
-// Used in normal ("By Type") mode, where each section keeps its own
-// historical cell size.
-export const CAGE_KEY = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-${key}`]));
+// Issue #32: one single cage grid now (the old per-section "By Type" layout
+// and the later separate "Cage Hall" room are both gone) — every cage is the
+// same uniform CAGE_W x CAGE_H size (100x100, data/props.js), so one texture
+// per species covers all its cages. `CAGE_KEY` also includes an entry for
+// the secret bonus dragon (src/dev/secretDragon.js), who has no species
+// section of her own but still needs her own themed cage look (see
+// drawDragonCastle below) — everyone else's key comes from CAGES' own
+// species keys.
+export const CAGE_KEY = Object.fromEntries(
+  [...Object.keys(CAGES), 'dragon'].map((key) => [key, `prop-cage-${key}`]),
+);
 
-// Owner feedback after trying "Mix Cages" (2026-07-29): "cage sizes should
-// all be the same... each individual cage should be larger, like square with
-// both dimensions equal to the previous height of cat and dog cages" (that
-// height worked out to exactly 167px). Every cage in Mix Cages mode is now a
-// 167x167 square — this is also the exact cell size of the unified cage grid
-// (data/props.js's UNIFIED_CAGES, laid out in the new Cage Hall room), so a
-// cage image fills its grid cell edge-to-edge with no centering/inset math
-// needed (see KennelScene._refreshCageArt).
-export const GENERALIZED_CAGE_W = 167;
-export const GENERALIZED_CAGE_H = 167;
-
-// One uniform-size texture per species, used only in generalized mode
-// (KennelScene._refreshCageArt draws whichever species is actually settled
-// in a cage at this size, centered in the cage's slot).
-export const CAGE_KEY_UNIFORM = Object.fromEntries(Object.keys(CAGES).map((key) => [key, `prop-cage-uniform-${key}`]));
-
-// Issue #27 ("generalized cages" toggle), simplified per the 2026-07-29 owner
-// note ("they should all be the same type of cage at the beginning"): ONE
-// shared neutral/empty-slot texture (uniform size, no per-section shape)
-// shown for any cage with nobody currently assigned to it while generalized
-// mode is on — there's no species pre-assigned to an empty cage anymore, so
-// it gets a single plain, un-themed look everywhere instead of per-section
-// empty art.
+// Issue #27 ("generalized cages" toggle) / issue #32: ONE shared neutral/
+// empty-slot texture (uniform size, no per-species shape) shown for any cage
+// with nobody currently assigned to it — there's no species pre-assigned to
+// an empty cage, so it gets a single plain, un-themed look everywhere.
 export const EMPTY_CAGE_KEY = 'prop-cage-empty';
 
-// Which draw function renders a given species' cage art — shared by the
-// normal-mode (per-section-sized) and generalized-mode (uniform-sized)
-// texture builds below so the two only ever differ in the w/h passed in.
+// Which draw function renders a given species' cage art.
 function cageDrawFn(key) {
   if (key === 'turtle') return drawIslandSlot;
   if (key === 'snake') return drawPerchSlot;
   if (key === 'bird') return drawNestSlot;
+  if (key === 'dragon') return drawDragonCastle;
   return drawCagePen;
-}
-
-// Water tank with a glass-cover highlight along the top rim.
-function drawTank(g, w, h) {
-  g.fillStyle(0x2d6f8e, 1).fillRoundedRect(0, 0, w, h, 10);
-  g.fillStyle(0x4b9fc4, 0.85).fillRoundedRect(3, 3, w - 6, h - 6, 8);
-  // Glass-cover highlight: a lighter streak across the top.
-  g.fillStyle(0xdff3fb, 0.55).fillRoundedRect(6, 4, w - 12, h * 0.14, 6);
-  g.lineStyle(3, 0xcfe9f2, 0.8).strokeRoundedRect(1.5, 1.5, w - 3, h - 3, 9);
-}
-
-// Snake tank (issue #14): same glass-covered-tank silhouette as the turtle
-// tank, but drier — a sandy substrate instead of blue water, since a snake
-// needs a solid resting surface, not "lots of water".
-function drawSnakeTank(g, w, h) {
-  g.fillStyle(0x8a6a3e, 1).fillRoundedRect(0, 0, w, h, 10);
-  g.fillStyle(0xd9c9a0, 0.9).fillRoundedRect(3, 3, w - 6, h - 6, 8);
-  g.fillStyle(0xeee6d0, 0.35).fillRoundedRect(6, 4, w - 12, h * 0.14, 6); // glass-cover highlight
-  g.lineStyle(3, 0xcfe9f2, 0.55).strokeRoundedRect(1.5, 1.5, w - 3, h - 3, 9); // glass sheen
 }
 
 // A small individual water tank with a sand island (issue #20, extended per
 // owner note 2026-07-29: "water needs to be added as part of turtle cage
-// placement"). Self-contained now — the water is baked right into this
-// per-cage texture rather than relying on the one big fixed TANK_KEY
-// background drawn only at the turtle section's own location, which left a
-// turtle looking waterless whenever Mix Cages placed her in any OTHER
-// section's cage. Same soft-tan-ellipse island styling as before, just
-// sitting in its own little glass-rimmed pool.
+// placement"). Self-contained — the water is baked right into this per-cage
+// texture rather than a separate big shared tank background, since (issue
+// #32) there's no dedicated turtle section/room left to anchor one to; a
+// turtle's cage looks like her own little glass-rimmed pool no matter which
+// grid slot she's settled in. Same soft-tan-ellipse island styling as before.
 function drawIslandSlot(g, w, h) {
   g.fillStyle(0x2d6f8e, 1).fillRoundedRect(0, 0, w, h, 8);
   g.fillStyle(0x4b9fc4, 0.85).fillRoundedRect(2, 2, w - 4, h - 4, 6);
@@ -155,9 +124,9 @@ function drawIslandSlot(g, w, h) {
 }
 
 // A small individual resting perch (issue #20) — one per snake cage slot, a
-// short branch stub. Same self-containment fix as the turtle island above:
-// bakes its own sandy-tank background in rather than relying on the one big
-// fixed SNAKE_TANK_KEY background drawn only at the snake section's location.
+// short branch stub. Same self-containment as the turtle island above: bakes
+// its own sandy-tank background right in rather than relying on a separate
+// shared tank background.
 function drawPerchSlot(g, w, h) {
   g.fillStyle(0x8a6a3e, 1).fillRoundedRect(0, 0, w, h, 8);
   g.fillStyle(0xd9c9a0, 0.9).fillRoundedRect(2, 2, w - 4, h - 4, 6);
@@ -189,6 +158,35 @@ function drawNestSlot(g, w, h) {
   }
   // Soft hollow in the middle where eggs/chicks sit.
   g.fillStyle(0xf2e6c8, 0.9).fillEllipse(w * 0.5, h * 0.56, w * 0.28, h * 0.16);
+}
+
+// Issue #32 #5: the secret bonus dragon (src/dev/secretDragon.js) used to
+// just borrow whichever species' cage art the cage she landed in already
+// had — she gets her own proper look now, a small gray/stone castle (owner:
+// "make the dragon cages like a little gray/stone castle") — a simple
+// turret silhouette on a stone-block floor pad, same footprint as every
+// other cage so she still fits her grid slot.
+function drawDragonCastle(g, w, h) {
+  g.fillStyle(0xc7c7cf, 1).fillRoundedRect(2, h * 0.5, w - 4, h * 0.46, 4); // floor pad (matches drawCagePen)
+  // Stone-block texture on the floor pad.
+  g.lineStyle(1, 0xa8a8b2, 0.7);
+  for (let ry = h * 0.54; ry < h * 0.94; ry += h * 0.14) {
+    g.lineBetween(2, ry, w - 2, ry);
+  }
+  for (let bx = 6; bx < w - 4; bx += 14) g.lineBetween(bx, h * 0.5, bx, h * 0.96);
+  // Turret silhouette: a central keep flanked by two shorter corner towers.
+  const towerW = w * 0.2, keepW = w * 0.3;
+  const drawTower = (cx, tw, th) => {
+    g.fillStyle(0x9a9aa4, 1).fillRect(cx - tw / 2, h * 0.5 - th, tw, th);
+    g.fillStyle(0x7c7c86, 1); // crenellations
+    const merlon = tw / 4;
+    for (let i = 0; i < 3; i++) g.fillRect(cx - tw / 2 + i * merlon * 1.3, h * 0.5 - th - merlon * 0.6, merlon, merlon * 0.6);
+    g.fillStyle(0x4a4a54, 1).fillRect(cx - tw * 0.14, h * 0.5 - th * 0.55, tw * 0.28, th * 0.55); // doorway/window slit
+  };
+  drawTower(w * 0.22, towerW, h * 0.34);
+  drawTower(w * 0.5, keepW, h * 0.5);
+  drawTower(w * 0.78, towerW, h * 0.34);
+  g.fillStyle(0x8a5a34, 1).fillRoundedRect(w / 2 - 5, 0, 10, 6, 2); // name-tag mount
 }
 
 function drawLitterBox(g, w, h) {
@@ -465,15 +463,6 @@ function drawBag(g, w, h) {
   g.fillStyle(0x8a5a34, 1).fillCircle(w * 0.5, h * 0.44, w * 0.18);
 }
 
-// A small floating lettuce leaf — dropped into the turtle tank as food
-// (issue #20 follow-up: turtles can't reach a regular bowl on their island,
-// so feeding them means tossing lettuce into the water instead).
-function drawLettuce(g, w, h) {
-  g.fillStyle(0x6fae4a, 1).fillEllipse(w / 2, h / 2, w, h);
-  g.fillStyle(0x8bcf68, 1).fillEllipse(w * 0.42, h * 0.42, w * 0.6, h * 0.6);
-  g.lineStyle(1, 0x4f8a34, 0.8).lineBetween(w * 0.2, h * 0.5, w * 0.8, h * 0.5);
-}
-
 // Yard divider post (issue #20): a small movable fence post the player can
 // carry around and set back down to re-split the yard into zones.
 function drawDividerPost(g, w, h) {
@@ -493,8 +482,6 @@ function drawDividerLine(g, w, h) {
 }
 
 export function buildPropTextures(scene) {
-  gen(scene, TANK_KEY, TURTLE.tank.w, TURTLE.tank.h, (g) => drawTank(g, TURTLE.tank.w, TURTLE.tank.h));
-  gen(scene, SNAKE_TANK_KEY, SNAKE.tank.w, SNAKE.tank.h, (g) => drawSnakeTank(g, SNAKE.tank.w, SNAKE.tank.h));
   gen(scene, LITTER_BOX_KEY, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h, (g) => drawLitterBox(g, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h));
   gen(scene, SCOOPER_KEY, 26, 32, (g) => drawScooper(g, 26, 32));
   gen(scene, BOWL_KEY, 24, 18, (g) => drawBowl(g, 24, 18, true));
@@ -510,7 +497,6 @@ export function buildPropTextures(scene) {
   gen(scene, WATER_BOWL_KEY, 24, 18, (g) => drawWaterBowl(g, 24, 18, true));
   gen(scene, WATER_BOWL_EMPTY_KEY, 24, 18, (g) => drawWaterBowl(g, 24, 18, false));
   gen(scene, MESS_KEY, 16, 12, (g) => drawMess(g, 16, 12));
-  gen(scene, LETTUCE_KEY, 16, 12, (g) => drawLettuce(g, 16, 12));
   gen(scene, NEED_KEY.food, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'food'));
   gen(scene, NEED_KEY.bathroom, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'bathroom'));
   gen(scene, NEED_KEY.water, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'water'));
@@ -529,15 +515,14 @@ export function buildPropTextures(scene) {
   gen(scene, YARD_DIVIDER_POST_KEY, 14, 28, (g) => drawDividerPost(g, 14, 28));
   gen(scene, YARD_DIVIDER_LINE_KEY, YARD_DIVIDER_X1 - YARD_DIVIDER_X0, 8, (g) => drawDividerLine(g, YARD_DIVIDER_X1 - YARD_DIVIDER_X0, 8));
 
+  // Every regular species' cage texture, uniform CAGE_W x CAGE_H (100x100).
   for (const key of Object.keys(CAGES)) {
-    const { w, h } = CAGES[key][0]; // every cage in a section shares one size
     const draw = cageDrawFn(key);
-    gen(scene, CAGE_KEY[key], w, h, (g) => draw(g, w, h));
-    // Generalized-mode counterpart: same art, uniform size (owner note above).
-    gen(scene, CAGE_KEY_UNIFORM[key], GENERALIZED_CAGE_W, GENERALIZED_CAGE_H,
-      (g) => draw(g, GENERALIZED_CAGE_W, GENERALIZED_CAGE_H));
+    gen(scene, CAGE_KEY[key], CAGE_W, CAGE_H, (g) => draw(g, CAGE_W, CAGE_H));
   }
-  // One shared empty-slot texture (uniform size) for generalized mode.
-  gen(scene, EMPTY_CAGE_KEY, GENERALIZED_CAGE_W, GENERALIZED_CAGE_H,
-    (g) => drawEmptyCageSlot(g, GENERALIZED_CAGE_W, GENERALIZED_CAGE_H));
+  // The secret bonus dragon's own castle look (issue #32 #5) — same uniform
+  // size, but she has no CAGES entry of her own (no species section).
+  gen(scene, CAGE_KEY.dragon, CAGE_W, CAGE_H, (g) => drawDragonCastle(g, CAGE_W, CAGE_H));
+  // One shared empty-slot texture (uniform size) for any unoccupied cage.
+  gen(scene, EMPTY_CAGE_KEY, CAGE_W, CAGE_H, (g) => drawEmptyCageSlot(g, CAGE_W, CAGE_H));
 }
