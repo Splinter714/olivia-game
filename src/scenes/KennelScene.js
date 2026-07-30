@@ -684,14 +684,24 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
       containerExtras = [];
     }
-    const tag = this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
-
     // Issue #22 #3: scale family spacing to the actual cage/island/yard-zone
     // size available, so a family "reads as together but with breathing
     // room" without spilling out of a small individual cage. `spread` is a
     // multiplier around a ~90px baseline cage width; opts.yardBounds covers
     // the yard-play case (no cage lookup, but still bounded).
     const cage = CAGES[stay.location]?.[stay.cageSlot];
+
+    // Nameplate anchor: a caged/tanked/nested stay (per issue #20's
+    // unification, turtle islands/snake perches/bird nests all count) gets a
+    // FIXED plate mounted top-center of her specific cage rect, independent
+    // of wherever she currently wanders inside it — reads as a nameplate on
+    // the cage door, not a floating label. Anyone without a cage (waiting at
+    // reception, being carried, out playing in the yard) keeps the original
+    // behavior: the tag floats just above her current position.
+    const cageNameAnchor = cage ? { x: cage.x + cage.w / 2, y: cage.y + 18 } : null;
+    const tag = cageNameAnchor
+      ? this._addNameTag(cageNameAnchor.x, cageNameAnchor.y, animal.name)
+      : this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
     // A yard-placed stay can be redrawn (tie-breaker sync, a birth landing,
     // the computer flow) without going through _dropOffToYard again — derive
     // her zone rect from stay.yardZone whenever opts.yardBounds isn't passed,
@@ -758,7 +768,7 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
 
     const rec = {
       pos: { x, y }, sprite, tag, extras, babyLabels, needIcons: {}, blanket: null,
-      wanderBounds, wander: null,
+      wanderBounds, wander: null, cageAnchored: !!cageNameAnchor,
       // What this render assumed about tie-breakers, so _syncTieBreakers can
       // tell when an arrival/checkout has changed who needs a collar.
       lookSig: this._lookSignature(stay, tb),
@@ -1954,8 +1964,12 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       rec.sprite.x += (rec.wander.tx - rec.sprite.x) * 0.03;
       rec.sprite.y += (rec.wander.ty - rec.sprite.y) * 0.03;
       rec.sprite.setDepth(rec.sprite.y);
-      // The name tag rides along just above her current (wandering) position.
-      rec.tag.container.setPosition(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight - 6 - rec.tag.height);
+      // The name tag rides along just above her current (wandering) position
+      // — UNLESS it's mounted fixed on her cage door (cageAnchored), in which
+      // case it stays put regardless of where she wanders inside the cage.
+      if (!rec.cageAnchored) {
+        rec.tag.container.setPosition(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight - 6 - rec.tag.height);
+      }
     }
   }
 
