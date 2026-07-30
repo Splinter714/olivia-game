@@ -45,7 +45,7 @@ import {
 } from '../art/raccoon.js';
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
 import { createRoster, LOCATION, CARRY_KIND, assignCageSlot, isCageSlotOpen, anyOpenCageAnywhere } from '../data/roster.js';
-import { loadGame, saveGame, seedGlobalNameState } from '../data/persistence.js';
+import { loadGame, saveGame, clearSave, seedGlobalNameState } from '../data/persistence.js';
 import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
 import { WithSecretDragon } from '../dev/secretDragon.js';
@@ -273,6 +273,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // contract. Cheap enough to call on a timer; guarded in case it somehow
   // fires before roster/economy/clock exist yet.
   _saveGame() {
+    if (this._resetting) return; // see _resetGame below
     if (!this.roster || !this.economy || !this.clock) return;
     saveGame({
       stays: this.roster.stays,
@@ -282,6 +283,19 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       clockHourFloat: this.clock.hourFloat,
       yardDividerY: this.yardDividerY,
     });
+  }
+
+  // Issue #34 follow-up fix: PauseScene's Reset Game calls this instead of
+  // clearing the save itself — clearSave() + a bare window.location.reload()
+  // looked right but didn't stick, because reload() fires 'beforeunload'
+  // FIRST, and this scene's own beforeunload autosave handler (_onBeforeUnload
+  // above) then immediately re-wrote the just-cleared save right back into
+  // localStorage before the page actually unloaded. `_resetting` short-
+  // circuits _saveGame so nothing can undo the clear once reset is underway.
+  _resetGame() {
+    this._resetting = true;
+    clearSave();
+    window.location.reload();
   }
 
   // Issue #34: re-renders every stay from a restored save wherever she

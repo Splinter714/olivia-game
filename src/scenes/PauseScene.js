@@ -1,6 +1,5 @@
 import Phaser from 'phaser';
 import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
-import { clearSave } from '../data/persistence.js';
 
 // Pause overlay (issue #34). Launched by KennelScene's pause button via
 // `this.scene.pause(); this.scene.launch('Pause');` — KennelScene is genuinely
@@ -100,10 +99,10 @@ export default class PauseScene extends Phaser.Scene {
   }
 
   _doReset() {
-    // Wipe the save and reload — the cleanest way to rebuild every scene
-    // (Kennel/Hud/Notification/this one) from scratch, matching exactly what
-    // a brand-new visit looks like.
-    clearSave();
-    window.location.reload();
+    // Delegate to KennelScene._resetGame() rather than clearing the save and
+    // reloading here directly — reload() fires 'beforeunload' first, which
+    // would otherwise let KennelScene's own autosave handler immediately
+    // re-write the save we just cleared (see that method's comment).
+    this.scene.get('Kennel')._resetGame();
   }
 }
