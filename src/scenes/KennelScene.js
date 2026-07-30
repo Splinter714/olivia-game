@@ -139,6 +139,7 @@ export default class KennelScene extends Phaser.Scene {
     this._carryVisual = null;      // { parts: [{obj, dx, dy}, ...] } following the player while carrying
     this.leashedDog = null;        // the dog stay currently being walked outside (issue #19), or null
     this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
+    this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment she starts walking in until her pet is picked up (issue #25)
 
     // (yardDividerY/carryingDivider/_dividerVisual and the scooper-rest state
     // are set earlier, above _buildProps() — see that comment.)
@@ -397,6 +398,13 @@ export default class KennelScene extends Phaser.Scene {
   }
 
   _spawnArrival(day, hour) {
+    // Issue #25: cap simultaneous waiting owner+pet pairs at 3. Reserve the
+    // slot the instant an owner starts walking in (_lingeringOwners is set in
+    // _runOwnerDropOff, before her walk-in tween even starts), not just once
+    // she's reached the desk — otherwise the "occasionally two" double-spawn
+    // roll below could let a 4th owner start walking in before the 3rd has
+    // been counted.
+    if (this._lingeringOwners.size >= 3) return;
     const stay = this.roster.spawnArrival({ day, hour });
     // Issue #18: null means that species' section is full (all 6 cages
     // taken) — quietly skip this roll, no queue/penalty/notification.
@@ -419,6 +427,10 @@ export default class KennelScene extends Phaser.Scene {
     const deskY = rug.y + rug.h * 0.3;
 
     const owner = this.add.sprite(doorX, doorY, 'owner-npc').setOrigin(0.5, 1).setDepth(doorY);
+    // Issue #25: reserve her waiting-owner slot the instant she starts
+    // walking in — see the cap check in _spawnArrival — not just once she's
+    // actually placed at reception.
+    this._lingeringOwners.set(stay, owner);
 
     // She visibly carries the container/animal in with her — the same prop
     // that will sit at reception once she sets it down, so the hand-off
@@ -446,13 +458,9 @@ export default class KennelScene extends Phaser.Scene {
         this._syncTieBreakers(); // a new guest may now match someone already here
         this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived!`);
 
-        this.time.delayedCall(500, () => {
-          this.tweens.add({
-            targets: owner, x: doorX, y: doorY, duration: 1500, ease: 'Sine.easeInOut',
-            onUpdate: () => owner.setDepth(owner.y),
-            onComplete: () => owner.destroy(),
-          });
-        });
+        // Issue #25: she no longer walks straight back out — she lingers
+        // beside her pet (positioned in _placeAtReception) until the player
+        // picks the pet up; see _pickUp / _walkOwnerOut for the walk-out.
       },
     });
   }
@@ -463,6 +471,39 @@ export default class KennelScene extends Phaser.Scene {
     const x = rug.x + 30 + (waiting % 3) * 55;
     const y = rug.y + 24 + Math.floor(waiting / 3) * 42;
     this._renderStay(stay, x, y);
+    this._settleLingeringOwner(stay, x, y);
+  }
+
+  // Issue #25: once her pet is placed in its reception grid slot, move her
+  // lingering owner NPC to stand just behind/beside it (smaller y = further
+  // back, since depth here tracks y) — offset from the same grid slot so
+  // multiple simultaneously-waiting owner+pet pairs don't overlap each other.
+  _settleLingeringOwner(stay, petX, petY) {
+    const owner = this._lingeringOwners.get(stay);
+    if (!owner) return;
+    const x = petX + 18;
+    const y = petY - 30;
+    this.tweens.add({
+      targets: owner, x, y, duration: 300, ease: 'Sine.easeOut',
+      onUpdate: () => owner.setDepth(owner.y),
+    });
+  }
+
+  // Issue #25: fires when the player finally picks up a stay that had been
+  // waiting at reception — her owner, who's been lingering beside her, walks
+  // back out through the front door and despawns (same tween/easing/depth
+  // the old immediate walk-out used).
+  _walkOwnerOut(stay) {
+    const owner = this._lingeringOwners.get(stay);
+    if (!owner) return;
+    this._lingeringOwners.delete(stay);
+    const doorX = (FRONT_DOOR.x0 + FRONT_DOOR.x1) / 2;
+    const doorY = ROOM.y + ROOM.h - WALL - 2;
+    this.tweens.add({
+      targets: owner, x: doorX, y: doorY, duration: 1500, ease: 'Sine.easeInOut',
+      onUpdate: () => owner.setDepth(owner.y),
+      onComplete: () => owner.destroy(),
+    });
   }
 
   _processCheckouts(day) {
@@ -783,6 +824,10 @@ export default class KennelScene extends Phaser.Scene {
 
   _pickUp(stay) {
     this._carryOrigin = stay.location;
+    // Issue #25: this was the last waiting reception stay her owner was
+    // lingering beside — now that the player's taking the pet, the owner
+    // walks back out through the front door and despawns.
+    if (this._carryOrigin === LOCATION.RECEPTION) this._walkOwnerOut(stay);
     this._destroyStaySprites(stay);
     stay.location = LOCATION.CARRYING;
     this.carrying = stay;
