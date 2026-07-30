@@ -1229,12 +1229,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     // Nameplate anchor: a caged/tanked/nested stay (per issue #20's
     // unification, turtle islands/snake perches/bird nests all count) gets a
-    // FIXED plate mounted just below her cage's food/water bowls, independent
-    // of wherever she currently wanders inside it (or whether she's even
-    // there at all right now) — reads as a nameplate on the cage door, not a
-    // floating label. Anyone without a cage (waiting at reception, being
-    // carried) keeps the original behavior: the tag floats just above her
-    // current position.
+    // FIXED plate mounted top-center of her cage, independent of wherever she
+    // currently wanders inside it (or whether she's even there at all right
+    // now) — reads as a nameplate on the cage door, not a floating label.
+    // (Briefly moved to just below the bowls, then reverted back up top per
+    // owner note 2026-07-29.) Anyone without a cage (waiting at reception,
+    // being carried) keeps the original behavior: the tag floats just above
+    // her current position.
     //
     // Bug fix (owner note 2026-07-29: "for assigned cages when there's an
     // animal in the play-yard, the food/water bowls and name plate and all
@@ -1246,7 +1247,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // and unchanged by a yard trip) so it stays put regardless of whether
     // she's actually standing there right now.
     const homeCage = CAGES[stay.cageSection]?.[stay.cageSlot];
-    const cageNameAnchor = homeCage ? { x: homeCage.x + homeCage.w / 2, y: homeCage.y + homeCage.h + 14 } : null;
+    const cageNameAnchor = homeCage ? { x: homeCage.x + homeCage.w / 2, y: homeCage.y + 18 } : null;
     const tag = cageNameAnchor
       ? this._addNameTag(cageNameAnchor.x, cageNameAnchor.y, animal.name)
       : this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
