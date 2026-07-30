@@ -1,7 +1,7 @@
 {
   "name": "olivia-game",
   "version": "0.1.0",
-  "description": "A new browser game — ideas by Olivia (placeholder name until the game has one)",
+  "description": "Kennel Game — a cozy pet-kennel game, designed with Olivia",
   "type": "module",
   "scripts": {
     "dev": "vite",

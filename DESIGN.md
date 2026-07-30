@@ -1,5 +1,4 @@
-# 🐾 The Kennel Game
-*(working title — Olivia gets to name it!)*
+# 🐾 Kennel Game
 
 ## The Big Idea
 You work at a **pet kennel** — a place where people bring their pets to stay

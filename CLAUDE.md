@@ -1,4 +1,4 @@
-# CLAUDE.md — Olivia's Game (working title)
+# CLAUDE.md — Kennel Game
 
 Orientation for working in this repo. The owner is non-technical and won't read
 the code, so changes must be verified, not just plausible.
@@ -9,8 +9,10 @@ A browser game being designed with the owner's daughter Olivia — the game conc
 is not yet decided; this repo is currently just the skeleton. Mirrors the sibling
 "horse game" and "mech game" projects' architecture: **Phaser 3**, **Vite**, plain
 JS (ESM, no TypeScript), all art **procedurally generated at runtime** (no asset
-files), data-driven entities, state in **localStorage**. Will deploy to GitHub
-Pages under base `/olivia-game/` (name is a placeholder until the game is named).
+files), data-driven entities, state in **localStorage**. Official name is
+**Kennel Game**; deploys to GitHub Pages under base `/olivia-game/` — the repo
+slug/npm package name stayed as-is on purpose (renaming those would change the
+live deploy URL), only the in-game display name changed.
 
 ## Commands
 
