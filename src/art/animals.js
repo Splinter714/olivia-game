@@ -968,36 +968,58 @@ function drawBird(g, pose, look, G) {
 // fleshed 9th species: kept as simple as the other land animals to draw.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Canvas widened on the LEFT (by DELTA units, adult 9 / baby 6) versus the
+// original stubby-tail geo so a proper long tail has room to sweep out to the
+// left of the haunch — every other element below is the original geo shifted
+// right by that same DELTA, so the body/head/wings/etc. sit exactly where
+// they always did relative to each other. Only `tail` uses the freed space.
 const DRAGON_GEO = {
   adult: {
-    W: 20, H: 16,
+    W: 29, H: 16,
     leg: { topY: 11, w: 2, h: 4, pawY: 15, pawW: 3, pawDX: -0.5, pawH: 1 },
-    hindX: [4, 6.5], foreX: [12, 14.5],
-    body: { cx: 9, cy: 9, w: 13, h: 7 },
-    tail: { x: 0.2, y: 8.2, w: 7, h: 2.6 },
-    neck: { x: 14, y: 5.5, w: 3, h: 4 },
-    head: { cx: 16.5, cy: 5, r: 2.6 },
-    snout: { x: 18.4, y: 4.4, w: 2, h: 2 },
-    horn: { x1: 15.4, x2: 16.6, y: 2.2, w: 0.9, h: 1.8 },
-    eye: { x: 16.9, y: 4.1, w: 1, h: 1 },
-    wing: { x: 6.4, y: 3.2, w: 9.5, h: 7.4 },
-    collar: { x: 14.4, y: 7.8, w: 3, h: 1.4 },
-    tattoo: { x: 3, y: 11.4 },
+    hindX: [13, 15.5], foreX: [21, 23.5],
+    body: { cx: 18, cy: 9, w: 13, h: 7 },
+    // Long S-curved tail: overlapping ellipses tapering from a thick base at
+    // the haunch down to a slender tip, with a gentle up/down wave so it
+    // reads as a sweeping curve rather than a straight stick.
+    tail: {
+      points: [
+        { x: 12.5, y: 9.0, w: 6.0, h: 3.0 },
+        { x: 8.5, y: 8.3, w: 5.0, h: 2.4 },
+        { x: 5.0, y: 9.0, w: 3.6, h: 1.8 },
+        { x: 1.8, y: 8.4, w: 2.0, h: 1.1 },
+      ],
+    },
+    neck: { x: 23, y: 5.5, w: 3, h: 4 },
+    head: { cx: 25.5, cy: 5, r: 2.6 },
+    snout: { x: 27.4, y: 4.4, w: 2, h: 2 },
+    horn: { x1: 24.4, x2: 25.6, y: 2.2, w: 0.9, h: 1.8 },
+    eye: { x: 25.9, y: 4.1, w: 1, h: 1 },
+    wing: { x: 15.4, y: 3.2, w: 9.5, h: 7.4 },
+    collar: { x: 23.4, y: 7.8, w: 3, h: 1.4 },
+    tattoo: { x: 12, y: 11.4 },
   },
   baby: {
-    W: 12, H: 10,
+    W: 18, H: 10,
     leg: { topY: 6.8, w: 1.3, h: 2.4, pawY: 9.2, pawW: 1.8, pawDX: -0.3, pawH: 0.6 },
-    hindX: [2.4, 4], foreX: [7.2, 8.8],
-    body: { cx: 5.4, cy: 5.6, w: 8, h: 4.4 },
-    tail: { x: 0.1, y: 5.1, w: 4.2, h: 1.6 },
-    neck: { x: 8.4, y: 3.4, w: 1.8, h: 2.4 },
-    head: { cx: 10, cy: 3.1, r: 1.6 },
-    snout: { x: 11.2, y: 2.7, w: 1.2, h: 1.2 },
-    horn: { x1: 9.3, x2: 10.1, y: 1.3, w: 0.55, h: 1.1 },
-    eye: { x: 10.2, y: 2.5, w: 0.6, h: 0.6 },
-    wing: { x: 3.8, y: 1.9, w: 5.7, h: 4.4 },
-    collar: { x: 8.6, y: 4.7, w: 1.8, h: 0.85 },
-    tattoo: { x: 1.8, y: 7.1 },
+    hindX: [8.4, 10], foreX: [13.2, 14.8],
+    body: { cx: 11.4, cy: 5.6, w: 8, h: 4.4 },
+    tail: {
+      points: [
+        { x: 7.5, y: 5.7, w: 3.6, h: 1.8 },
+        { x: 5.0, y: 5.3, w: 3.0, h: 1.4 },
+        { x: 2.8, y: 5.7, w: 2.1, h: 1.05 },
+        { x: 0.9, y: 5.35, w: 1.15, h: 0.65 },
+      ],
+    },
+    neck: { x: 14.4, y: 3.4, w: 1.8, h: 2.4 },
+    head: { cx: 16, cy: 3.1, r: 1.6 },
+    snout: { x: 17.2, y: 2.7, w: 1.2, h: 1.2 },
+    horn: { x1: 15.3, x2: 16.1, y: 1.3, w: 0.55, h: 1.1 },
+    eye: { x: 16.2, y: 2.5, w: 0.6, h: 0.6 },
+    wing: { x: 9.8, y: 1.9, w: 5.7, h: 4.4 },
+    collar: { x: 14.6, y: 4.7, w: 1.8, h: 0.85 },
+    tattoo: { x: 7.8, y: 7.1 },
   },
 };
 
@@ -1012,9 +1034,14 @@ function drawDragon(g, bob, [lhf, lhn, lff, lfn], look, G) {
   leg(g, G.hindX[0], lhf, lo, bob);  leg(g, G.foreX[0], lff, lo, bob);
   leg(g, G.hindX[1], lhn, mid, bob); leg(g, G.foreX[1], lfn, mid, bob);
 
-  // ── Tail ── tapering, tucked close to the body.
-  g.fillStyle(lo, 1);  g.fillEllipse(G.tail.x, G.tail.y + bob, G.tail.w, G.tail.h);
-  g.fillStyle(mid, 1); g.fillEllipse(G.tail.x + G.tail.w * 0.3, G.tail.y + bob, G.tail.w * 0.6, G.tail.h * 0.7);
+  // ── Tail ── long S-curve sweeping out from the haunch: several overlapping
+  // ellipses tapering down to a slender tip, each with a lighter highlight
+  // riding its upper edge so the whole sweep still reads with body/shadow
+  // contrast instead of flattening into a silhouette.
+  for (const seg of G.tail.points) {
+    g.fillStyle(lo, 1);  g.fillEllipse(seg.x, seg.y + bob, seg.w, seg.h);
+    g.fillStyle(mid, 1); g.fillEllipse(seg.x + seg.w * 0.15, seg.y + bob - seg.h * 0.18, seg.w * 0.55, seg.h * 0.6);
+  }
 
   // ── Body ── low, rounded barrel.
   g.fillStyle(mid, 1); g.fillEllipse(b.cx, b.cy + bob, b.w, b.h);
