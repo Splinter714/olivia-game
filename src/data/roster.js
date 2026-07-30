@@ -52,7 +52,12 @@ const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 // this species check. `stay.cageSection` (set by KennelScene._dropOff/
 // _recallYardToCages the moment she's actually assigned a cage) is the real
 // answer regardless of mode; in normal (species-locked) mode it's always
-// equal to her species anyway, so this is a no-op there.
+// equal to her species anyway, so this is a no-op there. The secret bonus
+// dragon (roster.spawnDragon below) leans on this exact same mechanism — she
+// has no section of her own, but once she's actually settled into a cage
+// (any section, via KennelScene's generalized-cages placement path) her
+// `cageSection` is set exactly like anyone else's, so this needs no special
+// case for her either.
 function belongsToSection(stay, sectionKey) {
   if (stay.location === sectionKey) return true;
   return stay.location === LOCATION.YARD && stay.cageSection === sectionKey;
@@ -69,7 +74,9 @@ export function isCageSlotOpen(stays, sectionKey, slot) {
 // Issue #27: true if ANY cage anywhere in the whole kennel is currently open
 // — used to gate arrivals in generalized mode, where there's no more
 // per-species territory, so a species should keep arriving as long as some
-// cage (any section) is free, not just a nominally-"hers".
+// cage (any section) is free, not just a nominally-"hers". Also used by the
+// secret bonus dragon trigger (KennelScene._triggerSecretDragon) to bail out
+// gracefully if the whole kennel is genuinely full.
 export function anyOpenCageAnywhere(stays) {
   return SECTIONS.some((s) => assignCageSlot(stays, s.key) != null);
 }
@@ -300,5 +307,43 @@ export function createRoster() {
     return due;
   }
 
-  return { stays, pool, spawnArrival, checkoutDue };
+  // Secret bonus guest (src/dev/secretDragon.js's "DRAGON" cheat code) — the
+  // ONE other way a stay enters `stays`, called directly by KennelScene once
+  // the player types the secret code. Deliberately simpler than
+  // spawnArrival's family/returning-pool machinery: a solo baby dragon, no
+  // eggs/pregnancy roll, no returning-pool tracking — she's a one-time
+  // bonus, not part of the regular rotation (species.js's SPECIES_KEYS
+  // excludes 'dragon' entirely, so she never enters the normal arrival
+  // roll). She has no section of her own, but needs none: she arrives at
+  // reception exactly like any other guest, and KennelScene's issue #27
+  // "any open cage anywhere" placement path (normally generalized-mode-only)
+  // also applies to her specifically regardless of mode, since she has no
+  // species-matching section to walk into — see KennelScene._checkDropoff.
+  // Once actually settled, `_dropOff` assigns her `cageSection`/`cageSlot`
+  // exactly like any other stay, so belongsToSection/assignCageSlot above
+  // need no special case for her.
+  function spawnDragon({ day, hour, rng = Math.random } = {}) {
+    // stage: 'baby' — the smaller hatchling art/name pool (draws from both
+    // girl and boy dragon names), matching "a small baby dragon" rather than
+    // a grown mom.
+    const primary = createAnimal('dragon', { stage: 'baby' });
+    const { needs, timers } = createNeeds('dragon');
+    const stay = {
+      animal: primary,
+      companions: [],
+      arrivedHour: hour,
+      arrivedDay: day,
+      checkoutDay: day + MIN_NIGHTS + Math.floor(rng() * 2),
+      location: LOCATION.RECEPTION,
+      carryKind: carryKindForSpecies('dragon'),
+      needs,
+      timers,
+      needsAnnouncement: false,
+    };
+    attachBirthTimer(stay); // no-op: she never arrives pregnant/with eggs
+    stays.push(stay);
+    return stay;
+  }
+
+  return { stays, pool, spawnArrival, checkoutDue, spawnDragon };
 }

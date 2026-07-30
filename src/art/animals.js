@@ -960,6 +960,116 @@ function drawBird(g, pose, look, G) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// DRAGON (secret bonus guest, src/dev/secretDragon.js) — design grid 20x16
+// (hatchling 12x10). A small reptilian quadruped, closest to the turtle's
+// waddling gait (low-lift legs, no proper walk cycle needed), plus a pair of
+// small folded wings and two tiny brow horns — charming and readable at this
+// scale rather than fearsome, per the owner's "kid's game" note. Not a fully
+// fleshed 9th species: kept as simple as the other land animals to draw.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DRAGON_GEO = {
+  adult: {
+    W: 20, H: 16,
+    leg: { topY: 11, w: 2, h: 4, pawY: 15, pawW: 3, pawDX: -0.5, pawH: 1 },
+    hindX: [4, 6.5], foreX: [12, 14.5],
+    body: { cx: 9, cy: 9, w: 13, h: 7 },
+    tail: { x: 2, y: 8.4, w: 4, h: 2.4 },
+    neck: { x: 14, y: 5.5, w: 3, h: 4 },
+    head: { cx: 16.5, cy: 5, r: 2.6 },
+    snout: { x: 18.4, y: 4.4, w: 2, h: 2 },
+    horn: { x1: 15.4, x2: 16.6, y: 2.2, w: 0.9, h: 1.8 },
+    eye: { x: 16.9, y: 4.1, w: 1, h: 1 },
+    wing: { x: 6.4, y: 3.6, w: 7, h: 5.6 },
+    collar: { x: 14.4, y: 7.8, w: 3, h: 1.4 },
+    tattoo: { x: 3, y: 11.4 },
+  },
+  baby: {
+    W: 12, H: 10,
+    leg: { topY: 6.8, w: 1.3, h: 2.4, pawY: 9.2, pawW: 1.8, pawDX: -0.3, pawH: 0.6 },
+    hindX: [2.4, 4], foreX: [7.2, 8.8],
+    body: { cx: 5.4, cy: 5.6, w: 8, h: 4.4 },
+    tail: { x: 1.2, y: 5.2, w: 2.4, h: 1.5 },
+    neck: { x: 8.4, y: 3.4, w: 1.8, h: 2.4 },
+    head: { cx: 10, cy: 3.1, r: 1.6 },
+    snout: { x: 11.2, y: 2.7, w: 1.2, h: 1.2 },
+    horn: { x1: 9.3, x2: 10.1, y: 1.3, w: 0.55, h: 1.1 },
+    eye: { x: 10.2, y: 2.5, w: 0.6, h: 0.6 },
+    wing: { x: 3.8, y: 2.2, w: 4.2, h: 3.4 },
+    collar: { x: 8.6, y: 4.7, w: 1.8, h: 0.85 },
+    tattoo: { x: 1.8, y: 7.1 },
+  },
+};
+
+function drawDragon(g, bob, [lhf, lhn, lff, lfn], look, G) {
+  const c = coatDef('dragon', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'smooth';
+  const leg = makeLeg({ ...G.leg, pawColor: lo });
+  const b = G.body;
+
+  // ── Legs ── stubby, barely lifting — same low-key waddle as the turtle.
+  leg(g, G.hindX[0], lhf, lo, bob);  leg(g, G.foreX[0], lff, lo, bob);
+  leg(g, G.hindX[1], lhn, mid, bob); leg(g, G.foreX[1], lfn, mid, bob);
+
+  // ── Tail ── tapering, tucked close to the body.
+  g.fillStyle(lo, 1);  g.fillEllipse(G.tail.x, G.tail.y + bob, G.tail.w, G.tail.h);
+  g.fillStyle(mid, 1); g.fillEllipse(G.tail.x + G.tail.w * 0.3, G.tail.y + bob, G.tail.w * 0.6, G.tail.h * 0.7);
+
+  // ── Body ── low, rounded barrel.
+  g.fillStyle(mid, 1); g.fillEllipse(b.cx, b.cy + bob, b.w, b.h);
+  g.fillStyle(hi, 1);  g.fillEllipse(b.cx - b.w * 0.05, b.cy + bob - b.h * 0.28, b.w * 0.62, b.h * 0.36);
+  g.fillStyle(c.belly, 1); g.fillEllipse(b.cx, b.cy + bob + b.h * 0.3, b.w * 0.7, b.h * 0.32);
+
+  // ── Pattern overlay ── a light dusting of diamond scale-highlights.
+  if (pat === 'scaled') {
+    g.fillStyle(c.mark, 0.6);
+    for (let i = -1; i <= 1; i++) {
+      for (let j = -1; j <= 1; j++) {
+        g.fillRect(b.cx + i * b.w * 0.18 - 0.4, b.cy + bob - b.h * 0.1 + j * b.h * 0.22 - 0.4, 0.8, 0.8);
+      }
+    }
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+
+  // ── Wings ── folded against the back at rest; a light flap tied to the
+  // same per-frame bob that drives every species' idle/walk cycle, so they
+  // visibly lift a touch on each "up" frame without needing their own
+  // animation track.
+  const flap = bob * 1.4;
+  g.fillStyle(lo, 1);
+  g.fillTriangle(
+    G.wing.x, G.wing.y + bob - flap,
+    G.wing.x + G.wing.w, G.wing.y + bob * 0.4 - flap * 0.6,
+    G.wing.x + G.wing.w * 0.3, G.wing.y + G.wing.h + bob,
+  );
+  g.fillStyle(c.wing, 1);
+  g.fillTriangle(
+    G.wing.x + G.wing.w * 0.15, G.wing.y + bob - flap * 0.9,
+    G.wing.x + G.wing.w * 0.85, G.wing.y + bob * 0.5 - flap * 0.5,
+    G.wing.x + G.wing.w * 0.35, G.wing.y + G.wing.h * 0.78 + bob,
+  );
+
+  // ── Neck + head ──
+  g.fillStyle(mid, 1); g.fillRect(G.neck.x, G.neck.y + bob, G.neck.w, G.neck.h);
+  g.fillStyle(mid, 1); g.fillCircle(G.head.cx, G.head.cy + bob, G.head.r);
+  g.fillStyle(hi, 1);  g.fillCircle(G.head.cx - G.head.r * 0.3, G.head.cy + bob - G.head.r * 0.4, G.head.r * 0.42);
+  g.fillStyle(mid, 1); g.fillRect(G.snout.x, G.snout.y + bob, G.snout.w, G.snout.h);
+
+  // ── Horns ── two tiny nubs on the brow.
+  g.fillStyle(c.horn, 1);
+  g.fillTriangle(G.horn.x1, G.horn.y + bob + G.horn.h, G.horn.x1 + G.horn.w, G.horn.y + bob + G.horn.h, G.horn.x1 + G.horn.w * 0.5, G.horn.y + bob);
+  g.fillTriangle(G.horn.x2, G.horn.y + bob + G.horn.h, G.horn.x2 + G.horn.w, G.horn.y + bob + G.horn.h, G.horn.x2 + G.horn.w * 0.5, G.horn.y + bob);
+
+  // ── Eye ──
+  g.fillStyle(c.eye, 1);      g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w, G.eye.h);
+  g.fillStyle(0xffffff, 0.7); g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w * 0.5, G.eye.h * 0.5);
+
+  drawCollar(g, { ...G.collar, y: G.collar.y + bob }, look?.collar);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Species registry + texture building
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1049,6 +1159,11 @@ const BUILDERS = {
       ];
       buildPoseFrames(scene, key, G.W, G.H, (g, p) => drawBird(g, p, look, G), poses);
     },
+  },
+  dragon: {
+    geo: DRAGON_GEO, walkFps: 6, // slow, low-lift waddle, same tempo family as the turtle
+    build: (scene, key, G, look) =>
+      buildFrames(scene, key, G.W, G.H, (g, bob, legs) => drawDragon(g, bob, legs, look, G), idleWalkLegs(1.2)),
   },
 };
 

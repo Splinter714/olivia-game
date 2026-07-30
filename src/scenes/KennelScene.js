@@ -39,9 +39,10 @@ import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
 } from '../art/raccoon.js';
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
-import { createRoster, LOCATION, CARRY_KIND, assignCageSlot, isCageSlotOpen } from '../data/roster.js';
+import { createRoster, LOCATION, CARRY_KIND, assignCageSlot, isCageSlotOpen, anyOpenCageAnywhere } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
+import { WithSecretDragon } from '../dev/secretDragon.js';
 
 // Placeholder name shown on a baby's tiny label until the owner names it via
 // the reception computer (issue #10). Matches data/animal.js's opts.name
@@ -78,7 +79,7 @@ function circleRectOverlap(cx, cy, r, rect) {
 // data/sections.js, and drives the player around it. Animals, arrivals, and
 // carrying (issues #4/#5) hang off the same section rects; feeding/potty/
 // playpens (issues #6/#7/#8) hang off data/props.js's furniture rects.
-export default class KennelScene extends WithDevDrag(Phaser.Scene) {
+export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Scene)) {
   constructor() {
     super('Kennel');
   }
@@ -137,6 +138,7 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
 
     this.controls = new Controls(this);
     this.buildDevDrag(); // F9 to toggle — see src/dev/dragTool.js
+    this.buildSecretDragon(); // type "DRAGON" — see src/dev/secretDragon.js
 
     // Issue #27: small on-screen toggle button, top-right (clear of the
     // top-left clock/money HUD and the bottom-right touch interact button).
@@ -526,7 +528,12 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
           return;
         }
         const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
-        const texKey = occupant ? CAGE_KEY_UNIFORM[occupant.animal.species] : EMPTY_CAGE_KEY;
+        // The secret bonus dragon (src/dev/secretDragon.js) has no
+        // CAGE_KEY_UNIFORM entry of her own — she has no section/tank art
+        // style, unlike every regular species — so she just keeps whichever
+        // section's own uniform cage look the cage she's actually in already
+        // has, instead of "snapping to" a look that doesn't exist for her.
+        const texKey = occupant ? (CAGE_KEY_UNIFORM[occupant.animal.species] ?? CAGE_KEY_UNIFORM[key]) : EMPTY_CAGE_KEY;
         const changed = img.texture.key !== texKey;
         img.setTexture(texKey).setOrigin(0.5, 0.5)
           .setPosition(cage.x + cage.w / 2, cage.y + cage.h / 2);
@@ -642,6 +649,26 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     // Issue #18: null means that species' section is full (all 6 cages
     // taken) — quietly skip this roll, no queue/penalty/notification.
     if (!stay) return;
+    this._runOwnerDropOff(stay);
+  }
+
+  // Secret bonus guest (src/dev/secretDragon.js's "DRAGON" cheat code). She
+  // has no section of her own (data/sections.js's SECTIONS is untouched by
+  // this), so this only bails out if the whole kennel is genuinely full —
+  // issue #27's `anyOpenCageAnywhere` already answers exactly that. She then
+  // arrives through the exact same owner-walks-her-in sequence as any other
+  // guest, and settles into an existing section's cage the moment the player
+  // carries her in — see _checkDropoff's reception branch, which treats any
+  // species with no matching SECTIONS entry the same way generalized mode
+  // treats everyone (any open cage anywhere accepts the drop), regardless of
+  // whether Mix Cages is actually toggled on.
+  _triggerSecretDragon() {
+    if (!anyOpenCageAnywhere(this.roster.stays)) {
+      this.game.events.emit(EVENTS.NOTIFY, 'A mythical dragon wanted to visit, but the kennel is full right now!');
+      return;
+    }
+    this.game.events.emit(EVENTS.NOTIFY, '✨ A baby dragon appeared!');
+    const stay = this.roster.spawnDragon({ day: this.clock.day, hour: this.clock.hour });
     this._runOwnerDropOff(stay);
   }
 
@@ -911,7 +938,7 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
     // Turtle/snake/bird eggs/babies sit tucked close to mom on her own
     // individual island/perch/nest (small space, plenty of room to share) —
     // tighter spacing than the wider spread used for cat/dog companions.
-    const sharesHome = animal.species === 'turtle' || animal.species === 'snake' || animal.species === 'bird';
+    const sharesHome = animal.species === 'turtle' || animal.species === 'snake' || animal.species === 'bird' || animal.species === 'dragon';
     const extras = [...containerExtras];
     const babyLabels = [];
     let cx = x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);
@@ -1127,7 +1154,8 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       // her. Issue #27: "her own section" means wherever her cage actually
       // IS (stay.cageSection, set the moment she was last assigned a cage),
       // not necessarily her species' section — in generalized mode those can
-      // differ. Falls back to species for a stay that somehow never got a
+      // differ, and the secret bonus dragon (no section of her own) always
+      // differs. Falls back to species for a stay that somehow never got a
       // cageSection (shouldn't happen — she can't reach the yard without
       // having been dropped into a cage first).
       const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.animal.species));
@@ -1142,8 +1170,14 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       // section to walk into at all — instead, walking up to ANY specific
       // currently-empty cage anywhere accepts the drop into THAT exact cage.
       // Normal mode keeps the original species-locked-section behavior
-      // completely unchanged.
-      if (this.generalizedCages) {
+      // completely unchanged for the regular 8 species. The secret bonus
+      // dragon (src/dev/secretDragon.js) has no section of her own in EITHER
+      // mode (species.js's SPECIES has no matching SECTIONS entry for
+      // 'dragon'), so she always takes this same "any open cage anywhere"
+      // path even with generalizedCages off — that's how she settles into
+      // an existing section's cage without needing one of her own.
+      const hasOwnSection = SECTIONS.some((s) => s.key === stay.animal.species);
+      if (this.generalizedCages || !hasOwnSection) {
         const found = this._findOpenCageNear(this.player.x, this.player.y);
         if (!found) return;
         // Owner note 2026-07-29: proximity alone only highlights/targets the
@@ -1892,9 +1926,11 @@ export default class KennelScene extends WithDevDrag(Phaser.Scene) {
       if (stay.location !== LOCATION.YARD) continue;
       // Issue #27: her actual "home" section is wherever her cage really is
       // (stay.cageSection), not necessarily her species' section — those can
-      // differ once generalized mode has placed her somewhere else. Falls
-      // back to species for safety (shouldn't be needed — she can't be in
-      // the yard without a cageSection already set by a prior drop-off).
+      // differ once generalized mode has placed her somewhere else (or she's
+      // the secret bonus dragon, who never has a species-matching section at
+      // all). Falls back to species for safety (shouldn't be needed — she
+      // can't be in the yard without a cageSection already set by a prior
+      // drop-off).
       const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.animal.species));
       if (!section) continue;
       stay.cageSlot = assignCageSlot(this.roster.stays, section.key);

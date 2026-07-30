@@ -104,6 +104,17 @@ export const NAME_POOLS = {
       'Blue', 'Sunshine', 'Percy',
     ],
   },
+  // Secret bonus guest (src/dev/secretDragon.js) — playful storybook-dragon
+  // names, same girl/boy shape as every other species.
+  dragon: {
+    girl: [
+      'Ember', 'Sparkle', 'Opal', 'Jade', 'Ruby', 'Marigold', 'Nova', 'Saffron',
+      'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
+    ],
+    boy: [
+      'Blaze', 'Cinder', 'Wisp', 'Rumble', 'Ash', 'Flicker', 'Storm', 'Ziggy', 'Sparky', 'Cobalt',
+    ],
+  },
 };
 
 const FALLBACK_POOL = { girl: ['Pal'], boy: ['Pal'] };

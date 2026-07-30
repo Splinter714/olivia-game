@@ -16,6 +16,7 @@ export const WANDER = {
   cat:        { interval: [3000, 5500], amp: 10 }, // slow pacing
   dog:        { interval: [2600, 5000], amp: 11 }, // slow pacing
   bird:       { interval: [900, 2000], amp: 10 },  // quick hops around the nest
+  dragon:     { interval: [2400, 4800], amp: 9 },  // secret bonus guest — a calm little waddle
 };
 
 // Yard play reads more energetic/larger-range than in-cage wander (DESIGN.md

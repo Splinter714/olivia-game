@@ -249,6 +249,37 @@ const BIRD_COATS = {
   },
 };
 
+// ── Dragon (secret bonus guest) ─────────────────────────────────────────────
+// A small, fun set for a hidden extra, not a fully-fleshed 9th species: four
+// storybook-dragon colours plus a light 'scaled'/'smooth' pattern axis (a
+// dusting of diamond scale-highlights across the back, or none).
+const DRAGON_COATS = {
+  emerald: {
+    label: 'Emerald',
+    body: { hi: 0x6fe0a0, mid: 0x2fae6e, lo: 0x1c7048 },
+    belly: 0xcdf2d8, wing: 0x1c7048, horn: 0xf3e6c8, eye: 0xffd54a,
+    mark: 0x175c3a,
+  },
+  ember: {
+    label: 'Ember',
+    body: { hi: 0xff9a5c, mid: 0xe8622a, lo: 0xac3e14 },
+    belly: 0xffe0c0, wing: 0x8a2a10, horn: 0x3a241a, eye: 0xffe066,
+    mark: 0x7a2a0e,
+  },
+  midnight: {
+    label: 'Midnight Purple',
+    body: { hi: 0x9a7fd6, mid: 0x5f469e, lo: 0x362a68 },
+    belly: 0xd8cdf0, wing: 0x2c2050, horn: 0xe8dcc0, eye: 0x9be8ff,
+    mark: 0x241a48,
+  },
+  gold: {
+    label: 'Gold',
+    body: { hi: 0xffe08a, mid: 0xf0c245, lo: 0xbf8f1e },
+    belly: 0xfff3cf, wing: 0x9c6a14, horn: 0xffffff, eye: 0x2a5a3a,
+    mark: 0x8a5e10,
+  },
+};
+
 export const COATS = {
   dog: DOG_COATS,
   cat: CAT_COATS,
@@ -258,6 +289,7 @@ export const COATS = {
   turtle: TURTLE_COATS,
   snake: SNAKE_COATS,
   bird: BIRD_COATS,
+  dragon: DRAGON_COATS,
 };
 
 // Species-wide pattern lists. A coat may narrow this via its own `patterns`
@@ -272,6 +304,7 @@ export const PATTERNS = {
   turtle: ['plain', 'starburst', 'rings', 'speckled'], // shell markings
   snake: ['solid', 'banded'],
   bird: ['solid', 'speckled'],
+  dragon: ['smooth', 'scaled'],
 };
 
 // Collar colours, in the order they're handed out to look-alikes. Kept few and
