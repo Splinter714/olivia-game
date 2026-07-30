@@ -35,7 +35,7 @@ import {
   buildPropTextures, LITTER_BOX_KEY,
   SCOOPER_KEY, BOWL_KEY, BOWL_KEY_BY_SPECIES, BOWL_EMPTY_KEY, BOWL_EMPTY_KEY_BY_SPECIES,
   WATER_BOWL_KEY, WATER_BOWL_EMPTY_KEY,
-  MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, EMPTY_CAGE_KEY,
+  MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_FG_KEY, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY, BED_KEY,
   YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
@@ -520,13 +520,31 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // little stone castle). Keep a handle on each cage's image
     // (this._cageImgs) so _refreshCageArt can re-texture it per-occupant
     // without touching its fixed position/size.
+    //
+    // Issue #43 (owner: "z order of cage bars should be above everything
+    // else in the cage, including the animal") — TWO images per cage slot
+    // now: the background half at the same low depth as before (behind the
+    // animal), and a foreground half (this._cageFgImgs) at a depth ABOVE the
+    // animal, her bowls (whose depth is cage.y + cage.h + 1, see
+    // _refreshBowls), and her blanket — see the depth chosen below.
     this._cageImgs = {};
+    this._cageFgImgs = {};
     for (const key of Object.keys(CAGES)) {
       this._cageImgs[key] = [];
+      this._cageFgImgs[key] = [];
       CAGES[key].forEach((cage, i) => {
         const img = this.add.image(cage.x, cage.y, CAGE_KEY[key]).setOrigin(0, 0).setDepth(cage.y - 2);
         this._devRegistry.push({ name: `CAGES.${key}.${i}`, obj: img });
         this._cageImgs[key].push(img);
+        // Foreground depth: cage.y + cage.h + 5 comfortably clears every
+        // in-cage occupant depth (the animal's own wander-clamped depth tops
+        // out at cage.y + cage.h - 4, her bowls sit at cage.y + cage.h + 1,
+        // her blanket at that bowl-adjacent depth + 0.3) while staying well
+        // below the next grid row's own contents (rows are cage.h + 12px
+        // apart, i.e. +112, so +5 never bleeds into the row below).
+        const fgImg = this.add.image(cage.x, cage.y, CAGE_FG_KEY[key]).setOrigin(0, 0).setDepth(cage.y + cage.h + 5);
+        this._devRegistry.push({ name: `CAGES_FG.${key}.${i}`, obj: fgImg });
+        this._cageFgImgs[key].push(fgImg);
       });
     }
 
@@ -633,6 +651,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // tank perch, the secret dragon her stone castle, etc. — see CAGE_KEY,
   // art/props.js) with a quick scale-pop tween the moment the art actually
   // changes; an empty slot gets the single shared neutral empty-cage look.
+  //
+  // Issue #43: each occupied slot is now TWO images (this._cageImgs — the
+  // background floor/fill, unchanged depth/behavior — and this._cageFgImgs —
+  // the bars/mesh/glass-rim/turrets, at a depth above the animal). An empty
+  // slot has no foreground look of its own (EMPTY_CAGE_KEY has no `CAGE_FG_KEY`
+  // counterpart — see that key's comment in art/props.js), so the foreground
+  // image is simply hidden while the slot is unoccupied.
   _refreshCageArt() {
     if (!this._cageImgs) return;
     for (const key of Object.keys(this._cageImgs)) {
@@ -652,6 +677,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         const changed = img.texture.key !== texKey;
         if (changed) img.setTexture(texKey);
         if (changed) this._snapCagePop(img);
+
+        const fgImg = this._cageFgImgs[key][slot];
+        if (occupant) {
+          const fgTexKey = CAGE_FG_KEY[occupant.animal.species] ?? CAGE_FG_KEY[key];
+          const fgChanged = !fgImg.visible || fgImg.texture.key !== fgTexKey;
+          if (fgChanged) fgImg.setTexture(fgTexKey).setVisible(true);
+          if (fgChanged) this._snapCagePop(fgImg);
+        } else if (fgImg.visible) {
+          fgImg.setVisible(false);
+        }
       });
     }
     this._refreshBowls();

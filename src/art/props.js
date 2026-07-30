@@ -89,23 +89,55 @@ export const NEED_KEY = {
 // section of her own but still needs her own themed cage look (see
 // drawDragonCastle below) — everyone else's key comes from CAGES' own
 // species keys.
+//
+// Issue #43 (owner: "z order of cage bars should be above everything else in
+// the cage, including the animal") — each species' cage art is now split into
+// two textures/layers instead of one flat image: `CAGE_KEY` is the
+// BACKGROUND half (floor pad / tank water / nest bedding / castle floor —
+// stays behind the animal, same depth as before) and `CAGE_FG_KEY` is the
+// FOREGROUND half (wire bars / wire mesh / glass-tank rim-and-highlight /
+// castle turrets — rendered at a depth ABOVE the animal and her bowls/
+// blanket/name-tag icons, so she reads as behind the enclosure looking out).
+// See KennelScene._cageImgs/_cageFgImgs and _refreshCageArt for the two
+// per-slot images this now produces.
 export const CAGE_KEY = Object.fromEntries(
   [...Object.keys(CAGES), 'dragon'].map((key) => [key, `prop-cage-${key}`]),
+);
+export const CAGE_FG_KEY = Object.fromEntries(
+  [...Object.keys(CAGES), 'dragon'].map((key) => [key, `prop-cage-fg-${key}`]),
 );
 
 // Issue #27 ("generalized cages" toggle) / issue #32: ONE shared neutral/
 // empty-slot texture (uniform size, no per-species shape) shown for any cage
 // with nobody currently assigned to it — there's no species pre-assigned to
 // an empty cage, so it gets a single plain, un-themed look everywhere.
+//
+// Issue #43: the empty look is just a dashed neutral outline — there's no
+// separate solid "floor" fill and "bars" element worth splitting the way the
+// occupied per-species looks below are, so it stays a single flat texture
+// (rendered at the old background depth) rather than getting its own
+// foreground layer.
 export const EMPTY_CAGE_KEY = 'prop-cage-empty';
 
-// Which draw function renders a given species' cage art.
-function cageDrawFn(key) {
-  if (key === 'turtle') return drawIslandSlot;
-  if (key === 'snake') return drawPerchSlot;
-  if (key === 'bird') return drawNestSlot;
-  if (key === 'dragon') return drawDragonCastle;
-  return drawCagePen;
+// Which draw function renders a given species' cage BACKGROUND art (floor/
+// fill/bedding — stays behind the animal, issue #43).
+function cageBgDrawFn(key) {
+  if (key === 'turtle') return drawIslandSlotBg;
+  if (key === 'snake') return drawPerchSlotBg;
+  if (key === 'bird') return drawNestSlotBg;
+  if (key === 'dragon') return drawDragonCastleBg;
+  return drawCagePenBg;
+}
+
+// Which draw function renders a given species' cage FOREGROUND art (wire
+// bars/mesh, glass rim/highlight, castle turrets — renders above the animal,
+// issue #43).
+function cageFgDrawFn(key) {
+  if (key === 'turtle') return drawIslandSlotFg;
+  if (key === 'snake') return drawPerchSlotFg;
+  if (key === 'bird') return drawNestSlotFg;
+  if (key === 'dragon') return drawDragonCastleFg;
+  return drawCagePenFg;
 }
 
 // A small individual water tank with a sand island (issue #20, extended per
@@ -115,29 +147,41 @@ function cageDrawFn(key) {
 // #32) there's no dedicated turtle section/room left to anchor one to; a
 // turtle's cage looks like her own little glass-rimmed pool no matter which
 // grid slot she's settled in. Same soft-tan-ellipse island styling as before.
-function drawIslandSlot(g, w, h) {
+//
+// Issue #43 split: the tank body/water fill/sand island/pebbles are the
+// BACKGROUND (stays behind the turtle, same look as before); the glass-cover
+// highlight rim is the FOREGROUND — "looking at her through glass" — so it
+// now renders in front of her instead of being buried under the water fill.
+function drawIslandSlotBg(g, w, h) {
   g.fillStyle(0x2d6f8e, 1).fillRoundedRect(0, 0, w, h, 8);
   g.fillStyle(0x4b9fc4, 0.85).fillRoundedRect(2, 2, w - 4, h - 4, 6);
-  g.lineStyle(2, 0xcfe9f2, 0.7).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
   g.fillStyle(0xcfa15e, 1).fillEllipse(w / 2, h * 0.6, w * 0.7, h * 0.44);
   g.fillStyle(0xe0bd85, 1).fillEllipse(w / 2, h * 0.5, w * 0.56, h * 0.32);
   g.fillStyle(0xb9884b, 1);
   g.fillCircle(w * 0.4, h * 0.52, 1.1);
   g.fillCircle(w * 0.58, h * 0.6, 0.9);
 }
+function drawIslandSlotFg(g, w, h) {
+  g.lineStyle(2, 0xcfe9f2, 0.7).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
+}
 
 // A small individual resting perch (issue #20) — one per snake cage slot, a
 // short branch stub. Same self-containment as the turtle island above: bakes
 // its own sandy-tank background right in rather than relying on a separate
 // shared tank background.
-function drawPerchSlot(g, w, h) {
+//
+// Issue #43 split: same as the turtle tank above — tank body/sand fill/perch
+// branch stay BACKGROUND; the glass-cover highlight rim is FOREGROUND.
+function drawPerchSlotBg(g, w, h) {
   g.fillStyle(0x8a6a3e, 1).fillRoundedRect(0, 0, w, h, 8);
   g.fillStyle(0xd9c9a0, 0.9).fillRoundedRect(2, 2, w - 4, h - 4, 6);
-  g.lineStyle(2, 0xcfe9f2, 0.55).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
   g.fillStyle(0x6b4426, 1).fillRoundedRect(w * 0.08, h * 0.42, w * 0.84, h * 0.22, h * 0.1);
   g.fillStyle(0x4f3018, 1);
   g.fillCircle(w * 0.14, h * 0.53, h * 0.15);
   g.fillCircle(w * 0.86, h * 0.53, h * 0.13);
+}
+function drawPerchSlotFg(g, w, h) {
+  g.lineStyle(2, 0xcfe9f2, 0.55).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
 }
 
 // A small individual twig nest (issue #24) — one per bird cage slot, sitting
@@ -145,12 +189,23 @@ function drawPerchSlot(g, w, h) {
 // ring of twigs on the cage floor, just big enough to hold a bird and its
 // eggs/chicks; no wire mesh — birds' cages read as a simple perch-and-nest
 // setup rather than the same pen as guinea pigs/hamsters/bunnies/cats/dogs.
-function drawNestSlot(g, w, h) {
+//
+// Issue #43 split: no wire mesh here, but the woven twig ring still reads as
+// the nest's "front edge" once the bird is standing in the middle of it — the
+// floor pad/name-tag mount/ring fill/egg hollow are BACKGROUND (the nest bed
+// itself), while the crossing twig lines (the ring's visible weave) are
+// FOREGROUND, so they read as twigs in front of her rather than a bird
+// floating in front of solid ground.
+function drawNestSlotBg(g, w, h) {
   g.fillStyle(0xe8d9b0, 1).fillRoundedRect(2, h * 0.5, w - 4, h * 0.46, 4); // floor pad (matches drawCagePen)
   g.fillStyle(0x8a5a34, 1).fillRoundedRect(w / 2 - 5, 0, 10, 6, 2);         // name-tag mount
-  // Woven twig ring.
+  // Woven twig ring (solid fill).
   g.fillStyle(0x8a6a3e, 1).fillEllipse(w * 0.5, h * 0.62, w * 0.66, h * 0.4);
   g.fillStyle(0xc79a63, 1).fillEllipse(w * 0.5, h * 0.58, w * 0.5, h * 0.3);
+  // Soft hollow in the middle where eggs/chicks sit.
+  g.fillStyle(0xf2e6c8, 0.9).fillEllipse(w * 0.5, h * 0.56, w * 0.28, h * 0.16);
+}
+function drawNestSlotFg(g, w, h) {
   g.lineStyle(1.4, 0x6b4a26, 0.8);
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * Math.PI * 2;
@@ -159,8 +214,6 @@ function drawNestSlot(g, w, h) {
       w * 0.5 - Math.cos(a) * w * 0.3, h * 0.62 - Math.sin(a) * h * 0.18,
     );
   }
-  // Soft hollow in the middle where eggs/chicks sit.
-  g.fillStyle(0xf2e6c8, 0.9).fillEllipse(w * 0.5, h * 0.56, w * 0.28, h * 0.16);
 }
 
 // Issue #32 #5: the secret bonus dragon (src/dev/secretDragon.js) used to
@@ -169,7 +222,12 @@ function drawNestSlot(g, w, h) {
 // "make the dragon cages like a little gray/stone castle") — a simple
 // turret silhouette on a stone-block floor pad, same footprint as every
 // other cage so she still fits her grid slot.
-function drawDragonCastle(g, w, h) {
+//
+// Issue #43 split: the stone-block floor pad is BACKGROUND (what she stands
+// on); the turret/keep silhouette (with its crenellations and window slits)
+// plus the name-tag mount are FOREGROUND — she reads as standing inside a
+// castle courtyard, behind its walls looking out.
+function drawDragonCastleBg(g, w, h) {
   g.fillStyle(0xc7c7cf, 1).fillRoundedRect(2, h * 0.5, w - 4, h * 0.46, 4); // floor pad (matches drawCagePen)
   // Stone-block texture on the floor pad.
   g.lineStyle(1, 0xa8a8b2, 0.7);
@@ -177,6 +235,8 @@ function drawDragonCastle(g, w, h) {
     g.lineBetween(2, ry, w - 2, ry);
   }
   for (let bx = 6; bx < w - 4; bx += 14) g.lineBetween(bx, h * 0.5, bx, h * 0.96);
+}
+function drawDragonCastleFg(g, w, h) {
   // Turret silhouette: a central keep flanked by two shorter corner towers.
   const towerW = w * 0.2, keepW = w * 0.3;
   const drawTower = (cx, tw, th) => {
@@ -397,8 +457,14 @@ function drawUpgradeStar(g, w, h) {
 // mount nub at the top center where the animal's name tag hangs (issue #18:
 // "a small wire/wood pen shape sized to fit one animal + a name tag mount").
 // Deliberately plain/flat so it reads clearly at a glance for a kid player.
-function drawCagePen(g, w, h) {
+//
+// Issue #43 split: the floor pad is BACKGROUND (stays behind the animal); the
+// wire-mesh frame + bars + name-tag mount are FOREGROUND (the pen's own wire
+// boundary, now rendered in front of whoever's inside it).
+function drawCagePenBg(g, w, h) {
   g.fillStyle(0xe8d9b0, 1).fillRoundedRect(2, h * 0.5, w - 4, h * 0.46, 4); // floor pad
+}
+function drawCagePenFg(g, w, h) {
   g.lineStyle(3, 0x8a8a94, 1).strokeRoundedRect(2, 7, w - 4, h - 9, 6);     // wire frame
   g.lineStyle(1.2, 0xb7b7c0, 0.8);
   for (let x = 7; x < w - 5; x += 8) g.lineBetween(x, 9, x, h * 0.5);       // wire bars
@@ -536,13 +602,20 @@ export function buildPropTextures(scene) {
   gen(scene, YARD_DIVIDER_LINE_KEY, YARD_DIVIDER_X1 - YARD_DIVIDER_X0, 8, (g) => drawDividerLine(g, YARD_DIVIDER_X1 - YARD_DIVIDER_X0, 8));
 
   // Every regular species' cage texture, uniform CAGE_W x CAGE_H (100x100).
+  // Issue #43: two textures per species now — a background (floor/fill,
+  // stays behind the animal) and a foreground (bars/mesh/glass-rim/turrets,
+  // rendered above her — see KennelScene._refreshCageArt).
   for (const key of Object.keys(CAGES)) {
-    const draw = cageDrawFn(key);
-    gen(scene, CAGE_KEY[key], CAGE_W, CAGE_H, (g) => draw(g, CAGE_W, CAGE_H));
+    const drawBg = cageBgDrawFn(key);
+    const drawFg = cageFgDrawFn(key);
+    gen(scene, CAGE_KEY[key], CAGE_W, CAGE_H, (g) => drawBg(g, CAGE_W, CAGE_H));
+    gen(scene, CAGE_FG_KEY[key], CAGE_W, CAGE_H, (g) => drawFg(g, CAGE_W, CAGE_H));
   }
   // The secret bonus dragon's own castle look (issue #32 #5) — same uniform
   // size, but she has no CAGES entry of her own (no species section).
-  gen(scene, CAGE_KEY.dragon, CAGE_W, CAGE_H, (g) => drawDragonCastle(g, CAGE_W, CAGE_H));
-  // One shared empty-slot texture (uniform size) for any unoccupied cage.
+  gen(scene, CAGE_KEY.dragon, CAGE_W, CAGE_H, (g) => drawDragonCastleBg(g, CAGE_W, CAGE_H));
+  gen(scene, CAGE_FG_KEY.dragon, CAGE_W, CAGE_H, (g) => drawDragonCastleFg(g, CAGE_W, CAGE_H));
+  // One shared empty-slot texture (uniform size) for any unoccupied cage —
+  // no foreground split (see EMPTY_CAGE_KEY comment above).
   gen(scene, EMPTY_CAGE_KEY, CAGE_W, CAGE_H, (g) => drawEmptyCageSlot(g, CAGE_W, CAGE_H));
 }
