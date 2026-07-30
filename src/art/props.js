@@ -5,7 +5,7 @@
 // gen()-into-a-texture pattern as art/kennel.js / art/animals.js.
 import { gen } from './_gen.js';
 import {
-  TURTLE, SNAKE, LITTER_BOX_SIZE, CAGES, OVEN, YARD_DIVIDER_X1, YARD_DIVIDER_X0,
+  TURTLE, SNAKE, LITTER_BOX_SIZE, CAGES, OVEN, BED, YARD_DIVIDER_X1, YARD_DIVIDER_X0,
 } from '../data/props.js';
 
 export const TANK_KEY = 'prop-tank';
@@ -64,6 +64,7 @@ export const COMPUTER_KEY = 'prop-computer';
 export const BLANKET_KEY = 'prop-blanket';
 export const UPGRADE_KEY = 'prop-upgrade-star';
 export const OVEN_KEY = 'prop-oven';
+export const BED_KEY = 'prop-bed';
 export const TREAT_TRAY_KEY = 'prop-treat-tray';
 export const SHELF_KEY = 'prop-shelf';
 export const BOX_KEY = 'prop-boxes';
@@ -400,6 +401,17 @@ function drawOven(g, w, h) {
   g.fillCircle(w * 0.28, h * 0.46, 2).fillCircle(w * 0.5, h * 0.46, 2).fillCircle(w * 0.72, h * 0.46, 2); // knobs
 }
 
+// The player's own bed (owner note 2026-07-29: "is there a way to initiate
+// sleep for the player character? there should be") — simple flat headboard
+// + mattress + pillow + blanket stripe, same plain/flat kid-legible style as
+// drawOven above.
+function drawBed(g, w, h) {
+  g.fillStyle(0x8a5a34, 1).fillRoundedRect(0, h * 0.1, w * 0.14, h * 0.9, 3);       // headboard
+  g.fillStyle(0xe8d9b0, 1).fillRoundedRect(w * 0.1, h * 0.28, w * 0.9, h * 0.6, 6); // mattress
+  g.fillStyle(0x6a8fd8, 1).fillRoundedRect(w * 0.1, h * 0.58, w * 0.9, h * 0.3, 6); // blanket
+  g.fillStyle(0xffffff, 1).fillRoundedRect(w * 0.14, h * 0.32, w * 0.28, h * 0.22, 4); // pillow
+}
+
 // A tray of whatever just got baked — one silhouette covers cookies, cake, or
 // cupcakes alike (the flavor is only in the notification text). Appears on
 // the counter after baking; disappears again if the raccoon steals it.
@@ -509,6 +521,7 @@ export function buildPropTextures(scene) {
   gen(scene, BLANKET_KEY, 36, 26, (g) => drawBlanket(g, 36, 26));
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));
   gen(scene, OVEN_KEY, OVEN.w, OVEN.h, (g) => drawOven(g, OVEN.w, OVEN.h));
+  gen(scene, BED_KEY, BED.w, BED.h, (g) => drawBed(g, BED.w, BED.h));
   gen(scene, TREAT_TRAY_KEY, 26, 16, (g) => drawTreatTray(g, 26, 16));
   gen(scene, SHELF_KEY, 40, 70, (g) => drawShelf(g, 40, 70));
   gen(scene, BOX_KEY, 34, 30, (g) => drawBoxStack(g, 34, 30));

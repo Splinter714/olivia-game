@@ -252,6 +252,16 @@ export const OVEN = { x: OVEN_SPOT.x - 24, y: OVEN_SPOT.y - 34, w: 56, h: 40 };
 // below the whole sprite, on the floor.
 export const TREAT_TRAY_SPOT = { x: OVEN_SPOT.x - 10, y: OVEN_SPOT.y - 19 };
 
+// Owner note 2026-07-29: "is there a way to initiate sleep for the player
+// character? there should be" — the player's own bed, on the opposite side
+// of the house room from the oven. Once every present animal is tucked in
+// for the night, interacting here is what actually starts the sleep
+// sequence (see KennelScene._checkAllTuckedIn/_beginSleep) — it no longer
+// happens automatically the instant the last blanket goes on.
+export const BED_SPOT = { x: HOUSE_ROOM.x + HOUSE_ROOM.w * 0.18, y: HOUSE_ROOM.y + HOUSE_ROOM.h * 0.62 };
+// Solid bed obstacle — same idea as OVEN.
+export const BED = { x: BED_SPOT.x - 26, y: BED_SPOT.y - 30, w: 52, h: 36 };
+
 // Fixed shelves/box/bag dressing scattered around the storage room.
 export const STORAGE_PROPS = [
   { key: 'shelf', x: STORAGE_ROOM.x + 20, y: STORAGE_ROOM.y + 46 },

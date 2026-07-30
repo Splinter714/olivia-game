@@ -6,7 +6,7 @@ import {
 } from '../data/sections.js';
 import {
   TURTLE, SNAKE, SCOOPER_SPOT, BOWL_SPOTS, WATER_BOWL_SPOTS, TURTLE_FEED_SPOT, COMPUTER_SPOT,
-  OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS,
+  OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS, BED, BED_SPOT,
   CAGES, UNIFIED_CAGES, BOWL_SPOTS_UNIFIED, WATER_BOWL_SPOTS_UNIFIED,
   LITTER_SPOTS, LITTER_SPOTS_UNIFIED,
   cageAnimalSpot, YARD_DIVIDER_DEFAULT_Y, YARD_DIVIDER_X0, YARD_DIVIDER_X1,
@@ -37,7 +37,7 @@ import {
   SCOOPER_KEY, BOWL_KEY, BOWL_KEY_BY_SPECIES, BOWL_EMPTY_KEY, BOWL_EMPTY_KEY_BY_SPECIES,
   WATER_BOWL_KEY, WATER_BOWL_EMPTY_KEY,
   MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_KEY_UNIFORM, EMPTY_CAGE_KEY,
-  OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY,
+  OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY, BED_KEY,
   LETTUCE_KEY, YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
 import {
@@ -455,6 +455,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // purely-atmospheric shelves/boxes/bags.
     const oven = this.add.image(OVEN_SPOT.x, OVEN_SPOT.y, OVEN_KEY).setOrigin(0.5, 1).setDepth(OVEN_SPOT.y);
     this._devRegistry.push({ name: 'OVEN_SPOT', obj: oven });
+    const bed = this.add.image(BED_SPOT.x, BED_SPOT.y, BED_KEY).setOrigin(0.5, 1).setDepth(BED_SPOT.y);
+    this._devRegistry.push({ name: 'BED_SPOT', obj: bed });
     const dressingKey = { shelf: SHELF_KEY, boxes: BOX_KEY, bag: BAG_KEY };
     STORAGE_PROPS.forEach((p, i) => {
       const img = this.add.image(p.x, p.y, dressingKey[p.key]).setOrigin(0.5, 1).setDepth(p.y);
@@ -791,6 +793,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       ...backWingWallRects(),
       ...cageHallWallRects(),
       OVEN,
+      BED,
     ];
 
     this.physics.world.setBounds(0, 0, WORLD.w, WORLD.h);
@@ -2310,12 +2313,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._checkAllTuckedIn();
   }
 
+  // Owner note 2026-07-29: "is there a way to initiate sleep for the player
+  // character? there should be" — once every present animal is tucked in,
+  // sleep no longer starts on its own; the player has to walk to her own bed
+  // (BED_SPOT) and interact (see _checkInteractions), same "walk up and it
+  // happens" convention as everything else in this file.
   _checkAllTuckedIn() {
     if (!this.night.active || this.night.allTucked) return;
     if (!this._presentStays().every((s) => s.tuckedIn)) return;
     this.night.allTucked = true;
-    this.game.events.emit(EVENTS.NOTIFY, "Everyone's asleep!");
-    this._beginSleep();
+    this.game.events.emit(EVENTS.NOTIFY, "Everyone's asleep! Head to bed to end the night.");
   }
 
   _beginSleep() {
@@ -2635,6 +2642,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         const rec = this._staySprites.get(stay);
         if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._tuckIn(stay));
       }
+    }
+
+    // Owner note 2026-07-29: the player's own bed — once everyone's tucked
+    // in, walk up and interact here to actually start the sleep sequence
+    // (see _checkAllTuckedIn/_beginSleep).
+    if (this.night.active && this.night.allTucked && !this.night.sleeping) {
+      consider(BED_SPOT.x, BED_SPOT.y, () => this._beginSleep());
     }
 
     if (best) best();
