@@ -90,20 +90,33 @@ function drawSnakeTank(g, w, h) {
   g.lineStyle(3, 0xcfe9f2, 0.55).strokeRoundedRect(1.5, 1.5, w - 3, h - 3, 9); // glass sheen
 }
 
-// A small individual sand island (issue #20) — one per turtle cage slot,
-// sized to fit inside the shared tank. Smaller sibling of the old single
-// shared island, same soft-tan-ellipse styling.
+// A small individual water tank with a sand island (issue #20, extended per
+// owner note 2026-07-29: "water needs to be added as part of turtle cage
+// placement"). Self-contained now — the water is baked right into this
+// per-cage texture rather than relying on the one big fixed TANK_KEY
+// background drawn only at the turtle section's own location, which left a
+// turtle looking waterless whenever Mix Cages placed her in any OTHER
+// section's cage. Same soft-tan-ellipse island styling as before, just
+// sitting in its own little glass-rimmed pool.
 function drawIslandSlot(g, w, h) {
-  g.fillStyle(0xcfa15e, 1).fillEllipse(w / 2, h * 0.6, w * 0.9, h * 0.56);
-  g.fillStyle(0xe0bd85, 1).fillEllipse(w / 2, h * 0.5, w * 0.72, h * 0.4);
+  g.fillStyle(0x2d6f8e, 1).fillRoundedRect(0, 0, w, h, 8);
+  g.fillStyle(0x4b9fc4, 0.85).fillRoundedRect(2, 2, w - 4, h - 4, 6);
+  g.lineStyle(2, 0xcfe9f2, 0.7).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
+  g.fillStyle(0xcfa15e, 1).fillEllipse(w / 2, h * 0.6, w * 0.7, h * 0.44);
+  g.fillStyle(0xe0bd85, 1).fillEllipse(w / 2, h * 0.5, w * 0.56, h * 0.32);
   g.fillStyle(0xb9884b, 1);
-  g.fillCircle(w * 0.35, h * 0.52, 1.3);
-  g.fillCircle(w * 0.62, h * 0.6, 1.1);
+  g.fillCircle(w * 0.4, h * 0.52, 1.1);
+  g.fillCircle(w * 0.58, h * 0.6, 0.9);
 }
 
-// A small individual resting perch (issue #20) — one per snake cage slot,
-// a short branch stub sized to fit inside the shared tank.
+// A small individual resting perch (issue #20) — one per snake cage slot, a
+// short branch stub. Same self-containment fix as the turtle island above:
+// bakes its own sandy-tank background in rather than relying on the one big
+// fixed SNAKE_TANK_KEY background drawn only at the snake section's location.
 function drawPerchSlot(g, w, h) {
+  g.fillStyle(0x8a6a3e, 1).fillRoundedRect(0, 0, w, h, 8);
+  g.fillStyle(0xd9c9a0, 0.9).fillRoundedRect(2, 2, w - 4, h - 4, 6);
+  g.lineStyle(2, 0xcfe9f2, 0.55).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
   g.fillStyle(0x6b4426, 1).fillRoundedRect(w * 0.08, h * 0.42, w * 0.84, h * 0.22, h * 0.1);
   g.fillStyle(0x4f3018, 1);
   g.fillCircle(w * 0.14, h * 0.53, h * 0.15);
