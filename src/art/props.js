@@ -35,6 +35,30 @@ export const BOWL_KEY_BY_SPECIES = {
   dog: BOWL_KIBBLE_KEY,
   hamster: BOWL_SIMPLE_KEY,
 };
+// Empty counterparts of every food-bowl variant above (owner note 2026-07-29:
+// "filling a bowl and an animal eating from it should be decoupled" — the
+// bowl now needs to visibly read as full vs. empty). Same dish silhouette,
+// just missing the food itself. KennelScene._refreshBowls picks full vs.
+// empty per stay.bowl.food.
+export const BOWL_EMPTY_KEY = 'prop-bowl-empty';
+export const BOWL_HAY_EMPTY_KEY = 'prop-bowl-hay-empty';
+export const BOWL_SEED_EMPTY_KEY = 'prop-bowl-seed-empty';
+export const BOWL_KIBBLE_EMPTY_KEY = 'prop-bowl-kibble-empty';
+export const BOWL_SIMPLE_EMPTY_KEY = 'prop-bowl-simple-empty';
+export const BOWL_EMPTY_KEY_BY_SPECIES = {
+  guineaPig: BOWL_HAY_EMPTY_KEY,
+  bunny: BOWL_HAY_EMPTY_KEY,
+  bird: BOWL_SEED_EMPTY_KEY,
+  cat: BOWL_KIBBLE_EMPTY_KEY,
+  dog: BOWL_KIBBLE_EMPTY_KEY,
+  hamster: BOWL_SIMPLE_EMPTY_KEY,
+};
+// Water bowl (owner note 2026-07-29: "same with water bowls") — one shared
+// blue-tinted dish look, full/empty, for every bowl-eligible species (no
+// per-species variation needed the way food gets — a water dish is a water
+// dish).
+export const WATER_BOWL_KEY = 'prop-bowl-water';
+export const WATER_BOWL_EMPTY_KEY = 'prop-bowl-water-empty';
 export const MESS_KEY = 'prop-mess';
 export const COMPUTER_KEY = 'prop-computer';
 export const BLANKET_KEY = 'prop-blanket';
@@ -183,18 +207,23 @@ function drawScooper(g, w, h) {
   g.fillStyle(0x4b86b8, 1).fillRoundedRect(w * 0.2, h * 0.1, w * 0.6, h * 0.26, 4);
 }
 
-function drawBowl(g, w, h) {
+// Every food-bowl variant below takes a `filled` flag (owner note 2026-07-29:
+// bowls now need to visibly read as full vs. empty, since filling and eating
+// are decoupled events) — `false` draws just the dish, `true` adds the food.
+
+function drawBowl(g, w, h, filled = true) {
   g.fillStyle(0x9aa0ab, 1).fillEllipse(w / 2, h * 0.62, w, h * 0.7);
   g.fillStyle(0xd7dbe1, 1).fillEllipse(w / 2, h * 0.5, w * 0.86, h * 0.56);
-  g.fillStyle(0xc08a3e, 1).fillEllipse(w / 2, h * 0.5, w * 0.6, h * 0.34);
+  if (filled) g.fillStyle(0xc08a3e, 1).fillEllipse(w / 2, h * 0.5, w * 0.6, h * 0.34);
 }
 
 // Hay-rack look (guinea pig/bunny, issue #22 #6 follow-up) — same bowl
 // silhouette as the plain dish, topped with a little tuft of hay instead of
 // a food mound.
-function drawHayBowl(g, w, h) {
+function drawHayBowl(g, w, h, filled = true) {
   g.fillStyle(0x9aa0ab, 1).fillEllipse(w / 2, h * 0.62, w, h * 0.7);
   g.fillStyle(0xd7dbe1, 1).fillEllipse(w / 2, h * 0.5, w * 0.86, h * 0.56);
+  if (!filled) return;
   g.fillStyle(0xd9c07a, 1).fillEllipse(w / 2, h * 0.48, w * 0.62, h * 0.3);
   g.lineStyle(1.2, 0xb9954f, 0.9);
   for (let i = 0; i < 5; i++) {
@@ -204,9 +233,10 @@ function drawHayBowl(g, w, h) {
 }
 
 // Seed-dish look (bird): a shallow dish with a scatter of tiny seeds.
-function drawSeedBowl(g, w, h) {
+function drawSeedBowl(g, w, h, filled = true) {
   g.fillStyle(0x9aa0ab, 1).fillEllipse(w / 2, h * 0.62, w, h * 0.7);
   g.fillStyle(0xd7dbe1, 1).fillEllipse(w / 2, h * 0.5, w * 0.86, h * 0.56);
+  if (!filled) return;
   g.fillStyle(0xdca25a, 1).fillEllipse(w / 2, h * 0.52, w * 0.5, h * 0.24);
   g.fillStyle(0x6b4a26, 1);
   g.fillCircle(w * 0.4, h * 0.5, 0.9);
@@ -215,9 +245,10 @@ function drawSeedBowl(g, w, h) {
 }
 
 // Kibble-mound look (cat/dog): a rounder, deeper bowl with a domed pile.
-function drawKibbleBowl(g, w, h) {
+function drawKibbleBowl(g, w, h, filled = true) {
   g.fillStyle(0x8a8a94, 1).fillEllipse(w / 2, h * 0.66, w * 1.05, h * 0.76);
   g.fillStyle(0xc7c9d1, 1).fillEllipse(w / 2, h * 0.54, w * 0.9, h * 0.6);
+  if (!filled) return;
   g.fillStyle(0x8a5a34, 1).fillEllipse(w / 2, h * 0.46, w * 0.62, h * 0.38);
   g.fillStyle(0xa9754a, 1);
   g.fillCircle(w * 0.4, h * 0.44, 1.4);
@@ -226,10 +257,20 @@ function drawKibbleBowl(g, w, h) {
 }
 
 // Simple dish (hamster): smaller and plainer, no food mound at all.
-function drawSimpleBowl(g, w, h) {
+function drawSimpleBowl(g, w, h, filled = true) {
   g.fillStyle(0x9aa0ab, 1).fillEllipse(w / 2, h * 0.62, w * 0.8, h * 0.6);
   g.fillStyle(0xd7dbe1, 1).fillEllipse(w / 2, h * 0.52, w * 0.64, h * 0.44);
-  g.fillStyle(0xc08a3e, 1).fillEllipse(w / 2, h * 0.52, w * 0.4, h * 0.2);
+  if (filled) g.fillStyle(0xc08a3e, 1).fillEllipse(w / 2, h * 0.52, w * 0.4, h * 0.2);
+}
+
+// Water bowl (owner note 2026-07-29): a plain dish with a blue-tinted water
+// fill when stocked, shared across every bowl-eligible species.
+function drawWaterBowl(g, w, h, filled = true) {
+  g.fillStyle(0x9aa0ab, 1).fillEllipse(w / 2, h * 0.62, w, h * 0.7);
+  g.fillStyle(0xd7dbe1, 1).fillEllipse(w / 2, h * 0.5, w * 0.86, h * 0.56);
+  if (!filled) return;
+  g.fillStyle(0x4b9fc4, 1).fillEllipse(w / 2, h * 0.5, w * 0.62, h * 0.34);
+  g.fillStyle(0xbfe6f2, 0.7).fillEllipse(w * 0.42, h * 0.44, w * 0.2, h * 0.1); // water sheen
 }
 
 // Small brown "mess" blob — used for litter-box messes (the sandy background
@@ -446,11 +487,18 @@ export function buildPropTextures(scene) {
   gen(scene, SNAKE_TANK_KEY, SNAKE.tank.w, SNAKE.tank.h, (g) => drawSnakeTank(g, SNAKE.tank.w, SNAKE.tank.h));
   gen(scene, LITTER_BOX_KEY, LITTER_BOX.w, LITTER_BOX.h, (g) => drawLitterBox(g, LITTER_BOX.w, LITTER_BOX.h));
   gen(scene, SCOOPER_KEY, 26, 32, (g) => drawScooper(g, 26, 32));
-  gen(scene, BOWL_KEY, 24, 18, (g) => drawBowl(g, 24, 18));
-  gen(scene, BOWL_HAY_KEY, 24, 18, (g) => drawHayBowl(g, 24, 18));
-  gen(scene, BOWL_SEED_KEY, 24, 18, (g) => drawSeedBowl(g, 24, 18));
-  gen(scene, BOWL_KIBBLE_KEY, 24, 18, (g) => drawKibbleBowl(g, 24, 18));
-  gen(scene, BOWL_SIMPLE_KEY, 24, 18, (g) => drawSimpleBowl(g, 24, 18));
+  gen(scene, BOWL_KEY, 24, 18, (g) => drawBowl(g, 24, 18, true));
+  gen(scene, BOWL_HAY_KEY, 24, 18, (g) => drawHayBowl(g, 24, 18, true));
+  gen(scene, BOWL_SEED_KEY, 24, 18, (g) => drawSeedBowl(g, 24, 18, true));
+  gen(scene, BOWL_KIBBLE_KEY, 24, 18, (g) => drawKibbleBowl(g, 24, 18, true));
+  gen(scene, BOWL_SIMPLE_KEY, 24, 18, (g) => drawSimpleBowl(g, 24, 18, true));
+  gen(scene, BOWL_EMPTY_KEY, 24, 18, (g) => drawBowl(g, 24, 18, false));
+  gen(scene, BOWL_HAY_EMPTY_KEY, 24, 18, (g) => drawHayBowl(g, 24, 18, false));
+  gen(scene, BOWL_SEED_EMPTY_KEY, 24, 18, (g) => drawSeedBowl(g, 24, 18, false));
+  gen(scene, BOWL_KIBBLE_EMPTY_KEY, 24, 18, (g) => drawKibbleBowl(g, 24, 18, false));
+  gen(scene, BOWL_SIMPLE_EMPTY_KEY, 24, 18, (g) => drawSimpleBowl(g, 24, 18, false));
+  gen(scene, WATER_BOWL_KEY, 24, 18, (g) => drawWaterBowl(g, 24, 18, true));
+  gen(scene, WATER_BOWL_EMPTY_KEY, 24, 18, (g) => drawWaterBowl(g, 24, 18, false));
   gen(scene, MESS_KEY, 16, 12, (g) => drawMess(g, 16, 12));
   gen(scene, LETTUCE_KEY, 16, 12, (g) => drawLettuce(g, 16, 12));
   gen(scene, NEED_KEY.food, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'food'));

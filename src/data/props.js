@@ -117,6 +117,19 @@ export const BOWL_SPOTS = Object.fromEntries(
   ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'].map((key) => [key, CAGES[key].map(bowlSpotForCage)]),
 );
 
+// Water bowl SPRITE spot (owner note 2026-07-29: "same with water bowls" —
+// filling/drinking should work identically to food, as its own separate
+// interactable). Sits in the opposite corner of the cage from the food bowl
+// so the two are visually and positionally distinct; same species list/
+// turtle exclusion as BOWL_SPOTS (turtles have no bowl of any kind — see the
+// comment above).
+function waterBowlSpotForCage(cage) {
+  return { x: cage.x + 6, y: cage.y + cage.h - 4 };
+}
+export const WATER_BOWL_SPOTS = Object.fromEntries(
+  ['guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'].map((key) => [key, CAGES[key].map(waterBowlSpotForCage)]),
+);
+
 // Turtle feeding spot (issue #20 follow-up): a little lettuce-leaf marker at
 // the tank's edge — interact here to drop in a piece of lettuce, which every
 // hungry turtle in the tank drifts over to eat (KennelScene._feedTurtleTank).

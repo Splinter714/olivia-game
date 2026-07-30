@@ -5,7 +5,7 @@ import {
   penRects, wallRects, backWingWallRects, outsideFenceRects,
 } from '../data/sections.js';
 import {
-  TURTLE, SNAKE, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOTS, TURTLE_FEED_SPOT, COMPUTER_SPOT,
+  TURTLE, SNAKE, LITTER_BOX, SCOOPER_SPOT, BOWL_SPOTS, WATER_BOWL_SPOTS, TURTLE_FEED_SPOT, COMPUTER_SPOT,
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS,
   CAGES, cageAnimalSpot, YARD_DIVIDER_DEFAULT_Y, YARD_DIVIDER_X0, YARD_DIVIDER_X1,
 } from '../data/props.js';
@@ -31,7 +31,9 @@ import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY, CARRY_DISPLAY_SCALE } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, SNAKE_TANK_KEY, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, BOWL_KEY_BY_SPECIES, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_KEY_UNIFORM, EMPTY_CAGE_KEY,
+  SCOOPER_KEY, BOWL_KEY, BOWL_KEY_BY_SPECIES, BOWL_EMPTY_KEY, BOWL_EMPTY_KEY_BY_SPECIES,
+  WATER_BOWL_KEY, WATER_BOWL_EMPTY_KEY,
+  MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_KEY_UNIFORM, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY,
   LETTUCE_KEY, YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
@@ -367,13 +369,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Turtles are fed via lettuce dropped in the tank instead (see
     // TURTLE_FEED_SPOT below), so they have no bowl slots at all.
     this._bowlImgs = {};
+    this._waterBowlImgs = {};
     const scopedScene = this;
     for (const key of Object.keys(BOWL_SPOTS)) {
       this._bowlImgs[key] = BOWL_SPOTS[key].map(() => null);
+      this._waterBowlImgs[key] = WATER_BOWL_SPOTS[key].map(() => null);
       BOWL_SPOTS[key].forEach((spot, i) => {
         // Live getter (same pattern as SCOOPER_SPOT above) since the actual
         // sprite is created/destroyed dynamically, not fixed at build time.
         this._devRegistry.push({ name: `BOWL_SPOTS.${key}.${i}`, get obj() { return scopedScene._bowlImgs[key][i]; } });
+        this._devRegistry.push({ name: `WATER_BOWL_SPOTS.${key}.${i}`, get obj() { return scopedScene._waterBowlImgs[key][i]; } });
       });
     }
     // Not calling _refreshBowls() here: this.roster doesn't exist yet at this
@@ -577,6 +582,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // picking her back up (_pickUp calls this directly too, since cage ART
   // itself doesn't need refreshing there in normal mode, but her bowl does).
   // Turtles have no bowl slots at all (BOWL_SPOTS excludes them).
+  //
+  // Owner note 2026-07-29: bowls now also track full-vs-empty stock
+  // (stay.bowl.food/water, set by _fillBowl/consumed automatically by
+  // _autoResolveBowlNeeds), so the texture picked here depends on that too,
+  // not just occupancy/species. Water bowls (WATER_BOWL_SPOTS) get the exact
+  // same create/destroy/reskin treatment as the food bowl, just with a
+  // single shared texture instead of per-species art.
   _refreshBowls() {
     if (!this._bowlImgs || !this.roster) return;
     for (const key of Object.keys(this._bowlImgs)) {
@@ -587,12 +599,31 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
           this._bowlImgs[key][slot] = null;
           return;
         }
-        const texKey = BOWL_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_KEY;
+        const stocked = !!occupant.bowl?.food;
+        const texKey = stocked
+          ? (BOWL_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_KEY)
+          : (BOWL_EMPTY_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_EMPTY_KEY);
         if (existing && existing.texture.key === texKey) return; // already showing the right bowl
         existing?.destroy();
         const { x, y } = BOWL_SPOTS[key][slot];
         const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y - 1);
         this._bowlImgs[key][slot] = bowl;
+        this._snapCagePop(bowl);
+      });
+      this._waterBowlImgs[key].forEach((existing, slot) => {
+        const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
+        if (!occupant) {
+          existing?.destroy();
+          this._waterBowlImgs[key][slot] = null;
+          return;
+        }
+        const stocked = !!occupant.bowl?.water;
+        const texKey = stocked ? WATER_BOWL_KEY : WATER_BOWL_EMPTY_KEY;
+        if (existing && existing.texture.key === texKey) return;
+        existing?.destroy();
+        const { x, y } = WATER_BOWL_SPOTS[key][slot];
+        const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y - 1);
+        this._waterBowlImgs[key][slot] = bowl;
         this._snapCagePop(bowl);
       });
     }
@@ -1459,14 +1490,23 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   // ── Feeding / water (issue #6, extended by #20 and #22 #6) ──────────────
 
-  // Feeds the one stay in this cage slot, if she's hungry (issue #22 #6 —
-  // one bowl per cage instead of one shared bowl per section).
-  _feedCage(sectionKey, cageSlot) {
+  // Fills the food or water bowl in this cage slot (owner note 2026-07-29:
+  // "you should be able to fill food bowls asynchronously from the pets
+  // eating the food" — filling works any time, regardless of whether she's
+  // currently hungry/thirsty, so the player can stock up ahead of time).
+  // Eating/drinking from a stocked bowl happens automatically, on its own
+  // tick — see _autoResolveBowlNeeds. `kind` is 'food' or 'water'.
+  _fillBowl(sectionKey, cageSlot, kind) {
     const stay = this.roster.stays.find((s) => s.location === sectionKey && s.cageSlot === cageSlot);
-    if (!stay || !stay.needs.food) return false;
-    clearNeed(stay, 'food');
-    this._setNeedIcon(stay, 'food', false);
-    this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} got fed!`);
+    if (!stay || !stay.bowl) return false;
+    if (stay.bowl[kind]) {
+      // Already full — a light, non-naggy flavor line, no state change.
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s ${kind} bowl is already full!`);
+      return true;
+    }
+    stay.bowl[kind] = true;
+    this._refreshBowls();
+    this.game.events.emit(EVENTS.NOTIFY, `Filled ${stay.animal.name}'s ${kind} bowl!`);
     return true;
   }
 
@@ -2142,6 +2182,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // ── Per-frame need/mess ticking ──────────────────────────────────────────
 
   _updateNeeds(delta) {
+    let bowlsChanged = false;
     for (const stay of this._settledStays()) { // only settled stays accrue needs
       const flipped = tickNeeds(stay, delta);
       for (const key of flipped) {
@@ -2150,7 +2191,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
           this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} needs to go to the bathroom!`);
         }
       }
+      // Owner note 2026-07-29: eating/drinking is decoupled from filling —
+      // she resolves her own hunger/thirst here, automatically, the instant
+      // a stocked bowl is available, with no player proximity/interaction
+      // required (see _autoResolveBowlNeeds).
+      if (this._autoResolveBowlNeeds(stay)) bowlsChanged = true;
     }
+    if (bowlsChanged) this._refreshBowls();
 
     this._tankTimer -= delta;
     if (this._tankTimer <= 0 && !this.turtleTankNeedsWater) {
@@ -2158,6 +2205,36 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this._tankNeedIcon = this.add.image(this._tankMarker.x, this._tankMarker.y - 30, NEED_KEY.water)
         .setDepth(9002);
     }
+  }
+
+  // Owner note 2026-07-29 ("you should be able to fill food bowls
+  // asynchronously from the pets eating the food. Same with water bowls"):
+  // whenever a settled stay is hungry/thirsty AND her bowl is currently
+  // stocked, she resolves it herself — no player proximity or interaction
+  // needed, exactly like the owner described. Empties the bowl again so the
+  // next fill is a fresh player action. Turtles have no stay.bowl at all
+  // (BOWL_SPOTS/WATER_BOWL_SPOTS exclude them — they're fed via lettuce
+  // dropped in the tank instead, see _feedTurtleTank), so this is a no-op
+  // for them. Returns true if a bowl was consumed, so the caller can batch
+  // the sprite refresh instead of doing it per-stay.
+  _autoResolveBowlNeeds(stay) {
+    if (!stay.bowl) return false;
+    let changed = false;
+    if (stay.needs.food && stay.bowl.food) {
+      clearNeed(stay, 'food');
+      stay.bowl.food = false;
+      this._setNeedIcon(stay, 'food', false);
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} got fed!`);
+      changed = true;
+    }
+    if (stay.needs.water && stay.bowl.water) {
+      clearNeed(stay, 'water');
+      stay.bowl.water = false;
+      this._setNeedIcon(stay, 'water', false);
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} got a drink!`);
+      changed = true;
+    }
+    return changed;
   }
 
   // Issue #20: dogs have no indoor mess of their own anymore — their potty
@@ -2212,34 +2289,31 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     // Issue #20: pick up any settled or yard-placed animal to take her out
     // to play (or bring her back in). Skipped at night (everyone should be
-    // in her cage for tuck-in), for a dog currently needing the bathroom
-    // (the dedicated leash flow below takes priority for her), and — now
-    // that feeding also targets the cage itself (owner note 2026-07-29,
-    // right below) rather than a separate bowl spot — for anyone settled in
-    // a bowl-eligible cage who's currently hungry, so pressing interact feeds
-    // her instead of picking her up (same tie-breaking pattern as the dog).
+    // in her cage for tuck-in) and for a dog currently needing the bathroom
+    // (the dedicated leash flow below takes priority for her).
     if (!this.night.active) {
       const sectionKeys = new Set(SECTIONS.map((s) => s.key));
       for (const stay of this.roster.stays) {
         const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
         if (!settled) continue;
         if (stay.location === 'dog' && stay.needs.bathroom) continue;
-        if (stay.needs.food && Object.prototype.hasOwnProperty.call(BOWL_SPOTS, stay.location)) continue;
         const rec = this._staySprites.get(stay);
         if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
       }
     }
 
-    // Owner note 2026-07-29: "the interact point should be the cage, not the
-    // food bowl" — feeding targets the cage's own rect (cageAnimalSpot, the
-    // same anchor _sectionSlot/_findOpenCageNear already use for every other
-    // cage interaction), not BOWL_SPOTS' fixed bowl-sprite corner. BOWL_SPOTS
-    // still exists purely to place the bowl sprite visually (see
-    // _refreshBowls) — it's just no longer the interact target.
+    // Owner note 2026-07-29 (bowl decoupling): filling food vs. water now
+    // resolves to whichever specific bowl sprite is closer — same
+    // nearest-target `consider()` pattern as everything else here — rather
+    // than the cage's own rect. Filling works regardless of hunger/thirst
+    // (see _fillBowl); actually eating/drinking happens on its own
+    // background tick (_autoResolveBowlNeeds), not through this interaction.
     for (const key of Object.keys(BOWL_SPOTS)) {
-      CAGES[key].forEach((cage, slot) => {
-        const spot = cageAnimalSpot(cage);
-        consider(spot.x, spot.y, () => this._feedCage(key, slot));
+      BOWL_SPOTS[key].forEach((spot, slot) => {
+        consider(spot.x, spot.y, () => this._fillBowl(key, slot, 'food'));
+      });
+      WATER_BOWL_SPOTS[key].forEach((spot, slot) => {
+        consider(spot.x, spot.y, () => this._fillBowl(key, slot, 'water'));
       });
     }
 

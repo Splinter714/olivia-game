@@ -6,7 +6,7 @@
 // off the game clock's HOUR_CHANGE event.
 import { createAnimal } from './animal.js';
 import { SPECIES_KEYS } from './species.js';
-import { createNeeds } from './needs.js';
+import { createNeeds, createBowlState } from './needs.js';
 import { attachBirthTimer } from './births.js';
 import { pickUpgradeKind } from './economy.js';
 import { CAGES_PER_SECTION, SECTIONS } from './sections.js';
@@ -254,6 +254,10 @@ export function createRoster() {
       // section; KennelScene ticks them.
       needs,
       timers,
+      // Owner note 2026-07-29: bowl stock is tracked separately from need
+      // state — filling (player action) and eating/drinking (automatic once
+      // hungry/thirsty AND stocked) are decoupled events. See data/needs.js.
+      bowl: createBowlState(),
       // Births (issue #9) — set below if the primary is pregnant/has eggs.
       // Announcement (issue #10) — flips true the moment babies/hatchlings
       // appear, until the player uses the reception computer to tell the
@@ -338,6 +342,7 @@ export function createRoster() {
       carryKind: carryKindForSpecies('dragon'),
       needs,
       timers,
+      bowl: createBowlState(),
       needsAnnouncement: false,
     };
     attachBirthTimer(stay); // no-op: she never arrives pregnant/with eggs
