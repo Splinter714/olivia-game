@@ -1243,6 +1243,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _checkDropoff(interactPressed) {
     const stay = this.carrying;
     if (this._carryOrigin === LOCATION.YARD) {
+      // Picked up from the yard — she can go right back into the yard
+      // (change your mind / move her to a different spot), OR come back
+      // inside to her cage. Only the "bring inside" path existed before, so
+      // there was no way to just set her back down outside.
+      if (this.player.x >= OUTSIDE.x + 8) {
+        if (!interactPressed) return;
+        this._dropOffToYard(stay);
+        this._carryOrigin = null;
+        return;
+      }
       // Bringing her back inside — only her own section (cage) will accept
       // her. Issue #27: "her own section" means wherever her cage actually
       // IS (stay.cageSection, set the moment she was last assigned a cage),
