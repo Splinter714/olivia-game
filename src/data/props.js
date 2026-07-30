@@ -98,9 +98,14 @@ export const SCOOPER_SPOT = (() => {
   return { x: s.x - 22, y: s.y + s.h - 30 };
 })();
 
-// One food/water bowl per individual cage slot (issue #22 #6) — reuses the
-// CAGES grid so every animal's bowl sits right next to (or in) its own cage,
-// instead of one shared bowl per section. Turtles are excluded: a turtle on
+// One food/water bowl SPRITE spot per individual cage slot (issue #22 #6,
+// refined by owner note 2026-07-29: "the interact point should be the cage,
+// not the food bowl... don't need to be there before placing the animal").
+// This is purely where the bowl sprite visually sits (a corner of the cage);
+// KennelScene now targets the cage's own rect (cageAnimalSpot) for the
+// feeding INTERACTION, and only creates a bowl sprite here once a stay is
+// actually settled in that cage slot (destroying it again once the cage goes
+// empty) — see KennelScene._refreshBowls. Turtles are excluded: a turtle on
 // its water-tank island can't walk over to a bowl the way a land animal can,
 // so they're fed differently (a piece of lettuce dropped into the tank —
 // see KennelScene._feedTurtleTank). Snakes stay on dry sand/perch, so a

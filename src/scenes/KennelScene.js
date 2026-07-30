@@ -31,7 +31,7 @@ import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY, CARRY_DISPLAY_SCALE } from '../art/carry.js';
 import {
   buildPropTextures, TANK_KEY, SNAKE_TANK_KEY, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_KEY_UNIFORM, EMPTY_CAGE_KEY,
+  SCOOPER_KEY, BOWL_KEY, BOWL_KEY_BY_SPECIES, MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_KEY_UNIFORM, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY,
   LETTUCE_KEY, YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
@@ -359,14 +359,27 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const scene = this;
     this._devRegistry.push({ name: 'SCOOPER_SPOT', get obj() { return scene._scooperRestSprite; } });
 
-    // One bowl per individual cage slot (issue #22 #6) — turtles are fed via
-    // lettuce dropped in the tank instead (see TURTLE_FEED_SPOT below).
+    // One bowl per individual cage slot (issue #22 #6), refined by owner note
+    // 2026-07-29: bowls don't exist until an animal is actually settled in
+    // that cage. No sprite is created here — this._bowlImgs just tracks the
+    // (initially empty) per-slot sprite so _refreshBowls can create/destroy/
+    // re-skin it as occupancy changes (see that method for the full story).
+    // Turtles are fed via lettuce dropped in the tank instead (see
+    // TURTLE_FEED_SPOT below), so they have no bowl slots at all.
+    this._bowlImgs = {};
+    const scopedScene = this;
     for (const key of Object.keys(BOWL_SPOTS)) {
-      BOWL_SPOTS[key].forEach(({ x, y }, i) => {
-        const bowl = this.add.image(x, y, BOWL_KEY).setOrigin(0.5, 1).setDepth(y - 1);
-        this._devRegistry.push({ name: `BOWL_SPOTS.${key}.${i}`, obj: bowl });
+      this._bowlImgs[key] = BOWL_SPOTS[key].map(() => null);
+      BOWL_SPOTS[key].forEach((spot, i) => {
+        // Live getter (same pattern as SCOOPER_SPOT above) since the actual
+        // sprite is created/destroyed dynamically, not fixed at build time.
+        this._devRegistry.push({ name: `BOWL_SPOTS.${key}.${i}`, get obj() { return scopedScene._bowlImgs[key][i]; } });
       });
     }
+    // Not calling _refreshBowls() here: this.roster doesn't exist yet at this
+    // point in create() (see the comment above _applyCageMode's own call
+    // below) — _refreshCageArt() now calls _refreshBowls() itself, and that
+    // first runs from _applyCageMode() further down, after the roster is built.
 
     // Turtle lettuce-feeding marker (issue #20 follow-up).
     const feedSpot = this.add.image(TURTLE_FEED_SPOT.x, TURTLE_FEED_SPOT.y, LETTUCE_KEY).setOrigin(0.5, 0.5).setDepth(TURTLE.tank.y - 1);
@@ -549,6 +562,38 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         img.setTexture(texKey).setOrigin(0.5, 0.5)
           .setPosition(cage.x + cage.w / 2, cage.y + cage.h / 2);
         if (changed) this._snapCagePop(img);
+      });
+    }
+    this._refreshBowls();
+  }
+
+  // Bowls only exist for an occupied cage (issue #22 #6, owner note
+  // 2026-07-29: "don't need to be there BEFORE placing the animal") and are
+  // styled per the species actually settled there ("informed based on the
+  // animal that's placed" — see BOWL_KEY_BY_SPECIES in art/props.js). Mirrors
+  // _refreshCageArt's occupancy-driven redraw: called from every site that
+  // already calls _refreshCageArt (drop-off, checkout, yard recall, mode
+  // toggle) — that covers every way a cage's occupant can change EXCEPT
+  // picking her back up (_pickUp calls this directly too, since cage ART
+  // itself doesn't need refreshing there in normal mode, but her bowl does).
+  // Turtles have no bowl slots at all (BOWL_SPOTS excludes them).
+  _refreshBowls() {
+    if (!this._bowlImgs || !this.roster) return;
+    for (const key of Object.keys(this._bowlImgs)) {
+      this._bowlImgs[key].forEach((existing, slot) => {
+        const occupant = this.roster.stays.find((s) => s.location === key && s.cageSlot === slot);
+        if (!occupant) {
+          existing?.destroy();
+          this._bowlImgs[key][slot] = null;
+          return;
+        }
+        const texKey = BOWL_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_KEY;
+        if (existing && existing.texture.key === texKey) return; // already showing the right bowl
+        existing?.destroy();
+        const { x, y } = BOWL_SPOTS[key][slot];
+        const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(y - 1);
+        this._bowlImgs[key][slot] = bowl;
+        this._snapCagePop(bowl);
       });
     }
   }
@@ -1119,6 +1164,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._destroyStaySprites(stay);
     stay.location = LOCATION.CARRYING;
     this.carrying = stay;
+    // If she was settled in a cage, that cage's bowl (if any) should
+    // disappear the instant she's picked back up (owner note 2026-07-29) —
+    // _refreshCageArt isn't otherwise called on pickup (cage ART itself only
+    // changes per-occupant in generalized mode, refreshed on the next
+    // drop-off/checkout), so the bowl needs its own explicit refresh here.
+    this._refreshBowls();
     // Arrivals with a carry prop (leash/cage/box/basket) ride in that prop,
     // composed with her own sprite the same "contained" way she showed at
     // reception (issue #21) — everything else (small pets, or any settled
@@ -2161,21 +2212,33 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     // Issue #20: pick up any settled or yard-placed animal to take her out
     // to play (or bring her back in). Skipped at night (everyone should be
-    // in her cage for tuck-in) and for a dog currently needing the bathroom
-    // (the dedicated leash flow below takes priority for her).
+    // in her cage for tuck-in), for a dog currently needing the bathroom
+    // (the dedicated leash flow below takes priority for her), and — now
+    // that feeding also targets the cage itself (owner note 2026-07-29,
+    // right below) rather than a separate bowl spot — for anyone settled in
+    // a bowl-eligible cage who's currently hungry, so pressing interact feeds
+    // her instead of picking her up (same tie-breaking pattern as the dog).
     if (!this.night.active) {
       const sectionKeys = new Set(SECTIONS.map((s) => s.key));
       for (const stay of this.roster.stays) {
         const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
         if (!settled) continue;
         if (stay.location === 'dog' && stay.needs.bathroom) continue;
+        if (stay.needs.food && Object.prototype.hasOwnProperty.call(BOWL_SPOTS, stay.location)) continue;
         const rec = this._staySprites.get(stay);
         if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
       }
     }
 
+    // Owner note 2026-07-29: "the interact point should be the cage, not the
+    // food bowl" — feeding targets the cage's own rect (cageAnimalSpot, the
+    // same anchor _sectionSlot/_findOpenCageNear already use for every other
+    // cage interaction), not BOWL_SPOTS' fixed bowl-sprite corner. BOWL_SPOTS
+    // still exists purely to place the bowl sprite visually (see
+    // _refreshBowls) — it's just no longer the interact target.
     for (const key of Object.keys(BOWL_SPOTS)) {
-      BOWL_SPOTS[key].forEach((spot, slot) => {
+      CAGES[key].forEach((cage, slot) => {
+        const spot = cageAnimalSpot(cage);
         consider(spot.x, spot.y, () => this._feedCage(key, slot));
       });
     }
