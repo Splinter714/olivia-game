@@ -41,6 +41,7 @@ import {
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
 import { createRoster, LOCATION, CARRY_KIND, assignCageSlot } from '../data/roster.js';
 import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
+import { WithDevDrag } from '../dev/dragTool.js';
 
 // Placeholder name shown on a baby's tiny label until the owner names it via
 // the reception computer (issue #10). Matches data/animal.js's opts.name
@@ -77,13 +78,19 @@ function circleRectOverlap(cx, cy, r, rect) {
 // data/sections.js, and drives the player around it. Animals, arrivals, and
 // carrying (issues #4/#5) hang off the same section rects; feeding/potty/
 // playpens (issues #6/#7/#8) hang off data/props.js's furniture rects.
-export default class KennelScene extends Phaser.Scene {
+export default class KennelScene extends WithDevDrag(Phaser.Scene) {
   constructor() {
     super('Kennel');
   }
 
   create() {
     applyDpr(this); // camera zoom = dpr; centred origin (startFollow needs it, see uiUtils.js)
+
+    // Dev tool (src/dev/dragTool.js): a central registry of "things with a
+    // hardcoded position a human might want to drag around" — every push
+    // happens right where that thing is actually placed, in _buildProps()
+    // below, so the registry can't drift from the real world.
+    this._devRegistry = [];
 
     buildKennelTextures(this);
     for (const s of SECTIONS) buildFloorTile(this, `floor-${s.key}`, s.floor, s.floorDark);
@@ -119,6 +126,7 @@ export default class KennelScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
 
     this.controls = new Controls(this);
+    this.buildDevDrag(); // F9 to toggle — see src/dev/dragTool.js
 
     this.clock = createClock();
     this._lastHour = this.clock.hour;
@@ -276,7 +284,8 @@ export default class KennelScene extends Phaser.Scene {
   // dressing), and the yard divider. All positions come from data/props.js
   // so interaction code below reads the exact same rects.
   _buildProps() {
-    this.add.image(TURTLE.tank.x, TURTLE.tank.y, TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
+    const turtleTank = this.add.image(TURTLE.tank.x, TURTLE.tank.y, TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
+    this._devRegistry.push({ name: 'TURTLE.tank', obj: turtleTank });
     // Water-topping marker (section-level resource) stays separate from the
     // lettuce-feeding marker below — different chores, different spots.
     this._tankMarker = { x: TURTLE.tank.x + TURTLE.tank.w / 2, y: TURTLE.tank.y + TURTLE.tank.h - 6 };
@@ -285,49 +294,76 @@ export default class KennelScene extends Phaser.Scene {
     // water-topping chore. Both tanks' individual islands/perches are drawn
     // below alongside every other section's cage grid (CAGE_KEY covers all
     // three art styles now — see art/props.js).
-    this.add.image(SNAKE.tank.x, SNAKE.tank.y, SNAKE_TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
+    const snakeTank = this.add.image(SNAKE.tank.x, SNAKE.tank.y, SNAKE_TANK_KEY).setOrigin(0, 0).setDepth(-1.5);
+    this._devRegistry.push({ name: 'SNAKE.tank', obj: snakeTank });
 
-    this.add.image(LITTER_BOX.x, LITTER_BOX.y, LITTER_BOX_KEY).setOrigin(0, 0).setDepth(-1);
+    const litterBox = this.add.image(LITTER_BOX.x, LITTER_BOX.y, LITTER_BOX_KEY).setOrigin(0, 0).setDepth(-1);
+    this._devRegistry.push({ name: 'LITTER_BOX', obj: litterBox });
 
     this._rebuildScooperRestSprite();
+    // The scooper's rest sprite is destroyed/recreated whenever it's picked
+    // up/set down (_pickUpScooper/_dropScooper), so the registry holds a
+    // live getter rather than a fixed reference — the drag tool filters out
+    // any entry whose obj is currently null (scooper in the player's hands).
+    const scene = this;
+    this._devRegistry.push({ name: 'SCOOPER_SPOT', get obj() { return scene._scooperRestSprite; } });
 
     // One bowl per individual cage slot (issue #22 #6) — turtles are fed via
     // lettuce dropped in the tank instead (see TURTLE_FEED_SPOT below).
     for (const key of Object.keys(BOWL_SPOTS)) {
-      for (const { x, y } of BOWL_SPOTS[key]) {
-        this.add.image(x, y, BOWL_KEY).setOrigin(0.5, 1).setDepth(y - 1);
-      }
+      BOWL_SPOTS[key].forEach(({ x, y }, i) => {
+        const bowl = this.add.image(x, y, BOWL_KEY).setOrigin(0.5, 1).setDepth(y - 1);
+        this._devRegistry.push({ name: `BOWL_SPOTS.${key}.${i}`, obj: bowl });
+      });
     }
 
     // Turtle lettuce-feeding marker (issue #20 follow-up).
-    this.add.image(TURTLE_FEED_SPOT.x, TURTLE_FEED_SPOT.y, LETTUCE_KEY).setOrigin(0.5, 0.5).setDepth(TURTLE.tank.y - 1);
+    const feedSpot = this.add.image(TURTLE_FEED_SPOT.x, TURTLE_FEED_SPOT.y, LETTUCE_KEY).setOrigin(0.5, 0.5).setDepth(TURTLE.tank.y - 1);
+    this._devRegistry.push({ name: 'TURTLE_FEED_SPOT', obj: feedSpot });
 
     // Reception computer (issue #10) — baby-announcement messages to owners.
-    this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
+    const computer = this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
+    this._devRegistry.push({ name: 'COMPUTER_SPOT', obj: computer });
 
     // Individual cages (issue #18) — 6 per section, including turtles/snakes
     // as of issue #20 (styled as islands/perches instead of wire pens).
     for (const key of Object.keys(CAGES)) {
-      for (const cage of CAGES[key]) {
-        this.add.image(cage.x, cage.y, CAGE_KEY[key]).setOrigin(0, 0).setDepth(cage.y - 2);
-      }
+      CAGES[key].forEach((cage, i) => {
+        const img = this.add.image(cage.x, cage.y, CAGE_KEY[key]).setOrigin(0, 0).setDepth(cage.y - 2);
+        this._devRegistry.push({ name: `CAGES.${key}.${i}`, obj: img });
+      });
     }
 
     // Back wing furniture (issue #13): the kitchen's oven/counter (the one
     // interactive spot — baking lives at _bakeTreat) and the storage room's
     // purely-atmospheric shelves/boxes/bags.
-    this.add.image(OVEN_SPOT.x, OVEN_SPOT.y, OVEN_KEY).setOrigin(0.5, 1).setDepth(OVEN_SPOT.y);
+    const oven = this.add.image(OVEN_SPOT.x, OVEN_SPOT.y, OVEN_KEY).setOrigin(0.5, 1).setDepth(OVEN_SPOT.y);
+    this._devRegistry.push({ name: 'OVEN_SPOT', obj: oven });
     const dressingKey = { shelf: SHELF_KEY, boxes: BOX_KEY, bag: BAG_KEY };
-    for (const p of STORAGE_PROPS) {
-      this.add.image(p.x, p.y, dressingKey[p.key]).setOrigin(0.5, 1).setDepth(p.y);
-    }
+    STORAGE_PROPS.forEach((p, i) => {
+      const img = this.add.image(p.x, p.y, dressingKey[p.key]).setOrigin(0.5, 1).setDepth(p.y);
+      this._devRegistry.push({ name: `STORAGE_PROPS.${i}`, obj: img });
+    });
 
     // Yard divider (issue #20) — a movable HORIZONTAL fence line + post
-    // splitting the outside yard into a top/bottom zone.
+    // splitting the outside yard into a top/bottom zone. Registered so its
+    // DEFAULT position (YARD_DIVIDER_DEFAULT_Y) can be tuned like anything
+    // else — the player can still pick it up and move it during normal play
+    // regardless (that's a keyboard-interact mechanic, not a pointer drag,
+    // so the two never conflict).
     this.dividerLineImg = this.add.image(YARD_DIVIDER_X0, this.yardDividerY, YARD_DIVIDER_LINE_KEY)
       .setOrigin(0, 0.5).setDepth(this.yardDividerY);
     this.dividerPostImg = this.add.image((YARD_DIVIDER_X0 + YARD_DIVIDER_X1) / 2, this.yardDividerY, YARD_DIVIDER_POST_KEY)
       .setOrigin(0.5, 0.5).setDepth(this.yardDividerY + 0.1);
+    this._devRegistry.push({ name: 'YARD_DIVIDER_DEFAULT_Y', obj: this.dividerPostImg });
+  }
+
+  // Dev tool (src/dev/dragTool.js): the ONE place that turns `_devRegistry`
+  // (populated above, right where each object is actually placed) into the
+  // drag tool's live target list. Filters out anything whose `obj` isn't
+  // currently on screen (e.g. the scooper while it's in the player's hands).
+  _devDragTargets() {
+    return this._devRegistry.map((e) => ({ name: e.name, obj: e.obj })).filter((e) => e.obj);
   }
 
   // (Re)creates the resting scooper sprite at its current rest spot — called
@@ -1849,6 +1885,8 @@ export default class KennelScene extends Phaser.Scene {
   // ── Per-frame ────────────────────────────────────────────────────────────
 
   update(time, delta) {
+    this._updateDevDragToggle(); // F9 — works regardless of anything else going on
+
     this.clock.advance(delta);
     const hour = this.clock.hour, phase = this.clock.phase;
     if (hour !== this._lastHour) {

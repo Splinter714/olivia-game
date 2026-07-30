@@ -56,6 +56,12 @@ export class Controls {
     // The scene consumes it once per request via consumeTapTarget().
     this.tapTarget = null;
 
+    // Dev-drag tool (src/dev/dragTool.js): while suspended, pointer-driven
+    // tap-to-move/touch-stick input is ignored so a drag on a draggable prop
+    // can't also walk the player — keyboard/gamepad movement (getMove()) is
+    // untouched, since it never reads pointer state.
+    this._suspended = false;
+
     // Live touch-drag state, only ever set on a real touch pointer (never mouse).
     this._touch = null; // { id, origin:{x,y} (logical), point:{x,y} (logical), dragging }
     this.touchStickVisible = Controls.touchCapable();
@@ -114,7 +120,19 @@ export class Controls {
     return Math.hypot(px - btn.x, py - btn.y) <= btn.r * 1.3; // generous touch target
   }
 
+  // See _suspended above. Called by the dev-drag tool when it toggles on/off.
+  setSuspended(v) {
+    this._suspended = v;
+    if (v) {
+      this._touch = null;
+      this._mouseDown = null;
+      this.tapTarget = null;
+      this._ring?.clear();
+    }
+  }
+
   _onPointerDown(p) {
+    if (this._suspended) return;
     if (this._hitInteractButton(p)) {
       this._touchInteractPending = true;
       return; // never let this also start a joystick drag or a tap-to-move
@@ -128,6 +146,7 @@ export class Controls {
   }
 
   _onPointerMove(p) {
+    if (this._suspended) return;
     if (this._touch && this._touch.id === p.id) {
       this._touch.point = { x: p.x, y: p.y };
       const dist = Phaser.Math.Distance.Between(this._touch.origin.x, this._touch.origin.y, p.x, p.y);
@@ -136,6 +155,7 @@ export class Controls {
   }
 
   _onPointerUp(p) {
+    if (this._suspended) return;
     if (this._touch && this._touch.id === p.id) {
       if (!this._touch.dragging) this._setTapTarget(p.x, p.y); // quick tap, no drag → walk there
       this._touch = null;
