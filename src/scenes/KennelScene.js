@@ -190,6 +190,24 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._walkVisual = null;       // { sprite, tag, base, ... } following the player while walking a dog
     this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment she starts walking in until her pet is picked up (issue #25)
 
+    // ── Night: tuck-in / staying awake / wake-ups (issue #11) ──────────────
+    // Issue #34 regression fix: this has to exist BEFORE _applyCageMode()
+    // below — with a restored save, that call already has settled stays to
+    // render, and _renderStay reads this.night.active while restoring each
+    // one's tuck-in indicator.
+    this.night = {
+      active: false,       // true from NIGHT phase start until morning resumes
+      allTucked: false,    // fires the "Everyone's asleep!" transition once
+      sleeping: false,     // mid fade-to-black / wake-up / fade-back sequence
+      wakeUpsRemaining: 0,
+      currentWake: null,   // { stay, reason } awaiting player resolution, or null
+    };
+    // Full-screen "asleep" overlay, same oversized-rect trick as tintGfx;
+    // sleepAlpha is a plain tweened number, not a Phaser property, so any
+    // tween can drive it directly.
+    this.sleepGfx = this.add.graphics().setScrollFactor(0).setDepth(10000);
+    this.sleepAlpha = 0;
+
     // Now that this.roster/this._staySprites exist, apply the Mix Cages
     // toggle's visuals to match its default (see _buildModeToggle, which
     // builds the button earlier but can't call this yet at that point).
@@ -215,20 +233,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.treatTray = null;                        // { treat, sprite } on the kitchen counter, or null
     this._raccoonTimer = RACCOON_CHECK_INTERVAL();
     this._raccoon = null;                          // active scamper visual, or null while she's mid-run
-
-    // ── Night: tuck-in / staying awake / wake-ups (issue #11) ──────────────
-    this.night = {
-      active: false,       // true from NIGHT phase start until morning resumes
-      allTucked: false,    // fires the "Everyone's asleep!" transition once
-      sleeping: false,     // mid fade-to-black / wake-up / fade-back sequence
-      wakeUpsRemaining: 0,
-      currentWake: null,   // { stay, reason } awaiting player resolution, or null
-    };
-    // Full-screen "asleep" overlay, same oversized-rect trick as tintGfx;
-    // sleepAlpha is a plain tweened number, not a Phaser property, so any
-    // tween can drive it directly.
-    this.sleepGfx = this.add.graphics().setScrollFactor(0).setDepth(10000);
-    this.sleepAlpha = 0;
 
     this.game.events.on(EVENTS.HOUR_CHANGE, this._onHourChange, this);
     this.game.events.on(EVENTS.PHASE_CHANGE, this._onPhaseChange, this);
