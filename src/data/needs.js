@@ -13,27 +13,38 @@
 // pair and reuse tickNeeds()/clearNeed() rather than inventing new plumbing.
 //
 // Owner note 2026-07-29 (issue #30): "food and water bowls should only need
-// filled maybe at MOST 3x per day" — food and water flip due TOGETHER, at
-// three fixed times of the game-day (real feeding times), rather than each
-// on its own random real-time countdown. `timers.nextFeedAt` is an absolute
-// game hour (day*24 + hourFloat), compared against the clock every tick.
-const FEED_HOURS = [7, 12, 17]; // owner-confirmed: 7am, 12pm, 5pm
+// filled maybe at MOST 3x per day" — food and water flip due TOGETHER at a
+// fixed time of the game-day (real feeding times), rather than each on its
+// own random real-time countdown. `timers.nextFeedAt` is an absolute game
+// hour (day*24 + hourFloat), compared against the clock every tick.
+//
+// Owner note 2026-07-30 (issue #44): "only need to eat/drink one time per day
+// instead of 3 times; spread them out, not all at once" — so the three shared
+// feeding hours became ONE hour per day, randomly assigned PER ANIMAL
+// (`timers.feedHour`) rather than shared by everyone. Her food and water
+// still come due together at that one moment ("per-animal only", owner's
+// answer); staggering across animals is what keeps chores trickling in all
+// day instead of arriving in synchronized waves.
+const FEED_HOUR_MIN = 7;  // clock.js's DAY_START — nobody gets hungry pre-dawn
+const FEED_HOUR_MAX = 20; // last hour before NIGHT_START (21)
+const randomFeedHour = () => FEED_HOUR_MIN + Math.floor(Math.random() * (FEED_HOUR_MAX - FEED_HOUR_MIN + 1));
 const BATHROOM_INTERVAL = () => 35_000 + Math.random() * 30_000;  // dogs only, 35-65s
 
 const absHour = (day, hour) => day * 24 + hour;
 
-// Smallest absolute game hour, strictly after `afterAbs`, that lands on one
-// of FEED_HOURS.
-function nextFeedAbsHour(afterAbs) {
+// Smallest absolute game hour strictly after `afterAbs` that lands on this
+// animal's own `feedHour` — i.e. today's if it hasn't passed yet, else
+// tomorrow's.
+function nextFeedAbsHour(afterAbs, feedHour) {
   const day = Math.floor(afterAbs / 24);
   const hourOfDay = afterAbs - day * 24;
-  const next = FEED_HOURS.find((h) => h > hourOfDay);
-  return next != null ? day * 24 + next : (day + 1) * 24 + FEED_HOURS[0];
+  return feedHour > hourOfDay ? day * 24 + feedHour : (day + 1) * 24 + feedHour;
 }
 
 export function createNeeds(speciesKey, day = 0, hour = 0) {
   const needs = { food: false, water: false };
-  const timers = { nextFeedAt: nextFeedAbsHour(absHour(day, hour)) };
+  const feedHour = randomFeedHour();
+  const timers = { feedHour, nextFeedAt: nextFeedAbsHour(absHour(day, hour), feedHour) };
   if (speciesKey === 'dog') {
     needs.bathroom = false;
     timers.bathroom = BATHROOM_INTERVAL();
@@ -60,10 +71,13 @@ export function createBowlState() {
 // once, not every frame.
 export function tickNeeds(stay, deltaMs, absHourNow) {
   const flipped = [];
+  // A stay restored from a save written before issue #44 has no `feedHour`
+  // of her own — give her one now rather than crashing/never feeding.
+  if (stay.timers.feedHour == null) stay.timers.feedHour = randomFeedHour();
   if (absHourNow >= stay.timers.nextFeedAt) {
     if (!stay.needs.food) { stay.needs.food = true; flipped.push('food'); }
     if ('water' in stay.needs && !stay.needs.water) { stay.needs.water = true; flipped.push('water'); }
-    stay.timers.nextFeedAt = nextFeedAbsHour(absHourNow);
+    stay.timers.nextFeedAt = nextFeedAbsHour(absHourNow, stay.timers.feedHour);
   }
   if ('bathroom' in stay.timers && !stay.needs.bathroom) {
     stay.timers.bathroom -= deltaMs;
