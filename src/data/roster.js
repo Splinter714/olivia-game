@@ -35,14 +35,14 @@ export const CARRY_KIND = {
 const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 
 // A stay still "occupies" `sectionKey`'s capacity even while she's out
-// playing in the yard (issue #20) — she kept her `cageSlot` when she was
-// carried out (see KennelScene._pickUp/_dropOffToYard, neither of which
-// clears it) and she's coming back to that same section. Without this, a
-// yard trip looked like it freed up a slot: a NEW arrival of the same
-// species could fill the section back up to CAGES_PER_SECTION while she was
-// still out, and then bringing her back inside (or the forced night recall,
-// KennelScene._recallYardToCages) would find the section "full" with
-// nowhere to put her, falling back to an overlapping generic grid spot.
+// playing in the yard (issue #20) — she kept her `cageSlot` when she went
+// out (see KennelScene._openCage/_dropOffToYard, neither of which clears
+// it) and she's coming back to that same section. Without this, a yard trip
+// looked like it freed up a slot: a NEW arrival of the same species could
+// fill the section back up to CAGES_PER_SECTION while she was still out,
+// and then coming back inside (or her own walk home at nightfall,
+// KennelScene._startWalkHome) would find the section "full" with nowhere to
+// put her, falling back to an overlapping generic grid spot.
 //
 // Issue #27 ("generalized cages"): a section's key USED to always equal its
 // occupant's species key, so checking `stay.animal.species === sectionKey`
@@ -50,7 +50,7 @@ const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 // generalized mode lets a cage hold ANY species, that stand-in breaks — a
 // turtle napping in a dog cage would never "belong" to the dog section by
 // this species check. `stay.cageSection` (set by KennelScene._dropOff/
-// _recallYardToCages the moment she's actually assigned a cage) is the real
+// _startWalkHome the moment she's actually assigned a cage) is the real
 // answer regardless of mode; in normal (species-locked) mode it's always
 // equal to her species anyway, so this is a no-op there. The secret bonus
 // dragon (roster.spawnDragon below) leans on this exact same mechanism — she

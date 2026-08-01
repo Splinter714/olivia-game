@@ -127,34 +127,40 @@ export const WATER_BOWL_SPOTS = Object.fromEntries(
 
 // ── Outside yard (issue #20, yard bowls added by issue #32's follow-up) ────
 // The outside grass strip (data/sections.js's OUTSIDE/WORLD) is the real play
-// space for any species now. A single movable divider prop splits it into two
-// zones by default ("two zones, but generalizable so they can be split
-// however the player puts them") — the divider is a HORIZONTAL fence line
-// that only ever moves along y, and a drop point's zone is just "which side
-// of the divider's current y" (top/bottom, not left/right). See KennelScene
-// for the carry/drop logic that moves it.
+// space for any species.
+//
+// Issue #47 (owner: "remove the horizontal line splitting the play area, all
+// 1 area"): the movable horizontal divider prop that used to split this into
+// a top/bottom zone pair is gone entirely — no divider position, no per-zone
+// rects, no per-zone bowls. YARD_RECT below is the whole play area, one
+// undivided space every yard-placed animal shares.
 export const YARD_MARGIN = 40;
-export const YARD_DIVIDER_DEFAULT_Y = ROOM.y + ROOM.h / 2;
-export const YARD_DIVIDER_X0 = OUTSIDE.x + YARD_MARGIN;
-export const YARD_DIVIDER_X1 = OUTSIDE.x + OUTSIDE.w - YARD_MARGIN;
+export const YARD_X0 = OUTSIDE.x + YARD_MARGIN;
+export const YARD_X1 = OUTSIDE.x + OUTSIDE.w - YARD_MARGIN;
+
+// The single play area: the full grass strip inset by the fence margin, used
+// for placement grid slots and wander bounds alike (KennelScene).
+export const YARD_RECT = {
+  x: YARD_X0,
+  y: ROOM.y + 14,
+  w: YARD_X1 - YARD_X0,
+  h: ROOM.h - 28,
+};
 
 // Issue #32 follow-up ("in the outdoor play area, there should be food and
-// water bowls available for general animal use"): one food+water pair per
-// yard zone. Fixed, not derived from the divider's current y — the divider
-// only ever clamps to ROOM.y+64..ROOM.y+ROOM.h-64 (KennelScene._dropDivider),
-// so a spot near the very top of the yard is always above even the highest
-// the divider can sit (always in the "top" zone), and a spot near the very
-// bottom is always below even the lowest the divider can sit (always in the
-// "bottom" zone) — no per-frame recomputation needed as the fence moves.
+// water bowls available for general animal use"), collapsed to ONE pair by
+// issue #47 now that there are no zones: a single high-capacity food+water
+// pair for the whole yard, keeping the "one fill satisfies every hungry
+// animal out there" behavior (KennelScene._autoResolveYardBowls).
+//
+// Parked down at the yard's bottom-left (where the old "bottom zone" pair
+// used to sit) rather than up top: animals are placed into the yard from the
+// TOP row down (KennelScene._openYardSpot's grid), and a bowl sitting inside
+// that first row would sit within interact range of the animals themselves,
+// making "fill the bowl" and "pick her up" fight over the same button press.
 export const YARD_BOWL_SPOTS = {
-  top: {
-    food:  { x: YARD_DIVIDER_X0 + 40, y: ROOM.y + 40 },
-    water: { x: YARD_DIVIDER_X0 + 70, y: ROOM.y + 40 },
-  },
-  bottom: {
-    food:  { x: YARD_DIVIDER_X0 + 40, y: ROOM.y + ROOM.h - 40 },
-    water: { x: YARD_DIVIDER_X0 + 70, y: ROOM.y + ROOM.h - 40 },
-  },
+  food:  { x: YARD_X0 + 40, y: ROOM.y + ROOM.h - 60 },
+  water: { x: YARD_X0 + 70, y: ROOM.y + ROOM.h - 60 },
 };
 
 // The reception computer (issue #10) — "the player has a computer... to send
@@ -185,10 +191,9 @@ export const TREAT_TRAY_SPOT = { x: OVEN_SPOT.x - 10, y: OVEN_SPOT.y - 19 };
 
 // Owner note 2026-07-29: "is there a way to initiate sleep for the player
 // character? there should be" — the player's own bed, on the opposite side
-// of the house room from the oven. Once every present animal is tucked in
-// for the night, interacting here is what actually starts the sleep
-// sequence (see KennelScene._checkAllTuckedIn/_beginSleep) — it no longer
-// happens automatically the instant the last blanket goes on.
+// of the house room from the oven. Once every pet is back home in her cage
+// for the night (issue #45), interacting here is what actually starts the
+// sleep sequence (see KennelScene._checkAllSettled/_beginSleep).
 export const BED_SPOT = { x: HOUSE_ROOM.x + HOUSE_ROOM.w * 0.18, y: HOUSE_ROOM.y + HOUSE_ROOM.h * 0.62 };
 // Solid bed obstacle — same idea as OVEN.
 export const BED = { x: BED_SPOT.x - 26, y: BED_SPOT.y - 30, w: 52, h: 36 };

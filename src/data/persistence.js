@@ -3,8 +3,10 @@
 // (animal instance, needs/timers, bowl stock, birth timer, companions/
 // babies/eggs, cage location/slot, carry kind, arrival/checkout day),
 // the returning-guest pool (so returning guests keep their identity/visit
-// count), the running earnings total, the clock's day/hour, and the yard
-// divider's current position.
+// count), the running earnings total, and the clock's day/hour. (Issue #47:
+// the yard divider's position used to be saved here too — the divider is
+// gone, so a save no longer carries one; an older save's stale field is
+// simply ignored.)
 //
 // Deliberately simple: no versioning/migration machinery ("a personal kid's
 // game", not a shipped product with real save compatibility needs) — if a
@@ -12,7 +14,7 @@
 // just returns null and the caller starts fresh rather than crashing.
 //
 // Pure data module, no Phaser — KennelScene assembles the plain snapshot
-// object from its own roster/economy/clock/yardDividerY and hands it to
+// object from its own roster/economy/clock and hands it to
 // saveGame(); on boot it calls loadGame() and, if non-null, uses it to
 // rehydrate those same pieces (see createRoster's `saved` param, createClock's
 // startDay/startHour, createEconomy's initialTotal).

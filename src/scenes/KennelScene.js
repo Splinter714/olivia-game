@@ -7,8 +7,8 @@ import {
 import {
   SCOOPER_SPOT, BOWL_SPOTS, WATER_BOWL_SPOTS, COMPUTER_SPOT,
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS, BED, BED_SPOT,
-  CAGES, LITTER_SPOTS, YARD_BOWL_SPOTS,
-  cageAnimalSpot, YARD_DIVIDER_DEFAULT_Y, YARD_DIVIDER_X0, YARD_DIVIDER_X1,
+  CAGES, LITTER_SPOTS, YARD_BOWL_SPOTS, YARD_RECT,
+  cageAnimalSpot,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
@@ -37,7 +37,6 @@ import {
   WATER_BOWL_KEY, WATER_BOWL_EMPTY_KEY,
   MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_FG_KEY, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY, BED_KEY,
-  YARD_DIVIDER_POST_KEY, YARD_DIVIDER_LINE_KEY,
 } from '../art/props.js';
 import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
@@ -81,6 +80,15 @@ const WAKE_FADE_MS = 500;
 const RESOLVE_FADE_MS = 700;
 const BAD_DREAM_MS = 2600; // flavor-only wake-up: no fix needed, just settles back down
 
+// Issue #45: animals and owner NPCs get around under their own power now —
+// an arriving owner walks her pet all the way out to the play yard, an
+// opened cage's occupant walks herself out (or over to her waiting owner),
+// and everyone walks back to her own cage at night. Both use the same
+// waypoint walker (_startWalk/_updateWalkers) over data/path.js's findPath,
+// so nobody ever walks through a wall. Animals amble; owners stride.
+const ANIMAL_WALK_SPEED = 82;  // px/s, world units
+const OWNER_WALK_SPEED = 150;  // px/s
+
 // Circle-vs-axis-aligned-rect overlap test, used by findPath's `collides` callback.
 function circleRectOverlap(cx, cy, r, rect) {
   const nx = Phaser.Math.Clamp(cx, rect.x, rect.x + rect.w);
@@ -100,8 +108,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   create() {
     applyDpr(this); // camera zoom = dpr; centred origin (startFollow needs it, see uiUtils.js)
 
-    // Issue #34: resume a saved game if one exists (roster/economy/clock/
-    // yard-divider state), instead of always starting fresh. loadGame()
+    // Issue #34: resume a saved game if one exists (roster/economy/clock
+    // state), instead of always starting fresh. loadGame()
     // never throws — a missing/corrupt save just comes back null and
     // everything below falls through to today's fresh-start behavior.
     // seedGlobalNameState re-registers every restored animal's name/id so a
@@ -125,12 +133,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     buildPropTextures(this);
     buildRaccoonTextures(this);
 
-    // ── Yard divider (issue #20) — one movable HORIZONTAL fence line
-    // splitting the outside yard into a top/bottom zone at its current y.
-    // Set before _buildProps() below, which places the divider sprite here. ──
-    this.yardDividerY = this._save?.yardDividerY ?? YARD_DIVIDER_DEFAULT_Y;
-    this.carryingDivider = false;
-    this._dividerVisual = null;
+    // (Issue #47: the movable yard divider is gone — the outside yard is one
+    // single undivided play area, YARD_RECT in data/props.js.)
 
     // ── Feeding / potty (issues #6, #7, #22 #6) — scooperRestPos must exist
     // before _buildProps() below, which draws the resting scooper sprite there. ──
@@ -174,8 +178,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.carrying = null;          // the stay currently in the player's hands, or null
     this._carryOrigin = null;      // where `carrying` was picked up from: 'reception' | sectionKey | LOCATION.YARD
     this._carryVisual = null;      // { parts: [{obj, dx, dy}, ...] } following the player while carrying
-    this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment she starts walking in until her pet is picked up (issue #25)
-    this._checkoutOwners = new Map();  // stay -> { sprite, arrived } — a waiting checkout owner (issue #36), from the moment she starts walking in until the player delivers her pet
+    this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment a delivering owner starts walking in until she's walked back out again (issue #25, reworked by #45)
+    this._checkoutOwners = new Map();  // stay -> { sprite, arrived } — a waiting checkout owner (issue #36), from the moment she starts walking in until her pet reaches her
+    // Issue #45: every sprite currently walking somewhere under its own
+    // power — animals AND owner NPCs, several at once (multiple opened
+    // cages, a whole yard heading home at nightfall), so this is a
+    // collection, not a single slot. See _startWalk/_updateWalkers.
+    this._walkers = [];
 
     // ── Night: tuck-in / staying awake / wake-ups (issue #11) ──────────────
     // Issue #34 regression fix: this has to exist BEFORE _refreshCageArt()
@@ -184,7 +193,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // one's tuck-in indicator.
     this.night = {
       active: false,       // true from NIGHT phase start until morning resumes
-      allTucked: false,    // fires the "Everyone's asleep!" transition once
+      allSettled: false,   // fires the "Everyone's asleep!" transition once (issue #45: every pet home in her cage)
       sleeping: false,     // mid fade-to-black / wake-up / fade-back sequence
       wakeUpsRemaining: 0,
       currentWake: null,   // { stay, reason } awaiting player resolution, or null
@@ -200,14 +209,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // any earlier than this — see _buildProps' own comment).
     this._refreshCageArt();
 
-    // (yardDividerY/carryingDivider/_dividerVisual and the scooper-rest state
-    // are set earlier, above _buildProps() — see that comment.)
-    this.messes = [];              // { kind: 'cat'|'dog', x, y, sprite, stay }
+    // (the scooper-rest state is set earlier, above _buildProps() — see that
+    // comment.)
+    this.messes = [];              // { kind: 'cat'|'dog', x, y, sprite, icon, stay }
     this._catLitterTimer = CAT_LITTER_INTERVAL();
     this._dogYardTimer = DOG_YARD_INTERVAL(); // issue #38
-    // Issue #32 follow-up: shared per-zone yard bowls (top/bottom) — high
-    // capacity, unlike a per-cage bowl (see _autoResolveYardBowls).
-    this.yardBowls = { top: createBowlState(), bottom: createBowlState() };
+    // Issue #32 follow-up, collapsed to ONE pair by issue #47 (no more yard
+    // zones): the whole yard shares a single high-capacity food/water pair,
+    // unlike a per-cage bowl (see _autoResolveYardBowls).
+    this.yardBowls = createBowlState();
     this._refreshYardBowls();
 
     // ── Births / computer announcements (issues #9, #10) ──────────────────
@@ -269,7 +279,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       economyTotal: this.economy.total,
       clockDay: this.clock.day,
       clockHourFloat: this.clock.hourFloat,
-      yardDividerY: this.yardDividerY,
     });
   }
 
@@ -290,7 +299,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // currently is, instead of the normal one-at-a-time arrival/dropoff flow
   // that builds sprites incrementally as things happen live. Mirrors the
   // exact position math each of those live call sites already uses
-  // (_placeAtReception, _sectionSlot, _dropOffToYard) so a resumed stay ends
+  // (_sectionSlot, _openYardSpot/_dropOffToYard) so a resumed stay ends
   // up in the same kind of spot a freshly-placed one would.
   //
   // `LOCATION.CARRYING` (mid-carry when the page was closed) has no
@@ -298,6 +307,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // kennel looks the same when you come back", not frame-accurate resume of
   // an in-progress pickup — so she's settled back wherever she last had a
   // real home: her cage if she had one (`cageSection`), reception otherwise.
+  //
+  // Issue #45: a stay caught mid-WALK (walking herself out to the yard, home
+  // to her cage at night, or over to her waiting owner) needs no special
+  // case here either, for the same reason — her saved `location` is always
+  // one of the two ends of that walk (see _openCage/_startWalkHome), so she
+  // simply settles at whichever end the save recorded.
   _restoreStaySprites() {
     const sectionKeys = new Set(SECTIONS.map((s) => s.key));
     for (const stay of this.roster.stays) {
@@ -308,7 +323,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     const { rug } = RECEPTION;
     let receptionIdx = 0;
-    const yardIdx = {};
+    let yardIdx = 0;
     for (const stay of this.roster.stays) {
       if (stay.location === LOCATION.RECEPTION) {
         const idx = receptionIdx++;
@@ -316,12 +331,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         const y = rug.y + 24 + Math.floor(idx / 3) * 42;
         this._renderStay(stay, x, y);
       } else if (stay.location === LOCATION.YARD) {
-        const zoneKey = stay.yardZone || 'top';
-        const idx = yardIdx[zoneKey] || 0;
-        yardIdx[zoneKey] = idx + 1;
-        const rect = this._yardZoneRect(zoneKey);
-        const pos = this._gridSlot(rect, idx, 20, 44, 52);
-        this._renderStay(stay, pos.x, pos.y, { yardBounds: rect });
+        const pos = this._gridSlot(YARD_RECT, yardIdx++, 20, 44, 52);
+        this._renderStay(stay, pos.x, pos.y);
       } else if (sectionKeys.has(stay.location)) {
         const section = SECTIONS.find((s) => s.key === stay.location);
         const pos = this._sectionSlot(section, stay);
@@ -356,7 +367,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       const owner = this.add.sprite(waitX, waitY, 'owner-npc').setOrigin(0.5, 1).setDepth(waitY);
       const tag = this._addNameTag(owner.x, owner.y - OWNER_W * 1.1, stay.animal.name);
       tag.container.setVisible(true).setDepth(9000);
-      this._checkoutOwners.set(stay, { sprite: owner, tag, arrived: true });
+      this._checkoutOwners.set(stay, { sprite: owner, tag, arrived: true, waitX, waitY });
     }
   }
 
@@ -435,8 +446,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   // Furniture added by issues #6/#7/#8/#13/#14/#18/#20 — turtle/snake tanks
   // with individual islands/perches per cage slot, litter box, scooper,
-  // per-cage bowls, the reception computer, the back wing (oven/storage
-  // dressing), and the yard divider. All positions come from data/props.js
+  // per-cage bowls, the yard's shared bowls, the reception computer and the
+  // back wing (oven/storage dressing). All positions come from data/props.js
   // so interaction code below reads the exact same rects.
   _buildProps() {
     // Per-cage litter boxes (issue: "each cat cage should have a small
@@ -487,28 +498,18 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // that first runs right after the roster is built (see create()'s own
     // comment).
 
-    // Issue #32 follow-up: the outside yard's shared food+water bowl pair per
-    // zone (top/bottom) — always present (not occupancy-gated like a cage
-    // bowl), starting empty. _refreshYardBowls (called once the roster
-    // exists) sets their real full/empty textures.
+    // Issue #32 follow-up, collapsed to ONE pair by issue #47: the outside
+    // yard's single shared food+water bowl pair — always present (not
+    // occupancy-gated like a cage bowl), starting empty. _refreshYardBowls
+    // (called once the roster exists) sets their real full/empty textures.
     this._yardBowlImgs = {
-      top: {
-        food: this.add.image(YARD_BOWL_SPOTS.top.food.x, YARD_BOWL_SPOTS.top.food.y, BOWL_EMPTY_KEY)
-          .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.top.food.y),
-        water: this.add.image(YARD_BOWL_SPOTS.top.water.x, YARD_BOWL_SPOTS.top.water.y, WATER_BOWL_EMPTY_KEY)
-          .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.top.water.y),
-      },
-      bottom: {
-        food: this.add.image(YARD_BOWL_SPOTS.bottom.food.x, YARD_BOWL_SPOTS.bottom.food.y, BOWL_EMPTY_KEY)
-          .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.bottom.food.y),
-        water: this.add.image(YARD_BOWL_SPOTS.bottom.water.x, YARD_BOWL_SPOTS.bottom.water.y, WATER_BOWL_EMPTY_KEY)
-          .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.bottom.water.y),
-      },
+      food: this.add.image(YARD_BOWL_SPOTS.food.x, YARD_BOWL_SPOTS.food.y, BOWL_EMPTY_KEY)
+        .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.food.y),
+      water: this.add.image(YARD_BOWL_SPOTS.water.x, YARD_BOWL_SPOTS.water.y, WATER_BOWL_EMPTY_KEY)
+        .setOrigin(0.5, 1).setDepth(YARD_BOWL_SPOTS.water.y),
     };
-    for (const zoneKey of ['top', 'bottom']) {
-      this._devRegistry.push({ name: `YARD_BOWL_SPOTS.${zoneKey}.food`, obj: this._yardBowlImgs[zoneKey].food });
-      this._devRegistry.push({ name: `YARD_BOWL_SPOTS.${zoneKey}.water`, obj: this._yardBowlImgs[zoneKey].water });
-    }
+    this._devRegistry.push({ name: 'YARD_BOWL_SPOTS.food', obj: this._yardBowlImgs.food });
+    this._devRegistry.push({ name: 'YARD_BOWL_SPOTS.water', obj: this._yardBowlImgs.water });
 
     // Reception computer (issue #10) — baby-announcement messages to owners.
     const computer = this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
@@ -561,17 +562,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this._devRegistry.push({ name: `STORAGE_PROPS.${i}`, obj: img });
     });
 
-    // Yard divider (issue #20) — a movable HORIZONTAL fence line + post
-    // splitting the outside yard into a top/bottom zone. Registered so its
-    // DEFAULT position (YARD_DIVIDER_DEFAULT_Y) can be tuned like anything
-    // else — the player can still pick it up and move it during normal play
-    // regardless (that's a keyboard-interact mechanic, not a pointer drag,
-    // so the two never conflict).
-    this.dividerLineImg = this.add.image(YARD_DIVIDER_X0, this.yardDividerY, YARD_DIVIDER_LINE_KEY)
-      .setOrigin(0, 0.5).setDepth(this.yardDividerY);
-    this.dividerPostImg = this.add.image((YARD_DIVIDER_X0 + YARD_DIVIDER_X1) / 2, this.yardDividerY, YARD_DIVIDER_POST_KEY)
-      .setOrigin(0.5, 0.5).setDepth(this.yardDividerY + 0.1);
-    this._devRegistry.push({ name: 'YARD_DIVIDER_DEFAULT_Y', obj: this.dividerPostImg });
+    // (Issue #47: the movable yard divider's fence line + post used to be
+    // built here — the yard is one single undivided area now.)
   }
 
   // Dev tool (src/dev/dragTool.js): the ONE place that turns `_devRegistry`
@@ -930,29 +922,31 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._runOwnerDropOff(stay);
   }
 
-  // Issue #21: a new arrival isn't just placed at reception out of thin air —
-  // a simple owner NPC walks her in through the front door, carrying/leading
-  // her (leash/carrier/box/basket, or just holding her for a CARRY_KIND.NONE
-  // species), sets her down at reception, then walks back out and despawns.
-  // The NOTIFY (and the real reception render) fire once she's actually
-  // there, same timing the old instant-placement had — just after a short
-  // walk instead of immediately.
+  // Issue #21, reworked by issue #45 (owner: "when animals arrive with their
+  // owners, they go immediately to the play pen, their owner takes them
+  // there"): a simple owner NPC walks in through the front door carrying/
+  // leading her pet (leash/carrier/box/basket, or just holding her for a
+  // CARRY_KIND.NONE species), walks her all the way out to the play yard,
+  // sets her down there, then walks back out the front door and despawns.
+  //
+  // Nobody lingers at reception to be collected anymore. The pet plays out
+  // in the yard until the PLAYER carries her in to a specific cage — that
+  // carry is unchanged, and it's still what gives her a cage, a nameplate
+  // and bowls of her own ("player still carries her in", owner's answer on
+  // the issue).
   _runOwnerDropOff(stay) {
     const doorX = (FRONT_DOOR.x0 + FRONT_DOOR.x1) / 2;
     const doorY = ROOM.y + ROOM.h - WALL - 2;
-    const { rug } = RECEPTION;
-    const deskX = rug.x + rug.w / 2;
-    const deskY = rug.y + rug.h * 0.3;
 
     const owner = this.add.sprite(doorX, doorY, 'owner-npc').setOrigin(0.5, 1).setDepth(doorY);
-    // Issue #25: reserve her waiting-owner slot the instant she starts
-    // walking in — see the cap check in _spawnArrival — not just once she's
-    // actually placed at reception.
+    // Issue #25: reserve her delivering-owner slot the instant she starts
+    // walking in — see the cap check in _spawnArrival — held until she's
+    // handed the pet over and started walking back out.
     this._lingeringOwners.set(stay, owner);
 
-    // She visibly carries the container/animal in with her — the same prop
-    // that will sit at reception once she sets it down, so the hand-off
-    // reads as continuous rather than the pet just popping into existence.
+    // She visibly carries the container/animal the whole way, so the
+    // hand-off reads as continuous rather than the pet popping into
+    // existence out in the grass.
     let carryProp;
     if (stay.carryKind !== CARRY_KIND.NONE) {
       carryProp = this.add.image(owner.x, owner.y, CARRY_KEY[stay.carryKind])
@@ -967,78 +961,260 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     };
     followOwner();
 
-    this.tweens.add({
-      targets: owner, x: deskX, y: deskY, duration: 1500, ease: 'Sine.easeInOut',
-      onUpdate: () => { owner.setDepth(owner.y); followOwner(); },
-      onComplete: () => {
+    const spot = this._openYardSpot(stay);
+    this._startWalk(owner, spot.x, spot.y, {
+      speed: OWNER_WALK_SPEED,
+      onStep: followOwner,
+      onArrive: () => {
         carryProp.destroy();
-        this._placeAtReception(stay);
+        // Same "she's out of the box and settled now" beat a cage drop-off
+        // used to get (issue #21), played right where she's set down.
+        if (stay.carryKind !== CARRY_KIND.NONE) this._playUnboxing(spot.x, spot.y, stay.carryKind);
+        stay.location = LOCATION.YARD;
+        this._renderStay(stay, spot.x, spot.y);
         this._syncTieBreakers(); // a new guest may now match someone already here
-        this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived!`);
-
-        // Issue #25: she no longer walks straight back out — she lingers
-        // beside her pet (positioned in _placeAtReception) until the player
-        // picks the pet up; see _pickUp / _walkOwnerOut for the walk-out.
+        this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived — she's out playing in the yard!`);
+        this._walkOwnerOut(stay);
       },
     });
   }
 
-  _placeAtReception(stay) {
-    // Count only ALREADY-RENDERED reception stays (i.e. she has a sprite in
-    // _staySprites), not every stay whose `location` merely reads RECEPTION —
-    // roster.js sets that the instant a stay is created, well before her
-    // owner's ~1.5s walk-in animation finishes and _placeAtReception actually
-    // runs for her. Without this, two arrivals spawned back-to-back (the
-    // "occasionally two" roll in _onHourChange) each counted the OTHER
-    // still-mid-walk stay as "already waiting" and computed the identical
-    // grid slot, landing both pets on top of each other.
-    const waiting = this.roster.stays.filter((s) => s !== stay && s.location === LOCATION.RECEPTION && this._staySprites.has(s)).length;
-    const { rug } = RECEPTION;
-    const x = rug.x + 30 + (waiting % 3) * 55;
-    const y = rug.y + 24 + Math.floor(waiting / 3) * 42;
-    this._renderStay(stay, x, y);
-    this._settleLingeringOwner(stay, x, y);
+  // The next free placement spot in the single play yard (issue #47 — one
+  // undivided area now), laid out as a simple grid so simultaneous
+  // occupants don't stack. A pet still being walked out by her owner
+  // (`_lingeringOwners`) counts as already out there even though her
+  // `location` still reads RECEPTION, so two arrivals mid-delivery at the
+  // same time can't be handed the identical spot.
+  _openYardSpot(stay = null) {
+    const already = this.roster.stays.filter((s) => s !== stay
+      && (s.location === LOCATION.YARD || this._lingeringOwners.has(s))).length;
+    return this._gridSlot(YARD_RECT, already, 20, 44, 52);
   }
 
-  // Issue #25: once her pet is placed in its reception grid slot, move her
-  // lingering owner NPC to stand just behind/beside it (smaller y = further
-  // back, since depth here tracks y) — offset from the same grid slot so
-  // multiple simultaneously-waiting owner+pet pairs don't overlap each other.
-  _settleLingeringOwner(stay, petX, petY) {
-    const owner = this._lingeringOwners.get(stay);
-    if (!owner) return;
-    const x = petX + 18;
-    const y = petY - 30;
-    this.tweens.add({
-      targets: owner, x, y, duration: 300, ease: 'Sine.easeOut',
-      onUpdate: () => owner.setDepth(owner.y),
-    });
-  }
-
-  // Issue #25: fires when the player finally picks up a stay that had been
-  // waiting at reception — her owner, who's been lingering beside her, walks
-  // back out through the front door and despawns (same tween/easing/depth
-  // the old immediate walk-out used).
+  // Issue #25/#45: her delivering owner walks back out through the front
+  // door from wherever she is (the yard, now) and despawns.
   _walkOwnerOut(stay) {
     const owner = this._lingeringOwners.get(stay);
     if (!owner) return;
     this._lingeringOwners.delete(stay);
     const doorX = (FRONT_DOOR.x0 + FRONT_DOOR.x1) / 2;
     const doorY = ROOM.y + ROOM.h - WALL - 2;
-    this.tweens.add({
-      targets: owner, x: doorX, y: doorY, duration: 1500, ease: 'Sine.easeInOut',
-      onUpdate: () => owner.setDepth(owner.y),
-      onComplete: () => owner.destroy(),
+    this._startWalk(owner, doorX, doorY, {
+      speed: OWNER_WALK_SPEED,
+      onArrive: () => owner.destroy(),
     });
+  }
+
+  // ── Walking under their own power (issue #45) ────────────────────────────
+  // One tiny waypoint-follower shared by owner NPCs and animals alike:
+  // data/path.js's findPath routes around the building's walls/furniture
+  // (the same `collides` list the player's own tap-to-move uses), then the
+  // sprite is stepped along those waypoints each frame. Several walks can be
+  // in flight at once — a couple of opened cages, a whole yard heading home
+  // at nightfall — so this is a list, not a single slot.
+
+  _startWalk(sprite, tx, ty, opts = {}) {
+    const { speed = ANIMAL_WALK_SPEED, stay = null, onStep = null, onArrive = null } = opts;
+    const path = findPath(sprite.x, sprite.y, tx, ty, {
+      minX: 0, minY: 0, maxX: WORLD.w, maxY: WORLD.h,
+      collides: this._collides, cell: 20, clearance: 9, planMargin: 5,
+    }) || [{ x: tx, y: ty }]; // unreachable (shouldn't happen) — go straight there
+    const walk = { sprite, path, speed, stay, onStep, onArrive };
+    this._walkers.push(walk);
+    return walk;
+  }
+
+  _isWalking(stay) {
+    return this._walkers.some((w) => w.stay === stay);
+  }
+
+  _updateWalkers(delta) {
+    if (!this._walkers.length) return;
+    const step = delta / 1000;
+    for (const walk of [...this._walkers]) {
+      const { sprite } = walk;
+      if (!sprite.active) { // destroyed mid-walk (checkout, reset) — drop it
+        this._walkers = this._walkers.filter((w) => w !== walk);
+        continue;
+      }
+      let budget = walk.speed * step;
+      while (budget > 0 && walk.path.length) {
+        const wp = walk.path[0];
+        const d = Phaser.Math.Distance.Between(sprite.x, sprite.y, wp.x, wp.y);
+        if (d <= budget || d < 0.001) {
+          sprite.setPosition(wp.x, wp.y);
+          budget -= d;
+          walk.path.shift();
+        } else {
+          sprite.x += ((wp.x - sprite.x) / d) * budget;
+          sprite.y += ((wp.y - sprite.y) / d) * budget;
+          budget = 0;
+        }
+      }
+      sprite.setDepth(sprite.y);
+      walk.onStep?.();
+      if (!walk.path.length) {
+        this._walkers = this._walkers.filter((w) => w !== walk);
+        walk.onArrive?.();
+      }
+    }
+  }
+
+  // Swaps an animal sprite between its idle and walk animation (art/animals.js
+  // builds both per look) — the same trick the old leash-walk follow visual
+  // used, so a self-walking pet actually reads as walking.
+  _setAnimalMoving(sprite, moving) {
+    const cur = sprite.anims?.currentAnim?.key;
+    if (!cur) return;
+    const base = cur.replace(/_(idle|walk)$/, '');
+    const want = `${base}_${moving ? 'walk' : 'idle'}`;
+    if (cur !== want && this.anims.exists(want)) sprite.play(want);
+  }
+
+  // Mom and every baby travelling with her switch together.
+  _setStayMoving(rec, moving) {
+    rec.walking = moving;
+    this._setAnimalMoving(rec.sprite, moving);
+    for (const baby of rec.babies) this._setAnimalMoving(baby.sprite, moving);
+  }
+
+  // Issue #45 (owner: "when an animal is ready to leave, the player just
+  // presses a button to open the cage, and the pet goes to their waiting
+  // owner on its own" / "if a dog needs to go potty, or for ANY animal
+  // who's owner isn't waiting to pick them up — if you open their cage,
+  // they go outside on their own to play"): ONE interaction at an occupied
+  // cage, replacing BOTH carrying a pet out for play and carrying a
+  // checkout-ready pet over to her owner.
+  _openCage(stay) {
+    const rec = this._staySprites.get(stay);
+    if (!rec || this._isWalking(stay)) return;
+    // She's up and about — out from under her blanket (issue #46).
+    this._untuck(stay);
+    // Someone's out of her cage again, so the kennel isn't all settled for
+    // the night anymore — the "head to bed" go-ahead re-arms once she's back.
+    this.night.allSettled = false;
+
+    const checkout = this._checkoutOwners.get(stay);
+    if (stay.checkoutReady && checkout) {
+      this._setStayMoving(rec, true);
+      this._startWalk(rec.sprite, checkout.waitX, checkout.waitY + 14, {
+        stay,
+        onArrive: () => {
+          this._stopStayMoving(stay);
+          // Her owner is still there in every normal case; if she somehow
+          // isn't, the pet just goes out to play rather than getting stuck.
+          if (this._checkoutOwners.has(stay)) this._completeCheckout(stay);
+          else this._settleInYard(stay);
+        },
+      });
+      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} is walking over to her owner!`);
+      return;
+    }
+
+    // Nobody waiting for her — she lets herself out to the play yard. Her
+    // cage stays hers the whole time (belongsToSection already treats a
+    // yard trip as still occupying the slot), so the nameplate, bowls and
+    // blanket all stay put in it.
+    const spot = this._openYardSpot(stay);
+    stay.location = LOCATION.YARD;
+    this._setStayMoving(rec, true);
+    this._startWalk(rec.sprite, spot.x, spot.y, {
+      stay,
+      onArrive: () => {
+        this._stopStayMoving(stay);
+        this._settleInYard(stay);
+      },
+    });
+  }
+
+  // Looked up fresh rather than closed over: a walk can outlive the sprite
+  // record it started with (a redraw mid-journey re-creates it — see the
+  // walk re-attach at the end of _renderStay).
+  _stopStayMoving(stay) {
+    const rec = this._staySprites.get(stay);
+    if (rec) this._setStayMoving(rec, false);
+  }
+
+  // Issue #45 #6 ("pets walk go back into their cages at night from the play
+  // area on their own") — a real walk home, not the instant teleport the old
+  // _recallYardToCages did.
+  _startWalkHome(stay) {
+    const rec = this._staySprites.get(stay);
+    if (!rec || this._isWalking(stay)) return;
+    let sectionKey = stay.cageSection;
+    let slot = stay.cageSlot;
+    // Confirmed edge case (issue #45): a pet who's been playing out in the
+    // yard since her owner dropped her off, and was never carried in to a
+    // cage, has no home to walk to — she picks any open cage herself rather
+    // than being stranded outside all night.
+    if (slot == null || !CAGES[sectionKey]?.[slot]) {
+      const open = this._findAnyOpenCage();
+      if (!open) {
+        // Genuinely nowhere to put her (shouldn't happen — arrivals stop
+        // once every cage is spoken for). She stays out; _checkAllSettled
+        // ignores her so bedtime can't deadlock on it.
+        stay.noCageAvailable = true;
+        return;
+      }
+      sectionKey = open.key;
+      slot = open.slot;
+    }
+    stay.noCageAvailable = false;
+    stay.cageSection = sectionKey;
+    stay.cageSlot = slot;
+    this._refreshCageArt(); // a newly-claimed cage reads as hers right away
+
+    const spot = cageAnimalSpot(CAGES[sectionKey][slot]);
+    this._setStayMoving(rec, true);
+    this._startWalk(rec.sprite, spot.x, spot.y, {
+      stay,
+      onArrive: () => {
+        this._stopStayMoving(stay);
+        this._settleInCage(stay, sectionKey, slot);
+      },
+    });
+  }
+
+  // Arrival end of a walk: she's standing where she was headed, so re-render
+  // her there. A full re-render (rather than nudging the existing sprites) is
+  // what re-derives everything positional in one place — cage-anchored
+  // nameplate vs. floating one, wander bounds, her blanket's day/night
+  // placement — with no chance of the two paths drifting apart.
+  _settleInCage(stay, sectionKey, slot) {
+    stay.location = sectionKey;
+    stay.cageSection = sectionKey;
+    stay.cageSlot = slot;
+    const spot = cageAnimalSpot(CAGES[sectionKey][slot]);
+    this._refreshCageArt();
+    this._renderStay(stay, spot.x, spot.y);
+    // Issue #46: home at night means straight under the blanket.
+    if (this.night.active) this._tuckIn(stay);
+  }
+
+  _settleInYard(stay) {
+    stay.location = LOCATION.YARD;
+    const rec = this._staySprites.get(stay);
+    this._renderStay(stay, rec ? rec.sprite.x : YARD_RECT.x, rec ? rec.sprite.y : YARD_RECT.y);
+  }
+
+  // First open cage slot anywhere in the kennel, or null if every one is
+  // taken — the self-assign fallback for a yard pet with no cage of her own.
+  _findAnyOpenCage() {
+    for (const key of Object.keys(CAGES)) {
+      for (let slot = 0; slot < CAGES[key].length; slot++) {
+        if (isCageSlotOpen(this.roster.stays, key, slot)) return { key, slot };
+      }
+    }
+    return null;
   }
 
   // Issue #36 ("owners should actually walk in to pick them up", and no
   // checkouts overnight): a due stay is just FLAGGED ready here — she stays
   // right where she is, in her cage, with a small "ready to go home" icon —
   // and an owner NPC walks in and waits at reception, same convention as an
-  // arriving owner. The actual checkout only happens once the player picks
-  // her up and carries her over to that waiting owner (_checkDropoff /
-  // _completeCheckout below).
+  // arriving owner. The actual checkout only happens once she reaches that
+  // waiting owner — issue #45: the player opens her cage and she walks over
+  // herself (_openCage / _completeCheckout below).
   _flagCheckoutsReady(day) {
     // Owner note 2026-07-29: "don't have SO many owners come to pick-up at
     // once" — cap simultaneous waiting checkout owners, same convention as
@@ -1072,7 +1248,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // which owner goes with which cage/pet.
     const tag = this._addNameTag(owner.x, owner.y - OWNER_W * 1.1, stay.animal.name);
     tag.container.setVisible(true).setDepth(9000);
-    const rec = { sprite: owner, tag, arrived: false };
+    // waitX/waitY is where she'll be standing — issue #45's opened-cage walk
+    // targets that fixed spot rather than her live position mid-walk-in.
+    const rec = { sprite: owner, tag, arrived: false, waitX, waitY };
     this._checkoutOwners.set(stay, rec);
 
     this.tweens.add({
@@ -1088,18 +1266,23 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     });
   }
 
-  // Fires once the player has actually carried a checkout-ready stay over to
-  // her waiting owner (see _checkDropoff) — hands her off (the carried
-  // sprite simply disappears, same "carryProp.destroy()" beat _runOwnerDropOff
-  // uses in reverse), walks the owner back out with her, and finalizes the
-  // roster-side bookkeeping/payout exactly like the old instant checkout did.
+  // Fires once the checkout-ready stay has actually reached her waiting
+  // owner — normally by walking there herself the moment the player opens
+  // her cage (issue #45's `_openCage`), or by being carried over from the
+  // yard (_checkDropoff's fallback). Either way she's handed off (her
+  // sprites simply disappear, the same "carryProp.destroy()" beat
+  // _runOwnerDropOff uses in reverse), the owner walks back out with her,
+  // and the roster-side bookkeeping/payout runs exactly as before.
   _completeCheckout(stay) {
     const rec = this._checkoutOwners.get(stay);
     this._checkoutOwners.delete(stay);
     this._setNeedIcon(stay, 'checkout', false);
+    // She walked over on her own two feet: her own sprites are what needs
+    // clearing. (When she was carried instead, it's the carry visual.)
+    this._destroyStaySprites(stay);
     this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
     this._carryVisual = null;
-    this.carrying = null;
+    if (this.carrying === stay) this.carrying = null;
 
     if (rec) {
       rec.tag?.container.destroy(); // the pet's gone now — no more name to show
@@ -1252,13 +1435,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       sprite = this._addAnimalSprite(x, y, animal, animal.stage, tb);
       containerExtras = [];
     }
-    // Issue #22 #3: scale family spacing to the actual cage/island/yard-zone
+    // Issue #22 #3: scale family spacing to the actual cage/island/yard
     // size available, so a family "reads as together but with breathing
     // room" without spilling out of a small individual cage. `spread` is a
-    // multiplier around a ~90px baseline cage width; opts.yardBounds covers
-    // the yard-play case (no cage lookup, but still bounded). This one stays
-    // keyed off stay.location on purpose — it's about where she's ACTUALLY
-    // physically standing right now (a cage, or a yard zone), for wander/
+    // multiplier around a ~90px baseline cage width. This one stays keyed
+    // off stay.location on purpose — it's about where she's ACTUALLY
+    // physically standing right now (a cage, or the yard), for wander/
     // spread bounds.
     const cage = CAGES[stay.location]?.[stay.cageSlot];
 
@@ -1286,12 +1468,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const tag = cageNameAnchor
       ? this._addNameTag(cageNameAnchor.x, cageNameAnchor.y, animal.name)
       : this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
-    // A yard-placed stay can be redrawn (tie-breaker sync, a birth landing,
-    // the computer flow) without going through _dropOffToYard again — derive
-    // her zone rect from stay.yardZone whenever opts.yardBounds isn't passed,
-    // so she doesn't silently lose her wander/spread bounds on a redraw.
-    const yardBounds = stay.location === LOCATION.YARD ? (opts.yardBounds || this._yardZoneRect(stay.yardZone || 'top')) : null;
-    const bounds = cage || yardBounds || null;
+    // Issue #47: one single undivided yard, so a yard-placed stay's bounds
+    // are simply the whole play area — no per-zone lookup to lose track of
+    // on a redraw (tie-breaker sync, a birth landing, the computer flow).
+    const bounds = cage || (stay.location === LOCATION.YARD ? YARD_RECT : null);
     const spread = Math.min(1.7, Math.max(0.9, (bounds?.w ?? 90) / 90));
 
     // Turtle/snake/bird eggs/babies sit tucked close to mom on her own
@@ -1299,12 +1479,19 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // tighter spacing than the wider spread used for cat/dog companions.
     const sharesHome = animal.species === 'turtle' || animal.species === 'snake' || animal.species === 'bird' || animal.species === 'dragon';
     const extras = [...containerExtras];
-    const babyLabels = [];
+    // Issue #48: everything that belongs to the ANIMAL rather than to her
+    // cage — her eggs, her little gold upgrade sparkles, an arrival's carry
+    // container — rides along at a fixed offset from her sprite, so it
+    // follows her while she wanders (and while she walks herself somewhere,
+    // issue #45) instead of being left behind at her original placement.
+    const followers = containerExtras.map((obj) => ({ obj, dx: obj.x - x, dy: obj.y - y, dz: obj.depth - y }));
     let cx = x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);
     if (animal.hasEggs) {
       for (let i = 0; i < animal.eggCount; i++) {
         const jitterY = (Math.random() - 0.5) * (sharesHome ? 10 : 14) * spread;
-        extras.push(this.add.image(cx, y - 1 + jitterY, EGG_KEY).setOrigin(0.5, 1).setDepth(y - 1));
+        const egg = this.add.image(cx, y - 1 + jitterY, EGG_KEY).setOrigin(0.5, 1).setDepth(y - 1);
+        extras.push(egg);
+        followers.push({ obj: egg, dx: cx - x, dy: -1 + jitterY, dz: -1 });
         cx += (sharesHome ? 10 : 16) * spread;
       }
     }
@@ -1313,6 +1500,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // another animal currently in the kennel gets a coloured collar — and an
     // ID tattoo once the collars run out — drawn straight into their art by
     // the tie-breaker resolution above (data/distinguish.js).
+    //
+    // Issue #48 bug 2 ("we need to get babies to wander also, not just
+    // adults"): each baby keeps a BASE OFFSET from mom, and drifts gently
+    // around that offset on her own little timer (see _updateWander /
+    // _updateStayVisuals). Because every position is expressed relative to
+    // mom, the babies automatically stay with her when she wanders — or
+    // walks across the whole kennel — and their distinct base offsets are
+    // what keeps them from piling onto her or onto each other.
+    const babies = [];
+    const babyLabels = [];
     const babySprites = [];
     for (const baby of stay.companions) {
       const jitterY = (sharesHome ? (Math.random() - 0.5) * 10 : (Math.random() - 0.5) * 8) * spread;
@@ -1320,9 +1517,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       extras.push(babySprite);
       babySprites.push(babySprite);
 
-      // Tiny label under each baby — "???" until the owner names it via the
+      // Tiny label under each baby — "???" until the owner named it via the
       // reception computer (issue #10), then its real name. Proximity-gated
-      // like every other name tag (issue #22 #2).
+      // like every other name tag (issue #22 #2), and it follows its baby
+      // around now (issue #48).
       const label = this.add.text(cx, y + jitterY + 2, baby.name || BABY_PLACEHOLDER, {
         fontFamily: 'system-ui, sans-serif',
         fontSize: '8px',
@@ -1334,6 +1532,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       extras.push(label);
       babyLabels.push(label);
 
+      const bx = cx - x, by = jitterY;
+      babies.push({ sprite: babySprite, label, bx, by, ox: bx, oy: by, tx: bx, ty: by, t: pickWanderInterval(baby.species) });
+
       cx += (sharesHome ? 13 : 20) * spread;
     }
 
@@ -1343,19 +1544,29 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // egg/baby companions to the right — a returning regular visibly has a
     // little more "stuff" each time she's back (DESIGN.md).
     (animal.upgrades || []).forEach((_kind, i) => {
-      const sx = x - sprite.displayWidth * 0.55 - 4;
-      const sy = y - sprite.displayHeight * 0.35 - i * 11;
-      extras.push(this.add.image(sx, sy, UPGRADE_KEY).setOrigin(0.5, 0.5).setDepth(y + 0.1));
+      const dx = -sprite.displayWidth * 0.55 - 4;
+      const dy = -sprite.displayHeight * 0.35 - i * 11;
+      const star = this.add.image(x + dx, y + dy, UPGRADE_KEY).setOrigin(0.5, 0.5).setDepth(y + 0.1);
+      extras.push(star);
+      followers.push({ obj: star, dx, dy, dz: 0.1 });
     });
 
-    // Issue #22 #4: a small periodic wander target within the cage/island
-    // (or yard zone, while out playing) — reception/carrying stays get no
-    // bounds, so they simply don't wander.
+    // Issue #22 #4: a small periodic wander target within her cage/the yard —
+    // reception/carrying stays get no bounds, so they simply don't wander.
+    // In a cage she drifts around the middle of it, exactly as before. Out in
+    // the yard she drifts around HER OWN placement spot instead (issue #47):
+    // it's one big undivided area now, and a shared center-of-bounds anchor
+    // would slowly gather everyone out there into a single heap.
     const wanderBounds = bounds ? { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h } : null;
+    const wanderAnchor = cage
+      ? { x: cage.x + cage.w / 2, y: cage.y + cage.h / 2 }
+      : (wanderBounds ? { x, y } : null);
 
     const rec = {
-      pos: { x, y }, sprite, tag, extras, babyLabels, babySprites, needIcons: {}, blanket: null,
-      wanderBounds, wander: null, cageAnchored: !!cageNameAnchor,
+      pos: { x, y }, sprite, tag, extras, followers, babies, babyLabels, babySprites,
+      needIcons: {}, blanket: null, walking: false,
+      wanderBounds, wanderAnchor, wander: null,
+      cageAnchored: !!cageNameAnchor,
       // What this render assumed about tie-breakers, so _syncTieBreakers can
       // tell when an arrival/checkout has changed who needs a collar.
       lookSig: this._lookSignature(stay, tb),
@@ -1366,11 +1577,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     for (const key of Object.keys(stay.needs || {})) {
       if (stay.needs[key]) this._setNeedIcon(stay, key, true);
     }
-    // Night tuck-in (issue #11) survives a redraw the same way: restore the
-    // blanket if she's already tucked in, otherwise the "needs tucking" icon
-    // if it's night and she isn't.
-    if (stay.tuckedIn) this._setBlanket(stay, true);
-    else if (this.night.active) this._setNeedIcon(stay, 'tuck', true);
+    // Issue #46: her cage's blanket survives a redraw the same way — folded
+    // in the cage by day, draped over her once she's under it at night.
+    this._refreshBlanket(stay);
     // Issue #9 refinement: a mom flagged "ready, needs your help" keeps her
     // heart icon across a redraw too.
     if (stay.birthReady) this._setNeedIcon(stay, 'babies', true);
@@ -1380,6 +1589,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Issue #37: a mom with new babies/hatchlings not yet photographed keeps
     // her "take a picture" camera icon across a redraw too.
     if (stay.needsAnnouncement && !stay.photoTaken) this._setNeedIcon(stay, 'photo', true);
+
+    // Issue #45: a redraw can land mid-WALK (a tie-breaker sync when someone
+    // new arrives, a birth completing) — hand her in-flight walk the fresh
+    // sprite so she carries on to where she was going, instead of being
+    // stranded halfway with a destroyed one.
+    const walk = this._walkers.find((w) => w.stay === stay);
+    if (walk) {
+      walk.sprite = sprite;
+      this._setStayMoving(rec, true);
+    }
   }
 
   _destroyStaySprites(stay) {
@@ -1424,43 +1643,93 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // (issue #22 #2), since those float in open space rather than being
   // mounted on fixed furniture. Baby under-labels stay proximity-gated
   // either way — they're a separate small detail, not the door nameplate.
+  // Proximity is measured against where she actually IS (her live sprite),
+  // not her original placement — issue #48.
   _updateNameTagVisibility() {
     const px = this.player.x, py = this.player.y;
     for (const rec of this._staySprites.values()) {
-      const within = rec.cageAnchored
-        || Phaser.Math.Distance.Between(px, py, rec.pos.x, rec.pos.y) <= NAME_TAG_RADIUS;
-      rec.tag.container.setVisible(within);
-      const babiesWithin = Phaser.Math.Distance.Between(px, py, rec.pos.x, rec.pos.y) <= NAME_TAG_RADIUS;
-      for (const label of rec.babyLabels) label.setVisible(babiesWithin);
+      const near = Phaser.Math.Distance.Between(px, py, rec.sprite.x, rec.sprite.y) <= NAME_TAG_RADIUS;
+      rec.tag.container.setVisible(rec.cageAnchored || near);
+      for (const label of rec.babyLabels) label.setVisible(near);
     }
   }
 
-  // Small floating icon above a stay's name tag showing it needs food/water/
-  // a bathroom trip — added/removed as the need flips, not recreated per frame.
+  // Small floating icon showing a stay needs food/water/a bathroom trip —
+  // added/removed as the need flips, not recreated per frame. Its actual
+  // position is (re)laid out every frame by _updateStayVisuals, since the
+  // bubbles belong to the ANIMAL and have to follow her around (issue #48).
   _setNeedIcon(stay, key, show) {
     const rec = this._staySprites.get(stay);
     if (!rec) return;
     if (show) {
       if (rec.needIcons[key]) return;
-      const already = Object.keys(rec.needIcons).length;
-      const x = rec.pos.x - 10 + already * 16;
-      const y = rec.tag.container.y - 2;
-      rec.needIcons[key] = this.add.image(x, y, NEED_KEY[key]).setOrigin(0.5, 1).setDepth(9002);
+      rec.needIcons[key] = this.add.image(rec.sprite.x, rec.sprite.y, NEED_KEY[key]).setOrigin(0.5, 1).setDepth(9002);
+      this._layOutNeedIcons(rec);
     } else if (rec.needIcons[key]) {
       rec.needIcons[key].destroy();
       delete rec.needIcons[key];
+      this._layOutNeedIcons(rec);
     }
   }
 
-  // ── Carrying (issue #5, extended by issue #20) ───────────────────────────
-  // Press interact near a waiting reception arrival to pick it up (the carry
-  // prop — leash/cage/box/basket, or the bare animal for the small pets —
-  // then follows the player), OR near any settled/yard animal to pick her up
-  // for play (always carried bare — this is a casual take-out, not the
-  // formal arrival). Where she can be dropped off depends on where she was
-  // picked up from (_carryOrigin): a reception pickup drops into her section
-  // (cage assignment, as before); a cage pickup can only be dropped in the
-  // yard; a yard pickup can only be dropped back into her section.
+  // Issue #48 bug 1 (owner: "the 'needs' for animals don't follow the
+  // animal, especially in the play yard that's weird"): the bubbles sit in a
+  // little row just above her head, wherever her head currently is. NOT the
+  // same treatment as her cage nameplate, which is deliberately bolted to
+  // the cage door (issues #39/#42) and must stay there even while she's out.
+  _layOutNeedIcons(rec) {
+    const keys = Object.keys(rec.needIcons);
+    const s = rec.sprite;
+    keys.forEach((key, i) => {
+      rec.needIcons[key].setPosition(
+        s.x - (keys.length - 1) * 8 + i * 16,
+        s.y - s.displayHeight - 6,
+      );
+    });
+  }
+
+  // Every frame: keep everything that belongs to an animal pinned to that
+  // animal — her need bubbles, her floating name tag (when she has one), her
+  // eggs/upgrade sparkles, and her babies (who do their own gentle drifting
+  // around her, see _updateWander). Cheap: a handful of stays, a couple of
+  // objects each.
+  _updateStayVisuals() {
+    for (const rec of this._staySprites.values()) {
+      const s = rec.sprite;
+      // Her placement anchor tracks her, so any redraw (tie-breaker sync, a
+      // birth landing) happens where she's actually standing.
+      rec.pos.x = s.x;
+      rec.pos.y = s.y;
+      for (const f of rec.followers) {
+        f.obj.setPosition(s.x + f.dx, s.y + f.dy).setDepth(s.y + f.dz);
+      }
+      for (const baby of rec.babies) {
+        baby.ox += (baby.tx - baby.ox) * 0.04;
+        baby.oy += (baby.ty - baby.oy) * 0.04;
+        let bx = s.x + baby.ox, by = s.y + baby.oy;
+        const b = rec.wanderBounds;
+        if (b) {
+          bx = Phaser.Math.Clamp(bx, b.x + 4, b.x + b.w - 4);
+          by = Phaser.Math.Clamp(by, b.y + 4, b.y + b.h - 4);
+        }
+        baby.sprite.setPosition(bx, by).setDepth(by + 0.2);
+        baby.label.setPosition(bx, by + 2).setDepth(by + 0.3);
+      }
+      this._layOutNeedIcons(rec);
+      if (!rec.cageAnchored) {
+        rec.tag.container.setPosition(s.x, s.y - s.displayHeight - 6 - rec.tag.height);
+      }
+    }
+  }
+
+  // ── Carrying (issue #5, extended by issue #20, narrowed by issue #45) ────
+  // Carrying is now specifically how a pet gets a CAGE: press interact near
+  // an animal out in the play yard to pick her up (always carried bare) and
+  // carry her in to any open cage, which is what gives her a nameplate and
+  // bowls of her own. Taking a settled pet OUT is no longer a carry at all —
+  // you open her cage and she walks out herself (_openCage, issue #45).
+  // (A reception pickup is still supported for a stay restored from an
+  // older save that was left waiting at the desk.)
 
   _pickUp(stay) {
     this._carryOrigin = stay.location;
@@ -1526,6 +1795,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // waiting owner (once actually arrived at reception) and interacting
     // completes the checkout. She can't be placed in a cage or the yard
     // while in this state.
+    //
+    // Issue #45 moved the NORMAL checkout hand-off to "open her cage and she
+    // walks over herself" — this branch survives as the fallback for the one
+    // case that can't use it: she was already out in the yard (so there's no
+    // cage to open) when her checkout came due.
     if (stay.checkoutReady) {
       const rec = this._checkoutOwners.get(stay);
       if (rec?.arrived && interactPressed) {
@@ -1619,14 +1893,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.carrying = null;
     stay.location = section.key;
     // A late dropoff during the night (rare — only if the player was still
-    // mid-carry when night fell) still needs tucking in, same as everyone
-    // else (issue #11).
-    if (this.night.active) stay.tuckedIn = stay.tuckedIn ?? false;
+    // mid-carry when night fell): she gets under her cage's blanket the same
+    // automatic way as everyone else (issue #46) — see the _tuckIn below.
     // Issue #18: assign her into the open individual cage found above
     // (companions/babies share it, same as today's "near mom" render).
     stay.cageSlot = cageSlot;
     // Issue #27: remember which section her cage is actually in, so a later
-    // yard trip (belongsToSection/_recallYardToCages/_checkDropoff's yard
+    // yard trip (belongsToSection/_startWalkHome/_checkDropoff's yard
     // branch) still finds the right "home" section even if it doesn't match
     // her species — in normal mode this always equals her species anyway.
     stay.cageSection = section.key;
@@ -1640,6 +1913,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this._playUnboxing(pos.x, pos.y, stay.carryKind);
     }
     this._renderStay(stay, pos.x, pos.y);
+    // Issue #46: carried home after nightfall — straight under the blanket.
+    if (this.night.active) this._tuckIn(stay);
     return true;
   }
 
@@ -1654,31 +1929,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     });
   }
 
-  // Places a carried stay out in the yard to play (issue #20). Zone is
-  // decided by which side of the movable HORIZONTAL divider the player is
-  // standing on when they drop her off (top vs. bottom, not left/right);
-  // multiple occupants of the same zone are spread in a simple grid so they
-  // don't stack.
+  // Places a carried stay out in the yard to play (issue #20). Issue #47:
+  // one single undivided play area now, so there's no zone to pick — she
+  // just takes the next free spot in the yard's placement grid, and multiple
+  // occupants spread out rather than stacking.
   _dropOffToYard(stay) {
     this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
     this._carryVisual = null;
     this.carrying = null;
     stay.location = LOCATION.YARD;
-    const zoneKey = this.player.y < this.yardDividerY ? 'top' : 'bottom';
-    stay.yardZone = zoneKey;
-    const rect = this._yardZoneRect(zoneKey);
-    const already = this.roster.stays.filter((s) => s !== stay && s.location === LOCATION.YARD && s.yardZone === zoneKey).length;
-    const pos = this._gridSlot(rect, already, 20, 44, 52);
-    this._renderStay(stay, pos.x, pos.y, { yardBounds: rect });
-  }
-
-  // Top/bottom yard rect split at the divider's current y, with a little
-  // margin on either side of the fence line itself.
-  _yardZoneRect(zoneKey) {
-    const left = YARD_DIVIDER_X0, right = YARD_DIVIDER_X1;
-    const top = ROOM.y + 14, bottom = ROOM.y + ROOM.h - 14;
-    if (zoneKey === 'top') return { x: left, y: top, w: right - left, h: Math.max(40, this.yardDividerY - 10 - top) };
-    return { x: left, y: this.yardDividerY + 10, w: right - left, h: Math.max(40, bottom - (this.yardDividerY + 10)) };
+    const pos = this._openYardSpot(stay);
+    this._renderStay(stay, pos.x, pos.y);
   }
 
   // Placement spot for a stay settling into `section` — her assigned
@@ -1737,46 +1998,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     };
   }
 
-  // ── Yard divider (issue #20) ─────────────────────────────────────────────
-  // A single movable HORIZONTAL fence the player can carry and set back down
-  // anywhere in the yard to re-split it into two zones (top/bottom) at its
-  // new y.
-
-  _pickUpDivider() {
-    this.carryingDivider = true;
-    this.dividerPostImg.setVisible(false);
-    this._dividerVisual = this.add.image(this.player.x, this.player.y, YARD_DIVIDER_POST_KEY)
-      .setOrigin(0.5, 1).setDepth(9500);
-    this.game.events.emit(EVENTS.NOTIFY, 'Picked up the fence!');
-  }
-
-  _followDividerCarry() {
-    if (!this._dividerVisual) return;
-    this._dividerVisual.x = this.player.x;
-    this._dividerVisual.y = this.player.y;
-    this._dividerVisual.setDepth(this.player.y + 1);
-  }
-
-  _dropDivider() {
-    this.carryingDivider = false;
-    this._dividerVisual?.destroy();
-    this._dividerVisual = null;
-    // Clamped to ROOM.y+64 / ROOM.y+ROOM.h-64, not +40/-40: _yardZoneRect
-    // below enforces a 40px-tall minimum per zone, and with only a 40px
-    // clamp margin the divider could sit close enough to the top/bottom
-    // wall that the true available space for that zone was LESS than 40px
-    // (as little as 16px at the old clamp) — the enforced minimum then made
-    // the zone rect extend past the fence line into the other zone, so a
-    // dropped-off animal could land overlapping the fence or the far zone's
-    // occupants. +64/-64 leaves at least 50px of real space on the tight
-    // side (after _yardZoneRect's own 10px fence margin), so the max(40, …)
-    // floor never has to override the real geometry.
-    this.yardDividerY = Phaser.Math.Clamp(this.player.y, ROOM.y + 64, ROOM.y + ROOM.h - 64);
-    this.dividerLineImg.setY(this.yardDividerY).setDepth(this.yardDividerY);
-    this.dividerPostImg.setPosition((YARD_DIVIDER_X0 + YARD_DIVIDER_X1) / 2, this.yardDividerY)
-      .setDepth(this.yardDividerY + 0.1).setVisible(true);
-    this.game.events.emit(EVENTS.NOTIFY, 'Moved the yard fence!');
-  }
+  // (Issue #47: the movable yard divider — pick it up, carry it, set it back
+  // down to re-split the yard — is gone entirely. The yard is one area.)
 
   // ── Feeding / water (issue #6, extended by #20 and #22 #6) ──────────────
 
@@ -1784,10 +2007,22 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // "you should be able to fill food bowls asynchronously from the pets
   // eating the food" — filling works any time, regardless of whether she's
   // currently hungry/thirsty, so the player can stock up ahead of time).
-  // Eating/drinking from a stocked bowl happens automatically, on its own
-  // tick — see _autoResolveBowlNeeds. `kind` is 'food' or 'water'.
+  // Eating/drinking from a bowl stocked IN ADVANCE still happens
+  // automatically on its own tick — see _autoResolveBowlNeeds. `kind` is
+  // 'food' or 'water'.
+  //
+  // Issue #49 (owner: "if an animal is hungry when you fill the bowl,
+  // filling the bowl should immediately sate the need AND leave the bowl
+  // full in one action"): filling for an animal who's ALREADY hungry is one
+  // satisfying beat — her need clears right now and the bowl stays visibly
+  // full, instead of the background tick immediately draining it again a
+  // frame later. The pre-stock ordering is untouched, which is what keeps
+  // filling ahead of time worthwhile.
   _fillBowl(sectionKey, cageSlot, kind) {
-    const stay = this.roster.stays.find((s) => s.location === sectionKey && s.cageSlot === cageSlot);
+    // belongsToSection, not location: the bowl is part of HER cage, so it's
+    // still fillable while she's off playing in the yard (issue #45 makes
+    // that common) — she'll eat from it when she gets back.
+    const stay = this.roster.stays.find((s) => belongsToSection(s, sectionKey) && s.cageSlot === cageSlot);
     if (!stay || !stay.bowl) return false;
     // Owner note 2026-07-29: "we really only want notifications for animal
     // needs, not for actions we've taken" — filling (whether it worked or the
@@ -1795,65 +2030,57 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // notification either way; the bowl's own full/empty art is the feedback.
     if (stay.bowl[kind]) return true;
     stay.bowl[kind] = true;
+    // Issue #49: she's here and she's hungry — she tucks straight in, and
+    // the bowl she was just given stays full. (Not while she's out in the
+    // yard: she isn't at the bowl to eat from it.)
+    if (stay.location === sectionKey && stay.needs[kind]) {
+      clearNeed(stay, kind);
+      this._setNeedIcon(stay, kind, false);
+    }
     this._refreshBowls();
     return true;
   }
 
-  // ── Outside yard bowls (issue #32 follow-up) ─────────────────────────────
-  // High-capacity, shared per zone — unlike a per-cage bowl (single-serve,
-  // consumed by whichever one occupant eats), a yard bowl fill resolves
-  // EVERY currently hungry/thirsty animal settled in that zone at once (see
-  // _autoResolveYardBowls), mirroring the old turtle-shared-tank precedent
-  // this replaces — "one fill event satisfies every current occupant", just
-  // reapplied to the yard instead of a tank. Filling itself works exactly
-  // like _fillBowl: a player action, any time, regardless of who's hungry.
-  _fillYardBowl(zoneKey, kind) {
-    const bowl = this.yardBowls[zoneKey];
-    if (bowl[kind]) return true;
-    bowl[kind] = true;
+  // ── Outside yard bowls (issue #32 follow-up, one pair as of #47) ─────────
+  // High-capacity and shared by the WHOLE yard — unlike a per-cage bowl
+  // (single-serve, consumed by whichever one occupant eats), a yard bowl
+  // fill resolves EVERY currently hungry/thirsty animal out there at once
+  // (see _autoResolveYardBowls), mirroring the old turtle-shared-tank
+  // precedent this replaces — "one fill event satisfies every current
+  // occupant". Issue #47 collapsed the old top/bottom pair-per-zone into
+  // this single pair, keeping that behavior exactly.
+  _fillYardBowl(kind) {
+    if (this.yardBowls[kind]) return true;
+    this.yardBowls[kind] = true;
+    // Issue #49, yard half: filling while animals are already hungry sates
+    // every one of them right now, and the bowl stays full.
+    const hungry = this.roster.stays.filter((s) => s.location === LOCATION.YARD && s.needs[kind]);
+    for (const s of hungry) { clearNeed(s, kind); this._setNeedIcon(s, kind, false); }
     this._refreshYardBowls();
     return true;
   }
 
   _refreshYardBowls() {
-    for (const zoneKey of ['top', 'bottom']) {
-      const bowl = this.yardBowls[zoneKey];
-      const imgs = this._yardBowlImgs[zoneKey];
-      imgs.food.setTexture(bowl.food ? BOWL_KEY : BOWL_EMPTY_KEY);
-      imgs.water.setTexture(bowl.water ? WATER_BOWL_KEY : WATER_BOWL_EMPTY_KEY);
-    }
+    this._yardBowlImgs.food.setTexture(this.yardBowls.food ? BOWL_KEY : BOWL_EMPTY_KEY);
+    this._yardBowlImgs.water.setTexture(this.yardBowls.water ? WATER_BOWL_KEY : WATER_BOWL_EMPTY_KEY);
   }
 
-  // Mirrors _autoResolveBowlNeeds, but scoped per yard zone instead of per
-  // cage: every settled-in-yard stay's food/water need resolves against
-  // whichever zone she's CURRENTLY in (top or bottom of the movable divider
-  // — same zone test _dropOffToYard/stay.yardZone already uses), and a fill
-  // satisfies every current occupant of that zone in the same tick before
+  // Mirrors _autoResolveBowlNeeds, but for the yard's shared pair: an animal
+  // who gets hungry while a yard bowl is already stocked eats from it, and
+  // that one fill satisfies every current occupant in the same tick before
   // emptying again — not a single-serve per-animal drain like a cage bowl.
   _autoResolveYardBowls() {
     let changed = false;
-    for (const zoneKey of ['top', 'bottom']) {
-      const bowl = this.yardBowls[zoneKey];
-      if (!bowl.food && !bowl.water) continue;
-      const occupants = this.roster.stays.filter(
-        (s) => s.location === LOCATION.YARD && (s.yardZone || 'top') === zoneKey,
-      );
-      if (bowl.food) {
-        const hungry = occupants.filter((s) => s.needs.food);
-        if (hungry.length) {
-          for (const s of hungry) { clearNeed(s, 'food'); this._setNeedIcon(s, 'food', false); }
-          bowl.food = false;
-          changed = true;
-        }
-      }
-      if (bowl.water) {
-        const thirsty = occupants.filter((s) => s.needs.water);
-        if (thirsty.length) {
-          for (const s of thirsty) { clearNeed(s, 'water'); this._setNeedIcon(s, 'water', false); }
-          bowl.water = false;
-          changed = true;
-        }
-      }
+    const bowl = this.yardBowls;
+    if (!bowl.food && !bowl.water) return false;
+    const occupants = this.roster.stays.filter((s) => s.location === LOCATION.YARD);
+    for (const kind of ['food', 'water']) {
+      if (!bowl[kind]) continue;
+      const wanting = occupants.filter((s) => s.needs[kind]);
+      if (!wanting.length) continue;
+      for (const s of wanting) { clearNeed(s, kind); this._setNeedIcon(s, kind, false); }
+      bowl[kind] = false;
+      changed = true;
     }
     return changed;
   }
@@ -1890,6 +2117,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // already-dirty box — handled in _updateMesses below instead.
   _cleanMess(mess) {
     mess.sprite.destroy();
+    mess.icon?.destroy(); // issue #50: the "needs cleaning" bubble goes with it
     this.messes = this.messes.filter((m) => m !== mess);
   }
 
@@ -2328,98 +2556,118 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   _startNight() {
     this.night.active = true;
-    this.night.allTucked = false;
+    this.night.allSettled = false;
     this.night.sleeping = false;
     this.night.wakeUpsRemaining = 0;
     this.night.currentWake = null;
-    // Issue #20: cats/dogs already live in their own individual cage full
-    // time now (no more playpen↔cage toggle) — the only thing that still
-    // needs recalling before tuck-in is anyone currently out playing in the
-    // yard, regardless of species.
-    this._recallYardToCages();
-    for (const stay of this._presentStays()) {
-      stay.tuckedIn = false;
-      this._setNeedIcon(stay, 'tuck', true);
-    }
-    this._checkAllTuckedIn(); // covers the (rare) empty-kennel case
+    // Issue #45: nobody gets teleported indoors anymore — anyone still out
+    // in the yard walks herself back to her own cage, and issue #46's
+    // blanket goes over her automatically once she's home. Both are driven
+    // per frame by _updateNightSettle, so a pet let out AFTER nightfall (a
+    // dog who needs the bathroom) also walks herself home again when she's
+    // done, rather than being stuck outside.
+    this._updateNightSettle();
   }
 
-  // Brings anyone still out in the yard back inside to her own cage before
-  // tuck-in starts (issue #20) — "you stay awake until every single animal
-  // is asleep" (DESIGN.md) applies to yard playtime too. Unlike a player-
-  // initiated drop-off (_dropOff), this recall is forced — she can't stay in
-  // the yard just because her cage is "full" — but that shouldn't actually
-  // happen: data/roster.js's assignCageSlot/isSectionFull now count a yard
-  // stay against her own section's capacity the whole time she's out, so a
-  // section can no longer fill up behind her back while she's playing.
-  // _sectionSlot's generic-grid fallback (see its own comment) stays in
-  // place as a last-resort safety net in case that invariant is ever violated.
-  _recallYardToCages() {
+  // Per-frame night housekeeping (issue #45 #6 + issue #46): walk stragglers
+  // home, put everyone who's home under her blanket, and work out whether
+  // the player can go to bed yet.
+  _updateNightSettle() {
+    if (!this.night.active) return;
+    // Deliberately runs even while the screen is black: a dog let out during
+    // a wake-up still needs to walk herself home and get back under her
+    // blanket before morning, and the player can't see her do it anyway.
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.YARD) continue;
-      // Issue #27: her actual "home" section is wherever her cage really is
-      // (stay.cageSection), not necessarily her species' section — those can
-      // differ once generalized mode has placed her somewhere else (or she's
-      // the secret bonus dragon, who never has a species-matching section at
-      // all). Falls back to species for safety (shouldn't be needed — she
-      // can't be in the yard without a cageSection already set by a prior
-      // drop-off).
-      const section = SECTIONS.find((s) => s.key === (stay.cageSection || stay.animal.species));
-      if (!section) continue;
-      stay.cageSlot = assignCageSlot(this.roster.stays, section.key);
-      stay.cageSection = section.key;
-      stay.location = section.key;
-      const pos = this._sectionSlot(section, stay);
-      this._renderStay(stay, pos.x, pos.y);
+      if (this.carrying === stay || this._isWalking(stay)) continue;
+      // A dog who still needs to go finishes her business first (issue #38 —
+      // she does it right where she's playing after a short while); she
+      // heads home on a later pass, once her need has cleared.
+      if (stay.needs.bathroom) continue;
+      this._startWalkHome(stay);
+      // One per frame: routing a walk runs a grid A* (data/path.js), and
+      // kicking off a yard-full of them in the same frame would hitch. They
+      // trickle in over the next few frames instead, which also reads better
+      // than the whole yard turning for the door in lockstep.
+      break;
     }
-    this._refreshCageArt();
+    for (const stay of this._presentStays()) {
+      if (this._isWalking(stay)) continue;
+      this._tuckIn(stay);
+    }
+    this._checkAllSettled();
   }
 
-  // Lays (or removes) the small fabric sheet over a stay — one blanket per
-  // stay covers her companions too (eggs/babies "wrapped" with her, per
-  // DESIGN.md), since they share the same cage spot. Sized to drape fairly
-  // fully over her body so it reads as a cozy cover, not a small patch.
-  _setBlanket(stay, show) {
+  // Issue #46 (owner: "have there always be a blanket available in the cage
+  // and the animal automatically gets under it at night and out of it in the
+  // morning on its own"): every occupied cage always shows a blanket —
+  // folded on the cage floor by day, draped over her once she's under it at
+  // night. There's no tuck-in interaction and no "needs tucking" bubble
+  // anymore; `stay.tuckedIn` now just means "she's under it right now", set
+  // automatically at nightfall and cleared in the morning.
+  _refreshBlanket(stay) {
     const rec = this._staySprites.get(stay);
     if (!rec) return;
-    if (show) {
-      if (rec.blanket) return;
-      // Bug fix (owner note 2026-07-29: "blankets should actually go ON the
-      // animals position") — this used rec.pos, her FIXED original drop-off
-      // spot, not rec.sprite.x/y, where she's actually currently standing
-      // after wandering. She stops wandering the instant she's tucked in
-      // (_updateWander's tuckedIn check), so her sprite position at THIS
-      // moment is exactly where the blanket needs to land and stay.
-      const img = this.add.image(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight * 0.32, BLANKET_KEY)
-        .setOrigin(0.5, 0.5).setDepth(rec.sprite.depth + 0.3);
-      img.setDisplaySize(rec.sprite.displayWidth * 1.3, rec.sprite.displayHeight * 0.85);
-      rec.blanket = img;
-    } else if (rec.blanket) {
-      rec.blanket.destroy();
+    const cage = CAGES[stay.cageSection]?.[stay.cageSlot];
+    if (!cage) { // no cage of her own yet (fresh arrival out in the yard)
+      rec.blanket?.destroy();
       rec.blanket = null;
+      return;
+    }
+    if (!rec.blanket) rec.blanket = this.add.image(0, 0, BLANKET_KEY).setOrigin(0.5, 0.5);
+    const img = rec.blanket;
+    if (stay.tuckedIn && stay.location === stay.cageSection) {
+      // Draped over her, wherever in her cage she actually settled — she
+      // stops wandering the instant she's under it (_updateWander's tuckedIn
+      // check), so this position stays right all night. One blanket covers
+      // her companions too (eggs/babies "wrapped" with her, per DESIGN.md),
+      // since they share her cage spot.
+      img.setPosition(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight * 0.32);
+      img.setDisplaySize(rec.sprite.displayWidth * 1.3, rec.sprite.displayHeight * 0.85);
+      img.setDepth(rec.sprite.depth + 0.3);
+    } else {
+      // Folded up at the back-right of her cage, waiting for her — clear of
+      // the bowls (bottom-center) and the litter box (mid-left), and low
+      // enough in depth to sit behind whoever's standing in the cage.
+      img.setPosition(cage.x + cage.w * 0.74, cage.y + cage.h * 0.36);
+      img.setDisplaySize(30, 20);
+      img.setDepth(cage.y + 1);
     }
   }
 
+  // Issue #46: no player action involved anymore — she simply gets under the
+  // blanket that's already in her cage.
   _tuckIn(stay) {
     if (stay.tuckedIn) return;
     stay.tuckedIn = true;
-    this._setNeedIcon(stay, 'tuck', false);
-    this._setBlanket(stay, true);
-    if (this.night.currentWake?.stay === stay && this.night.currentWake.reason === WAKE_REASON.COLD) {
-      this._resolveWakeUp();
-    }
-    this._checkAllTuckedIn();
+    this._refreshBlanket(stay);
+  }
+
+  // ...and back out from under it: at sunrise, or the moment the player
+  // opens her cage to let her out.
+  _untuck(stay) {
+    if (!stay.tuckedIn) return;
+    stay.tuckedIn = false;
+    this._refreshBlanket(stay);
   }
 
   // Owner note 2026-07-29: "is there a way to initiate sleep for the player
-  // character? there should be" — once every present animal is tucked in,
-  // sleep no longer starts on its own; the player has to walk to her own bed
-  // (BED_SPOT) and interact (see _checkInteractions), same "walk up and it
-  // happens" convention as everything else in this file.
-  _checkAllTuckedIn() {
-    if (!this.night.active || this.night.allTucked) return;
+  // character? there should be" — sleep doesn't start on its own; the player
+  // walks to her own bed (BED_SPOT) and interacts (see _checkInteractions),
+  // same "walk up and it happens" convention as everything else in this file.
+  //
+  // Issue #45 (owner, on what now ends the night): "wait until all pets are
+  // in cages" — with blankets automatic (issue #46) there's no tuck-in chore
+  // left to gate on, so the gate is simply that nobody's still out in the
+  // yard, walking home, or in the player's hands.
+  _checkAllSettled() {
+    if (!this.night.active || this.night.allSettled) return;
+    const stillOut = this.roster.stays.some((s) => !s.noCageAvailable && (
+      s.location === LOCATION.YARD || s.location === LOCATION.CARRYING || this._isWalking(s)
+    ));
+    if (stillOut) return;
     if (!this._presentStays().every((s) => s.tuckedIn)) return;
-    this.night.allTucked = true;
+    this.night.allSettled = true;
     this.game.events.emit(EVENTS.NOTIFY, "Everyone's asleep! Head to bed to end the night.");
   }
 
@@ -2446,8 +2694,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         onComplete: () => {
           this.night.active = false;
           this.night.sleeping = false;
-          this.night.allTucked = false;
+          this.night.allSettled = false;
           this.night.currentWake = null;
+          // Issue #46: morning — everyone climbs back out from under her
+          // blanket on her own, and it goes back to folded in the cage.
+          for (const stay of this.roster.stays) this._untuck(stay);
         },
       });
       return;
@@ -2464,14 +2715,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _triggerWakeUp({ stay, reason }) {
     this.night.currentWake = { stay, reason };
     const name = stay.animal.name;
-    if (reason === WAKE_REASON.COLD) {
-      stay.tuckedIn = false;
-      this._setBlanket(stay, false); // fabric slides off
-      this._setNeedIcon(stay, 'tuck', true);
-      this.game.events.emit(EVENTS.NOTIFY, `${name} is cold!`);
-    } else if (reason === WAKE_REASON.BATHROOM) {
+    // (Issue #46 removed the "she's cold, the fabric fell off" wake-up — a
+    // blanket can't fall off anymore, so there'd be nothing to resolve.)
+    if (reason === WAKE_REASON.BATHROOM) {
       stay.needs.bathroom = true;
       this._setNeedIcon(stay, 'bathroom', true);
+      // Issue #45: the fix is to open her cage — she walks herself out to
+      // the yard, does her business, and walks back home again.
       this.game.events.emit(EVENTS.NOTIFY, `${name} needs to go to the bathroom!`);
     } else if (reason === WAKE_REASON.BABIES) {
       // Refinement: flags her ready-and-waiting the same as a daytime timer
@@ -2487,9 +2737,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
   }
 
-  // Called once a wake-up's cause has actually been addressed (re-tucked,
-  // taken outside, or the birth landed) — fades back to black and continues
-  // toward morning.
+  // Called once a wake-up's cause has actually been addressed (she's been
+  // let out and done her business, or the birth landed) — fades back to
+  // black and continues toward morning.
   _resolveWakeUp() {
     if (!this.night.currentWake) return;
     this.night.currentWake = null;
@@ -2526,7 +2776,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
           // _autoResolveYardBowls). A yard-placed stay checks her current
           // zone's shared bowl instead of her own personal cage bowl.
           const stocked = stay.location === LOCATION.YARD
-            ? !!this.yardBowls[stay.yardZone || 'top'][key]
+            ? !!this.yardBowls[key]
             : !!stay.bowl?.[key];
           if (!stocked) {
             this.game.events.emit(EVENTS.NOTIFY,
@@ -2538,9 +2788,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // she resolves her own hunger/thirst here, automatically, the instant
       // a stocked bowl is available, with no player proximity/interaction
       // required (see _autoResolveBowlNeeds). Yard-placed stays resolve
-      // against their zone's shared bowl instead (_autoResolveYardBowls,
-      // called once below, not per-stay — one fill can satisfy everyone in
-      // the zone at once).
+      // against the yard's shared bowls instead (_autoResolveYardBowls,
+      // called once below, not per-stay — one fill can satisfy everyone out
+      // there at once).
       if (stay.location !== LOCATION.YARD && this._autoResolveBowlNeeds(stay)) bowlsChanged = true;
     }
     if (bowlsChanged) this._refreshBowls();
@@ -2601,7 +2851,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._dogYardTimer -= delta;
     if (this._dogYardTimer <= 0) {
       this._dogYardTimer = DOG_YARD_INTERVAL();
-      const dogs = this.roster.stays.filter((s) => s.animal.species === 'dog' && s.location === LOCATION.YARD && s.needs.bathroom);
+      // Issue #45: skip a dog still walking out there (or walking home) —
+      // her `location` already reads YARD the moment she leaves her cage, and
+      // a mess dropped mid-corridor on the way would be nonsense.
+      const dogs = this.roster.stays.filter((s) => s.animal.species === 'dog'
+        && s.location === LOCATION.YARD && s.needs.bathroom && !this._isWalking(s));
       for (const dog of dogs) {
         const rec = this._staySprites.get(dog);
         if (!rec) continue;
@@ -2643,7 +2897,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const x = point.x + (Math.random() - 0.5) * 10;
     const y = point.y + (Math.random() - 0.5) * 10;
     const sprite = this.add.image(x, y, MESS_KEY).setOrigin(0.5, 0.5).setDepth(y - 0.5);
-    this.messes.push({ kind, x, y, sprite, stay });
+    // Issue #50 follow-up (owner: "add a poop icon for if a litter box needs
+    // cleaning", "same icon as for a dog needing to poop") — a dirty litter
+    // box used to have no standing signal at all, just a one-off
+    // notification that's easy to miss. Reuses the bathroom need bubble, at
+    // need-icon depth so it clears the cage's foreground bars (issue #43).
+    // Litter boxes only: a dog's mess out on the open grass is plainly
+    // visible where it lands.
+    const icon = kind === 'cat'
+      ? this.add.image(x, y - 20, NEED_KEY.bathroom).setOrigin(0.5, 1).setDepth(9002)
+      : null;
+    this.messes.push({ kind, x, y, sprite, icon, stay });
   }
 
   // ── Unified interaction (issues #5, #6, #7, #8, #20, #22) ────────────────
@@ -2672,50 +2936,48 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
     }
 
-    // Issue #20/#38: pick up any settled or yard-placed animal to take her
-    // out to play (or bring her back in) — including a dog who needs the
-    // bathroom, which is now just this SAME action (owner note 2026-07-29:
-    // "taking a dog for a poop walk shouldn't be different from taking them
-    // out to play; they should be able to poop while out for a play, and be
-    // able to be let go to play when out for a poop"). She just wanders
-    // freely in the yard like anyone else and does her business there on her
-    // own (see _updateMesses) — no separate leash minigame.
-    // Skipped at night (everyone should be in her cage for tuck-in) EXCEPT a
-    // dog who currently needs the bathroom — she can still be taken out
-    // overnight, same exemption the old leash flow used to have.
+    // Issue #45: what happens at an animal now depends on where she is.
+    //  - Settled in her cage → OPEN THE CAGE and she takes herself out: to
+    //    her waiting owner if one's here for her, otherwise out to the play
+    //    yard. This one action replaces both carrying a pet out to play and
+    //    carrying a checkout-ready pet over to her owner, and it's also how
+    //    a dog who needs the bathroom gets outside (issue #38 — she does her
+    //    business out there on her own; no separate leash minigame).
+    //  - Out in the yard → PICK HER UP, which is still how she gets a cage
+    //    of her own (nameplate + bowls) — the unchanged carry mechanic.
+    // Cage-opening is skipped at night (everyone should be home asleep)
+    // EXCEPT for a dog who currently needs the bathroom — same exemption the
+    // old leash flow had. A pet already out in the yard stays pickup-able at
+    // night regardless, so she can always be brought straight back in.
     const sectionKeys = new Set(SECTIONS.map((s) => s.key));
     for (const stay of this.roster.stays) {
-      const settled = sectionKeys.has(stay.location) || stay.location === LOCATION.YARD;
-      if (!settled) continue;
-      const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
-      // Bug fix (owner note 2026-07-29: "I took dogs out to go potty at
-      // night, and it won't let me take them back inside"): once she's done
-      // her business her bathroom need clears, so she no longer qualified
-      // for the exemption above and got stuck outside — _recallYardToCages
-      // only auto-recalls everyone ONCE, at the moment night starts, not for
-      // someone taken out afterward. Anyone currently in the yard has to
-      // stay pickup-able at night regardless of her need, so she can always
-      // be brought back in.
+      const inCage = sectionKeys.has(stay.location);
       const inYard = stay.location === LOCATION.YARD;
+      if (!inCage && !inYard) continue;
+      // She's already on her way somewhere — leave her to it (issue #45: a
+      // walking animal is a transient state, not something to grab at).
+      if (this._isWalking(stay)) continue;
+      const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
       if (this.night.active && !bathroomDog && !inYard) continue;
       // A mom flagged ready-and-waiting (birthReady, below) sits at this
       // same sprite position — without this guard, the tie in consider()
-      // always resolves to whichever action was registered first (this
-      // pickup, registered earlier in the loop), so interacting with her
-      // silently picked her up instead of ever triggering the birth.
+      // always resolves to whichever action was registered first (this one,
+      // registered earlier in the loop), so interacting with her silently
+      // opened her cage instead of ever triggering the birth.
       if (stay.birthReady) continue;
       // Issue #37: same tie-break issue as birthReady above — a mom with
       // new babies not yet photographed sits at this same sprite position;
-      // without this guard interacting with her always picked her up
+      // without this guard interacting with her always did the other thing
       // instead of ever taking the photo.
       if (stay.needsAnnouncement && !stay.photoTaken) continue;
       // Owner note 2026-07-29: "the interact location for an animal that
       // is outside playing doesn't move with their visual... it should
-      // move with them" — she wanders within her bounds (_updateWander),
-      // so the pickup target must track her live sprite position, not her
-      // original fixed drop-off spot (rec.pos).
+      // move with them" — she wanders within her bounds (_updateWander), so
+      // the target tracks her live sprite position, not her original spot.
       const rec = this._staySprites.get(stay);
-      if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._pickUp(stay));
+      if (!rec) continue;
+      if (inYard) consider(rec.sprite.x, rec.sprite.y, () => this._pickUp(stay));
+      else consider(rec.sprite.x, rec.sprite.y, () => this._openCage(stay));
     }
 
     // Owner note 2026-07-29 (bowl decoupling): filling food vs. water now
@@ -2733,14 +2995,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       });
     }
 
-    // Issue #32 follow-up: the outside yard's shared food/water bowl pair
-    // per zone — filling works the same way as a cage bowl (any time,
-    // regardless of who's hungry); see _fillYardBowl/_autoResolveYardBowls.
-    for (const zoneKey of ['top', 'bottom']) {
-      const spots = YARD_BOWL_SPOTS[zoneKey];
-      consider(spots.food.x, spots.food.y, () => this._fillYardBowl(zoneKey, 'food'));
-      consider(spots.water.x, spots.water.y, () => this._fillYardBowl(zoneKey, 'water'));
-    }
+    // Issue #32 follow-up, one pair as of issue #47: the outside yard's
+    // shared food/water bowls — filling works the same way as a cage bowl
+    // (any time, regardless of who's hungry); see _fillYardBowl.
+    consider(YARD_BOWL_SPOTS.food.x, YARD_BOWL_SPOTS.food.y, () => this._fillYardBowl('food'));
+    consider(YARD_BOWL_SPOTS.water.x, YARD_BOWL_SPOTS.water.y, () => this._fillYardBowl('water'));
 
     if (!this.hasScooper) consider(this.scooperRestPos.x, this.scooperRestPos.y, () => this._pickUpScooper());
 
@@ -2785,23 +3044,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       consider(this._raccoon.sprite.x, this._raccoon.sprite.y, () => this._scareRaccoon());
     }
 
-    // Yard divider (issue #20) — pick it up from its current post position.
-    consider((YARD_DIVIDER_X0 + YARD_DIVIDER_X1) / 2, this.yardDividerY, () => this._pickUpDivider());
+    // (Issue #47 removed the movable yard divider's pick-up interaction, and
+    // issue #46 removed the tuck-in one — blankets are automatic now.)
 
-    // Tucking animals in for the night (issue #11) — walk up to anyone not
-    // yet under their blanket and interact.
-    if (this.night.active) {
-      for (const stay of this._presentStays()) {
-        if (stay.tuckedIn) continue;
-        const rec = this._staySprites.get(stay);
-        if (rec) consider(rec.sprite.x, rec.sprite.y, () => this._tuckIn(stay));
-      }
-    }
-
-    // Owner note 2026-07-29: the player's own bed — once everyone's tucked
-    // in, walk up and interact here to actually start the sleep sequence
-    // (see _checkAllTuckedIn/_beginSleep).
-    if (this.night.active && this.night.allTucked && !this.night.sleeping) {
+    // Owner note 2026-07-29: the player's own bed — once every pet is home
+    // in her cage (issue #45), walk up and interact here to actually start
+    // the sleep sequence (see _checkAllSettled/_beginSleep).
+    if (this.night.active && this.night.allSettled && !this.night.sleeping) {
       consider(BED_SPOT.x, BED_SPOT.y, () => this._beginSleep());
     }
 
@@ -2833,7 +3082,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._updateBirths(delta);
     this._updateComputerIcon();
     this._updateRaccoon(delta);
+    this._updateWalkers(delta);      // issue #45: animals/owners walking themselves around
     this._updateWander(delta);
+    this._updateStayVisuals();       // issue #48: bubbles/labels/babies follow their animal
+    this._updateNightSettle();       // issue #45/#46: walk home, get under the blanket
     this._updateNameTagVisibility();
     this.player.setDepth(this.player.y);
 
@@ -2843,47 +3095,56 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (this.carrying) {
       this._followCarry();
       this._checkDropoff(interactPressed);
-    } else if (this.carryingDivider) {
-      this._followDividerCarry();
-      if (interactPressed) this._dropDivider();
     } else {
       this._checkInteractions(interactPressed);
     }
     this._followScooper();
   }
 
-  // ── Wander (issue #22 #4) ─────────────────────────────────────────────────
+  // ── Wander (issue #22 #4, extended by issue #48) ──────────────────────────
   // Every settled/yard-placed stay's sprite drifts toward a small periodic
-  // target point within its cage/island (or yard zone) bounds — species-tuned
-  // interval/amplitude from data/wander.js. Paused while she's tucked in
-  // (asleep) or the screen is asleep, so nobody wanders under their blanket.
+  // target point near where she was placed, clamped to her cage (or the
+  // yard) — species-tuned interval/amplitude from data/wander.js. Her babies
+  // drift too, around their own offsets from mom (issue #48: "we need to get
+  // babies to wander also, not just adults"). Paused while she's tucked in
+  // (asleep), while she's walking somewhere under her own power (issue #45),
+  // or while the screen is asleep.
   _updateWander(delta) {
-    if (this.night.sleeping) return;
+    if (this.night.sleeping && !this.night.currentWake) return;
     for (const [stay, rec] of this._staySprites) {
-      if (!rec.wanderBounds || stay.tuckedIn) continue;
+      if (!rec.wanderBounds || stay.tuckedIn || this._isWalking(stay)) continue;
+      const b = rec.wanderBounds;
+      const inYard = stay.location === LOCATION.YARD;
+      const amp = wanderAmplitude(stay.animal.species, inYard);
       if (!rec.wander) {
         rec.wander = { tx: rec.sprite.x, ty: rec.sprite.y, t: pickWanderInterval(stay.animal.species) };
       }
       rec.wander.t -= delta;
       if (rec.wander.t <= 0) {
-        const b = rec.wanderBounds;
-        const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-        const inYard = stay.location === LOCATION.YARD;
-        const amp = wanderAmplitude(stay.animal.species, inYard);
-        const maxX = Math.max(2, Math.min(amp, b.w / 2 - 6));
-        const maxY = Math.max(2, Math.min(amp, b.h / 2 - 6));
-        rec.wander.tx = Phaser.Math.Clamp(cx + (Math.random() * 2 - 1) * maxX, b.x + 4, b.x + b.w - 4);
-        rec.wander.ty = Phaser.Math.Clamp(cy + (Math.random() * 2 - 1) * maxY, b.y + 4, b.y + b.h - 4);
+        // Around her own placement anchor, NOT the middle of the bounds —
+        // see _renderStay: in one big undivided yard (issue #47) a shared
+        // center would slowly gather every animal out there into one pile.
+        const a = rec.wanderAnchor;
+        rec.wander.tx = Phaser.Math.Clamp(a.x + (Math.random() * 2 - 1) * amp, b.x + 4, b.x + b.w - 4);
+        rec.wander.ty = Phaser.Math.Clamp(a.y + (Math.random() * 2 - 1) * amp, b.y + 4, b.y + b.h - 4);
         rec.wander.t = pickWanderInterval(stay.animal.species);
       }
       rec.sprite.x += (rec.wander.tx - rec.sprite.x) * 0.03;
       rec.sprite.y += (rec.wander.ty - rec.sprite.y) * 0.03;
       rec.sprite.setDepth(rec.sprite.y);
-      // The name tag rides along just above her current (wandering) position
-      // — UNLESS it's mounted fixed on her cage door (cageAnchored), in which
-      // case it stays put regardless of where she wanders inside the cage.
-      if (!rec.cageAnchored) {
-        rec.tag.container.setPosition(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight - 6 - rec.tag.height);
+
+      // Babies: same idea one level down — each drifts around her OWN base
+      // offset from mom (a gentle fraction of mom's amplitude), so the litter
+      // mills about with her without piling onto her or onto each other. The
+      // sprites themselves are positioned in _updateStayVisuals, which is
+      // also what keeps them with her while she's walking.
+      for (const baby of rec.babies) {
+        baby.t -= delta;
+        if (baby.t > 0) continue;
+        const babyAmp = amp * 0.35;
+        baby.tx = baby.bx + (Math.random() * 2 - 1) * babyAmp;
+        baby.ty = baby.by + (Math.random() * 2 - 1) * babyAmp * 0.6;
+        baby.t = pickWanderInterval(stay.animal.species) * 0.8;
       }
     }
   }

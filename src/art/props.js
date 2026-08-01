@@ -1,13 +1,12 @@
 // Procedural textures for kennel furniture added by issues #6/#7/#8/#13/#14/
 // #20/#32: the single modular cage grid (with turtle/snake islands/perches
 // and the secret dragon's castle as per-species cage looks), litter box,
-// scooper, food/water bowls (cage + yard), potty messes, the yard divider,
-// the back-wing kitchen/storage dressing/bed, and the small "needs
-// attention" bubbles. Same gen()-into-a-texture pattern as art/kennel.js /
+// scooper, food/water bowls (cage + yard), potty messes, the back-wing
+// kitchen/storage dressing/bed, and the small "needs attention" bubbles. Same gen()-into-a-texture pattern as art/kennel.js /
 // art/animals.js.
 import { gen } from './_gen.js';
 import {
-  LITTER_BOX_SIZE, CAGES, CAGE_W, CAGE_H, OVEN, BED, YARD_DIVIDER_X1, YARD_DIVIDER_X0,
+  LITTER_BOX_SIZE, CAGES, CAGE_W, CAGE_H, OVEN, BED,
 } from '../data/props.js';
 
 export const LITTER_BOX_KEY = 'prop-litter-box';
@@ -74,11 +73,12 @@ export const TREAT_TRAY_KEY = 'prop-treat-tray';
 export const SHELF_KEY = 'prop-shelf';
 export const BOX_KEY = 'prop-boxes';
 export const BAG_KEY = 'prop-bag';
-export const YARD_DIVIDER_POST_KEY = 'prop-yard-divider-post';
-export const YARD_DIVIDER_LINE_KEY = 'prop-yard-divider-line';
+// Issue #46: no `tuck` icon anymore — every occupied cage always has a
+// blanket and the animal gets under it herself at night, so there's no
+// "needs tucking in" chore to flag.
 export const NEED_KEY = {
   food: 'need-food', bathroom: 'need-bathroom', water: 'need-water', mail: 'need-mail',
-  tuck: 'need-tuck', babies: 'need-babies', checkout: 'need-checkout', photo: 'need-photo',
+  babies: 'need-babies', checkout: 'need-checkout', photo: 'need-photo',
 };
 
 // Issue #32: one single cage grid now (the old per-section "By Type" layout
@@ -352,22 +352,27 @@ function drawNeedBubble(g, w, h, icon) {
     g.fillStyle(0xc08a3e, 1).fillEllipse(w / 2, h * 0.55, w * 0.5, h * 0.36);
     g.fillStyle(0xe8c68f, 1).fillEllipse(w / 2, h * 0.48, w * 0.36, h * 0.22);
   } else if (icon === 'bathroom') {
-    g.fillStyle(0x5b7fd6, 1);
-    g.fillCircle(w * 0.5, h * 0.36, w * 0.1);
-    g.fillCircle(w * 0.36, h * 0.5, w * 0.08);
-    g.fillCircle(w * 0.64, h * 0.5, w * 0.08);
-    g.fillEllipse(w * 0.5, h * 0.62, w * 0.28, w * 0.2);
+    // Issue #50 (owner: "the 'dog needs to poop' icon should be a poop icon
+    // instead of whatever it is now") — this used to be a blue three-circle
+    // cluster that read as water droplets, right next to the actual water
+    // need bubble. Now the classic soft-serve swirl: three stacked, tapering
+    // brown ellipses with a little curl on top, flat and kid-legible.
+    g.fillStyle(0x6b4a2c, 1);
+    g.fillEllipse(w * 0.5, h * 0.68, w * 0.62, h * 0.2);  // wide base
+    g.fillEllipse(w * 0.5, h * 0.53, w * 0.46, h * 0.18); // middle
+    g.fillEllipse(w * 0.5, h * 0.4, w * 0.3, h * 0.15);   // top
+    g.fillStyle(0x8a5f38, 1);
+    g.fillEllipse(w * 0.5, h * 0.31, w * 0.13, h * 0.1);  // little curl tip
+    // Soft highlight down the left of the swirl so the stack reads as 3-D.
+    g.fillStyle(0x8f6540, 0.85);
+    g.fillEllipse(w * 0.36, h * 0.66, w * 0.16, h * 0.09);
+    g.fillEllipse(w * 0.4, h * 0.51, w * 0.12, h * 0.08);
   } else if (icon === 'mail') {
     // A tiny envelope — the reception computer's "needs attention" icon
     // (issue #10: an un-announced birth waiting to be sent to the owner).
     g.fillStyle(0xdd5555, 1).fillRoundedRect(w * 0.2, h * 0.34, w * 0.6, h * 0.4, 2);
     g.fillStyle(0xffe3e3, 1);
     g.fillTriangle(w * 0.2, h * 0.34, w * 0.5, h * 0.58, w * 0.8, h * 0.34);
-  } else if (icon === 'tuck') {
-    // A little folded blanket corner — issue #11's "needs tucking in" icon,
-    // shown above any animal not yet under its fabric sheet for the night.
-    g.fillStyle(0xe0a95e, 1).fillRoundedRect(w * 0.24, h * 0.36, w * 0.52, h * 0.34, 2);
-    g.fillStyle(0xf6cf9a, 1).fillTriangle(w * 0.24, h * 0.36, w * 0.5, h * 0.36, w * 0.24, h * 0.62);
   } else if (icon === 'babies') {
     // A small pink heart — issue #9 refinement's "ready and needs your
     // help" icon, shown above a mom whose birth timer has expired (or who
@@ -547,23 +552,8 @@ function drawBag(g, w, h) {
   g.fillStyle(0x8a5a34, 1).fillCircle(w * 0.5, h * 0.44, w * 0.18);
 }
 
-// Yard divider post (issue #20): a small movable fence post the player can
-// carry around and set back down to re-split the yard into zones.
-function drawDividerPost(g, w, h) {
-  g.fillStyle(0x8a5a34, 1).fillRoundedRect(w * 0.4, 0, w * 0.2, h, 3);
-  g.fillStyle(0xc79a63, 1).fillRoundedRect(w * 0.08, h * 0.16, w * 0.84, h * 0.16, 2);
-  g.fillStyle(0xc79a63, 1).fillRoundedRect(w * 0.08, h * 0.56, w * 0.84, h * 0.16, 2);
-}
-
-// The divider's full-width HORIZONTAL fence line, redrawn only when the
-// divider moves (KennelScene just repositions this image's y — the line's
-// own art never changes). A row of vertical picket panels running along x.
-function drawDividerLine(g, w, h) {
-  g.fillStyle(0xc79a63, 0.92);
-  for (let x = 0; x < w; x += 26) g.fillRect(x, 0, 16, h);
-  g.lineStyle(1.5, 0x8a5a34, 0.9);
-  for (let x = 0; x < w; x += 26) g.strokeRect(x + 0.5, 0.5, 15, h - 1);
-}
+// (Issue #47: the yard divider's post/fence-line art is gone along with the
+// divider itself — the play yard is one single undivided area now.)
 
 export function buildPropTextures(scene) {
   gen(scene, LITTER_BOX_KEY, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h, (g) => drawLitterBox(g, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h));
@@ -585,7 +575,6 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.bathroom, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'bathroom'));
   gen(scene, NEED_KEY.water, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'water'));
   gen(scene, NEED_KEY.mail, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'mail'));
-  gen(scene, NEED_KEY.tuck, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'tuck'));
   gen(scene, NEED_KEY.babies, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'babies'));
   gen(scene, NEED_KEY.checkout, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'checkout'));
   gen(scene, NEED_KEY.photo, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'photo'));
@@ -598,8 +587,6 @@ export function buildPropTextures(scene) {
   gen(scene, SHELF_KEY, 40, 70, (g) => drawShelf(g, 40, 70));
   gen(scene, BOX_KEY, 34, 30, (g) => drawBoxStack(g, 34, 30));
   gen(scene, BAG_KEY, 22, 30, (g) => drawBag(g, 22, 30));
-  gen(scene, YARD_DIVIDER_POST_KEY, 14, 28, (g) => drawDividerPost(g, 14, 28));
-  gen(scene, YARD_DIVIDER_LINE_KEY, YARD_DIVIDER_X1 - YARD_DIVIDER_X0, 8, (g) => drawDividerLine(g, YARD_DIVIDER_X1 - YARD_DIVIDER_X0, 8));
 
   // Every regular species' cage texture, uniform CAGE_W x CAGE_H (100x100).
   // Issue #43: two textures per species now — a background (floor/fill,
