@@ -746,18 +746,25 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this._cagePlates[key].forEach((existing, slot) => {
         const occupant = this._cageOccupant(key, slot);
         if (!occupant) {
+          existing?.glowTween?.remove();
           existing?.container.destroy();
           this._cagePlates[key][slot] = null;
           return;
         }
+        // Issue #73: the plate of a pet currently in the player's hands is
+        // highlighted, so "which cage does this one live in?" is answerable at
+        // a glance while carrying her across the room.
+        const held = occupant.location === LOCATION.CARRYING;
         // Names can change under us (a baby named via the reception computer
         // never owns a cage, but a returning guest's record is reused), so
-        // the plate is rebuilt only when the name it shows is actually stale.
-        if (existing && existing.shownName === occupant.animal.name) return;
+        // the plate is rebuilt only when what it shows is actually stale.
+        if (existing && existing.shownName === occupant.animal.name && existing.held === held) return;
+        existing?.glowTween?.remove();
         existing?.container.destroy();
         const spot = cagePlateSpot(CAGES[key][slot]);
-        const plate = this._addNameTag(spot.x, spot.y, occupant.animal.name);
+        const plate = this._addNameTag(spot.x, spot.y, occupant.animal.name, { highlight: held });
         plate.shownName = occupant.animal.name;
+        plate.held = held;
         // A door plate is always readable — the proximity gate
         // (_updateNameTagVisibility) only ever applied to a tag floating
         // above an animal out in the open.
@@ -1936,7 +1943,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // at (x, y). Hidden by default; toggled per-frame by proximity to the
   // player (issue #22 #2 — see _updateNameTagVisibility). Returns
   // {container, width, height} so callers can destroy/reposition it.
-  _addNameTag(x, y, name) {
+  _addNameTag(x, y, name, opts = {}) {
     const text = this.add.text(0, 3, name, {
       fontFamily: 'system-ui, sans-serif',
       fontSize: '10px',
@@ -1945,14 +1952,31 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }).setOrigin(0.5, 0);
     const width = Math.max(34, Math.ceil(text.width) + 16);
     const height = 20;
+    const parts = [];
+    // Issue #73 (owner: "if you're holding a pet, there should be a slight
+    // highlight of some kind on its cage nameplate") — a soft warm glow behind
+    // the plate plus a brighter border, so the cage a carried pet belongs to
+    // is findable at a glance without shouting. Deliberately gentle: the
+    // plates are permanent scenery, and a loud one would read as an alarm.
+    let glowTween = null;
+    if (opts.highlight) {
+      const glow = this.add.graphics();
+      glow.fillStyle(0xffd97a, 0.55).fillRoundedRect(-width / 2 - 4, -4, width + 8, height + 4, 7);
+      parts.push(glow);
+      // A slow breathe, so it catches the eye even at the edge of the screen.
+      glowTween = this.tweens.add({ targets: glow, alpha: 0.35, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
     const bg = this.add.graphics();
     bg.fillStyle(0xead9b3, 1).fillRoundedRect(-width / 2, 0, width, height - 2, 4);
-    bg.lineStyle(2, 0xa9824a, 1).strokeRoundedRect(-width / 2 + 1, 1, width - 2, height - 4, 4);
+    bg.lineStyle(2, opts.highlight ? 0xd8a63c : 0xa9824a, 1).strokeRoundedRect(-width / 2 + 1, 1, width - 2, height - 4, 4);
     bg.fillStyle(0x8a6a3e, 1);
     bg.fillCircle(-width / 2 + 6, 3, 2);
     bg.fillCircle(width / 2 - 6, 3, 2);
-    const container = this.add.container(x, y - height, [bg, text]).setDepth(9000).setVisible(false);
-    return { container, width, height };
+    parts.push(bg, text);
+    const container = this.add.container(x, y - height, parts).setDepth(9000).setVisible(false);
+    // `glowTween` is handed back so whoever destroys the plate can stop it
+    // first — a looping tween outlives the object it animates otherwise.
+    return { container, width, height, glowTween };
   }
 
   // Every frame: a tag fixed to a cage door is a permanent nameplate, always
@@ -2294,6 +2318,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     stay.location = LOCATION.YARD;
     const pos = clampToYard(this.player.x + 26, this.player.y + 6);
     this._renderStay(stay, pos.x, pos.y);
+    // Issue #73: she's out of the player's hands, so her cage's nameplate
+    // stops being highlighted. (The cage drop-off paths get this via
+    // _dropOff/_completeCheckout's own _refreshCageArt; this one didn't
+    // refresh cage furniture at all before.)
+    this._refreshCageFurniture();
   }
 
   // Placement spot for a stay settling into `section` — her assigned
