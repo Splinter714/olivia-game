@@ -11,6 +11,7 @@ import {
   cageAnimalSpot, yardGateSpot, clampToYard,
   cageEggSpot, cagePlateSpot, CAGE_EGG_SPACING,
   YARD_DOOR, YARD_DOOR_OPEN_POS,
+  POND_SPOT, POND_RECT, pondSwimSpot, travelTankPondRestSpot, travelTankHomeSpot,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
@@ -45,6 +46,7 @@ import {
   MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_FG_KEY, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY, BED_KEY,
   YARD_DOOR_OPEN_KEY, YARD_DOOR_CLOSED_KEY,
+  WATERPROOF_COVER_KEY, TRAVEL_TANK_KEY, POND_KEY,
 } from '../art/props.js';
 import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
@@ -673,6 +675,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     };
     this._devRegistry.push({ name: 'YARD_BOWL_SPOTS.food', obj: this._yardBowlImgs.food });
     this._devRegistry.push({ name: 'YARD_BOWL_SPOTS.water', obj: this._yardBowlImgs.water });
+
+    // Issue #77: the yard's one shared pond — a fixed, always-there piece of
+    // ground art (like the yard bowls above), not occupancy-gated. Every
+    // fish "out playing" lives somewhere on/around this same spot; see
+    // POND_SPOT/POND_RECT (data/props.js) and _refreshTravelTank below.
+    this.add.image(POND_SPOT.x, POND_SPOT.y, POND_KEY).setOrigin(0.5, 0.5).setDepth(POND_RECT.y);
 
     // Issue #55: the gate in the east wall's BACK_DOOR gap. One image whose
     // texture/position/depth are swapped by _setYardDoor (called from create()
@@ -1402,7 +1410,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // actually reachable, since a shut gate blocks routing east.
     const cage = CAGES[stay.cageIndex];
     const toCage = !this.yardDoorOpen && !!cage;
-    const spot = toCage ? cageAnimalSpot(cage) : this._openYardSpot(stay);
+    // Issue #77: a fish's owner still walks her IN (carrying the travel
+    // tank — CARRY_KEY[CARRY_KIND.TANK] above), same as anyone else's
+    // arrival — but her "out to the yard" destination is always the one
+    // shared pond, never a spot fanned out around the gate.
+    const isFish = stay.animal.species === 'fish';
+    const spot = toCage ? cageAnimalSpot(cage)
+      : (isFish ? pondSwimSpot(this._fishAtPondCount(stay)) : this._openYardSpot(stay));
 
     this._startWalk(owner, spot.x, spot.y, {
       speed: OWNER_WALK_SPEED,
@@ -1411,7 +1425,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         carryProp.destroy();
         // Same "she's out of the box and settled now" beat a cage drop-off
         // used to get (issue #21), played right where she's set down.
-        if (stay.carryKind !== CARRY_KIND.NONE) this._playUnboxing(spot.x, spot.y, stay.carryKind);
+        // Issue #77: skipped for a fish's travel tank — it doesn't fade away
+        // like a one-time box/basket, it becomes the persistent resting prop
+        // right here instead (_refreshTravelTank, wired into _renderStay/
+        // _settleInCage below).
+        if (stay.carryKind !== CARRY_KIND.NONE && stay.carryKind !== CARRY_KIND.TANK) {
+          this._playUnboxing(spot.x, spot.y, stay.carryKind);
+        }
         if (toCage) {
           this._settleInCage(stay, stay.cageIndex);
           this._syncTieBreakers();
@@ -1420,7 +1440,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
           stay.location = LOCATION.YARD;
           this._renderStay(stay, spot.x, spot.y);
           this._syncTieBreakers(); // a new guest may now match someone already here
-          this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived — she's out playing in the yard!`);
+          this.game.events.emit(EVENTS.NOTIFY, isFish
+            ? `${stay.animal.name} arrived — she's swimming in the pond!`
+            : `${stay.animal.name} arrived — she's out playing in the yard!`);
         }
         this._walkOwnerOut(stay);
       },
@@ -1584,6 +1606,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.CAGE) continue;
       if (this._isWalking(stay)) continue;
+      // Issue #77: a fish never opens her cage and walks herself anywhere —
+      // skip her here the same way _considerCages does for the player, so a
+      // "cages" helper doesn't waste a trip standing at her tank doing
+      // nothing (_openCage itself already no-ops for her, but there's no
+      // honest task to offer in the first place).
+      if (stay.animal.species === 'fish') continue;
       const rec = this._staySprites.get(stay);
       if (!rec) continue;
       const toOwner = stay.checkoutReady && this._checkoutOwners.get(stay)?.arrived;
@@ -1597,6 +1625,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // was flagged (_flagCheckoutsReady's own _startWalkHome call) — nothing
       // left here for a helper to do.
       if (stay.checkoutReady) continue;
+      // Issue #77: a fish at the pond never sends herself home either — same
+      // exclusion as _considerLoosePets, for the same reason (_startWalkHome
+      // itself no-ops for her, but offering the task at all would read as a
+      // helper doing something when nothing actually happens).
+      if (stay.animal.species === 'fish') continue;
       const rec = this._staySprites.get(stay);
       if (!rec) continue;
       const hasHome = !!CAGES[stay.cageIndex] || this._findAnyOpenCage(stay) != null;
@@ -2062,6 +2095,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _openCage(stay) {
     const rec = this._staySprites.get(stay);
     if (!rec || this._isWalking(stay)) return;
+    // Issue #77: a fish never opens her cage and walks herself out — she has
+    // no legs, and her "cage" is a sealed tank besides. _considerCages never
+    // wires this up for a fish in the first place (it offers hold-to-pick-up
+    // her travel tank instead), so this is purely a defensive guard against
+    // some other caller reaching her here.
+    if (stay.animal.species === 'fish') return;
     // She's up and about — out from under her blanket (issue #46).
     this._untuck(stay);
     // Someone's out of her cage again, so the kennel isn't all settled for
@@ -2147,6 +2186,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const { reversible = false } = opts;
     const rec = this._staySprites.get(stay);
     if (!rec || this._isWalking(stay)) return;
+    // Issue #77: a fish never walks herself home — no self-walk exists for
+    // her at all (no legs; the travel tank the player carries is the only
+    // way she ever moves). A single guard here covers every call site
+    // (nightfall's _updateNightSettle sweep included) rather than trusting
+    // each one to remember the exception.
+    if (stay.animal.species === 'fish') return;
     // Issue #55: "pets already outside when the door closes must still be
     // able to get back in — don't strand anyone; nightfall walk-home must
     // work regardless of door state." Coming IN through a shut gate nudges it
@@ -2271,7 +2316,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // back down out in the yard), nothing here latches — she keeps
       // `checkoutReady`, and _resolveDropoff's existing carry-her-to-her-owner
       // fallback still completes the checkout from anywhere.
-      if (stay.location === LOCATION.YARD) this._startWalkHome(stay);
+      //
+      // Issue #77: a fish at the pond is the deliberate exception — she has
+      // no legs to walk herself home with, so she just stays at the pond
+      // with her "ready to go home" icon showing until the player physically
+      // carries her travel tank to her waiting owner (_resolveDropoff's
+      // carry-to-owner fallback above handles that from anywhere, pond
+      // included, with no self-walk involved).
+      if (stay.location === LOCATION.YARD && stay.animal.species !== 'fish') this._startWalkHome(stay);
     }
   }
 
@@ -2536,7 +2588,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Issue #47: one single undivided yard, so a yard-placed stay's bounds
     // are simply the whole play area — no per-zone lookup to lose track of
     // on a redraw (tie-breaker sync, a birth landing, the computer flow).
-    const bounds = cage || (stay.location === LOCATION.YARD ? YARD_RECT : null);
+    // Issue #77: a fish is the one exception — she lives at the shared pond,
+    // not the whole yard (she has no legs to wander further than that), so
+    // her bounds are the small POND_RECT instead. This is what keeps both her
+    // own wander (_updateWander) and any hatchlings' wander (_updateBabies)
+    // confined to the pond rather than roaming the grass around it.
+    const bounds = cage || (stay.location === LOCATION.YARD
+      ? (animal.species === 'fish' ? POND_RECT : YARD_RECT)
+      : null);
     const spread = Math.min(1.7, Math.max(0.9, (bounds?.w ?? 90) / 90));
 
     // Turtle/snake/bird/lizard eggs/babies sit tucked close to mom on her own
@@ -2685,6 +2744,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Issue #46: her cage's blanket survives a redraw the same way — folded
     // in the cage by day, draped over her once she's under it at night.
     this._refreshBlanket(stay);
+    // Issue #77: a fish's persistent travel tank (resting beside her home
+    // tank, or at the pond's edge while she's out playing) survives a
+    // redraw the same way — no-op for every other species.
+    this._refreshTravelTank(stay);
     // Issue #9 refinement: a mom flagged "ready, needs your help" keeps her
     // heart icon across a redraw too.
     if (stay.birthReady) this._setNeedIcon(stay, 'babies', true);
@@ -2717,6 +2780,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     rec.extras.forEach((e) => e.destroy());
     Object.values(rec.needIcons).forEach((icon) => icon.destroy());
     rec.blanket?.destroy();
+    rec.travelTank?.destroy();
     this._staySprites.delete(stay);
   }
 
@@ -2902,7 +2966,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // sprite rides along.
     const anchorX = actor.sprite.x, anchorY = actor.sprite.y;
     let sprite, extraObjs;
-    if (actor.carryOrigin === LOCATION.RECEPTION && stay.carryKind !== CARRY_KIND.NONE) {
+    // Issue #77: a fish rides in her travel tank EVERY time she's picked up,
+    // not just on her first arrival from reception — it's the only way she
+    // ever moves, so unlike a settled cat/dog taken out for a yard trip
+    // (carried bare), she's never without it.
+    const alwaysContained = stay.carryKind === CARRY_KIND.TANK;
+    if (alwaysContained || (actor.carryOrigin === LOCATION.RECEPTION && stay.carryKind !== CARRY_KIND.NONE)) {
       ({ sprite, extras: extraObjs } = this._addContainedAnimal(anchorX, anchorY, stay, this._tieBreakers()));
     } else {
       sprite = this._addAnimalSprite(anchorX, anchorY, stay.animal, stay.animal.stage, this._tieBreakers());
@@ -2965,8 +3034,20 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (!this._inRange(actor, rec.sprite.x, rec.sprite.y)) return null;
       return { label: `Give ${name} back to her owner`, run: () => this._completeCheckout(stay) };
     }
-    const inYard = actor.sprite.x >= OUTSIDE.x + 8;
-    const toYard = () => ({
+    // Issue #77: a fish has no legs — she never walks herself anywhere, so
+    // wherever she goes is wherever the player physically carries her travel
+    // tank. Setting her "down to play" only makes sense at the ONE shared
+    // pond (there's nowhere else for her to swim), so unlike every other
+    // species — who can be set down anywhere in the yard — she's gated on
+    // being right at the pond, not just generally out in the grass.
+    const isFish = stay.animal.species === 'fish';
+    const inYard = isFish
+      ? this._inRange(actor, POND_SPOT.x, POND_SPOT.y)
+      : actor.sprite.x >= OUTSIDE.x + 8;
+    const toYard = () => (isFish ? {
+      label: `Set ${name}'s travel tank down at the pond`,
+      run: () => { this._dropFishAtPond(actor, stay); actor.carryOrigin = null; },
+    } : {
       label: `Put ${name} down to play`,
       run: () => { this._dropOffToYard(actor, stay); actor.carryOrigin = null; },
     });
@@ -2980,7 +3061,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       const found = this._findOpenCageNear(actor.sprite.x, actor.sprite.y, stay);
       if (found == null) return null;
       return {
-        label: `Put ${name} in this cage`,
+        label: isFish ? `Set ${name}'s travel tank back by her cage` : `Put ${name} in this cage`,
         run: () => { this._dropOff(actor, stay, found, { fromReception }); actor.carryOrigin = null; },
       };
     };
@@ -3036,7 +3117,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // carry container right here — a quick fade+shrink "let out of the box/
     // carrier" beat — before _renderStay draws her bare-in-cage look (which
     // it does automatically now that her location is no longer 'reception').
-    if (opts.fromReception && stay.carryKind !== CARRY_KIND.NONE) {
+    // Issue #77: a fish's travel tank never fades away like this — it's a
+    // PERSISTENT prop (_refreshTravelTank, called from _renderStay below),
+    // not a one-time reception hand-off container.
+    if (opts.fromReception && stay.carryKind !== CARRY_KIND.NONE && stay.carryKind !== CARRY_KIND.TANK) {
       this._playUnboxing(pos.x, pos.y, stay.carryKind);
     }
     this._renderStay(stay, pos.x, pos.y);
@@ -3075,6 +3159,22 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // stops being highlighted. (The cage drop-off paths get this via
     // _dropOff/_completeCheckout's own _refreshCageArt; this one didn't
     // refresh cage furniture at all before.)
+    this._refreshCageFurniture();
+  }
+
+  // Issue #77 — the fish-specific yard drop-off. She doesn't land wherever
+  // the player happens to be standing (_dropOffToYard's "nudged clear of
+  // you" placement): there's exactly one shared pond, so setting her travel
+  // tank down (anywhere within reach of it — see _resolveDropoff's inYard
+  // check) always puts her at that same spot, fanned a little from any other
+  // fish already there (_fishAtPondCount).
+  _dropFishAtPond(actor, stay) {
+    actor.carryVisual?.parts.forEach(({ obj }) => obj.destroy());
+    actor.carryVisual = null;
+    actor.carrying = null;
+    stay.location = LOCATION.YARD;
+    const pos = pondSwimSpot(this._fishAtPondCount(stay));
+    this._renderStay(stay, pos.x, pos.y);
     this._refreshCageFurniture();
   }
 
@@ -3354,7 +3454,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // — the same #45 walker nightfall uses. (Without this the litter would
     // sit in an empty cage indefinitely, since a baby can't path through the
     // building on her own.) Skipped if she's already mid-journey somewhere.
-    if (hatchedAway && !this._isWalking(stay)) this._startWalkHome(stay);
+    //
+    // Issue #77: also skipped for a fish — she has no legs to walk back with.
+    // Her hatchlings still wait at her home tank (babiesAtCage above handles
+    // that generically), but SHE stays at the pond until the player
+    // physically carries her travel tank home; a real, deliberate difference
+    // from every other egg-laying species, flagged per the confirmed plan.
+    if (hatchedAway && !this._isWalking(stay) && stay.animal.species !== 'fish') this._startWalkHome(stay);
 
     // If this birth was the night's current "having babies" wake-up (issue
     // #11), it's now resolved on its own — resume toward morning.
@@ -3774,6 +3880,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.YARD) continue;
       if (this.activePlayers.some((a) => a.carrying === stay) || this._isWalking(stay)) continue;
+      // Issue #77: a fish at the pond never walks herself home (_startWalkHome
+      // itself no-ops for her too, but skip her with `continue` rather than
+      // `break` here — otherwise she'd be re-picked as "this frame's
+      // candidate" every single frame forever, silently starving every OTHER
+      // yard animal behind her in the list from ever getting walked home).
+      // She just waits, awake, at the pond until the player carries her
+      // travel tank back — see _checkAllSettled's matching exemption (she's
+      // never in _presentStays(), which is cage-only, so she's simply not
+      // part of the "everyone tucked in" tally either).
+      if (stay.animal.species === 'fish') continue;
       // A dog who still needs to go finishes her business first (issue #38 —
       // she does it right where she's playing after a short while); she
       // heads home on a later pass, once her need has cleared.
@@ -3808,17 +3924,41 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       rec.blanket = null;
       return;
     }
-    if (!rec.blanket) rec.blanket = this.add.image(0, 0, BLANKET_KEY).setOrigin(0.5, 0.5);
+    // Issue #77 (owner: "a piece of waterproof fabric"): a fish's cage gets a
+    // FITTED cover instead of the ordinary draped blanket every other
+    // species gets — a blanket doesn't work over a tank of water. Same
+    // tuckedIn state/beat, same day-folded/night-covering swap below, just a
+    // different texture and (since it has to fit the TANK, not drape over
+    // however big she is) a fixed size/position keyed off the cage rather
+    // than her sprite.
+    const isFish = stay.animal.species === 'fish';
+    const key = isFish ? WATERPROOF_COVER_KEY : BLANKET_KEY;
+    if (!rec.blanket) rec.blanket = this.add.image(0, 0, key).setOrigin(0.5, 0.5);
     const img = rec.blanket;
     if (stay.tuckedIn && stay.location === LOCATION.CAGE) {
-      // Draped over her, wherever in her cage she actually settled — she
-      // stops wandering the instant she's under it (_updateWander's tuckedIn
-      // check), so this position stays right all night. One blanket covers
-      // her companions too (eggs/babies "wrapped" with her, per DESIGN.md),
-      // since they share her cage spot.
-      img.setPosition(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight * 0.32);
-      img.setDisplaySize(rec.sprite.displayWidth * 1.3, rec.sprite.displayHeight * 0.85);
-      img.setDepth(rec.sprite.depth + 0.3);
+      if (isFish) {
+        // Stretched flat over the whole tank footprint, above even the
+        // glass-cover foreground rim (CAGE_FG depth, cage.y + cage.h + 5 —
+        // see _refreshCageArt) so it reads as covering the tank completely.
+        img.setPosition(cage.x + cage.w / 2, cage.y + cage.h * 0.6);
+        img.setDisplaySize(cage.w * 0.72, cage.h * 0.5);
+        img.setDepth(cage.y + cage.h + 6);
+      } else {
+        // Draped over her, wherever in her cage she actually settled — she
+        // stops wandering the instant she's under it (_updateWander's tuckedIn
+        // check), so this position stays right all night. One blanket covers
+        // her companions too (eggs/babies "wrapped" with her, per DESIGN.md),
+        // since they share her cage spot.
+        img.setPosition(rec.sprite.x, rec.sprite.y - rec.sprite.displayHeight * 0.32);
+        img.setDisplaySize(rec.sprite.displayWidth * 1.3, rec.sprite.displayHeight * 0.85);
+        img.setDepth(rec.sprite.depth + 0.3);
+      }
+    } else if (isFish) {
+      // Folded aside at the tank's near-left corner by day, clear of her
+      // travel tank's own resting spot (bottom-right — travelTankHomeSpot).
+      img.setPosition(cage.x + cage.w * 0.16, cage.y + cage.h * 0.34);
+      img.setDisplaySize(22, 15);
+      img.setDepth(cage.y + 1);
     } else {
       // Folded up at the back-right of her cage, waiting for her — clear of
       // the bowls (bottom-center) and the litter box (mid-left), and low
@@ -3845,6 +3985,46 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._refreshBlanket(stay);
   }
 
+  // Issue #77 — the fish's travel tank, RESTING (i.e. not currently in the
+  // player's hands — while she's actually being carried this same tank is
+  // the carryVisual container built in _pickUp instead, and no resting prop
+  // exists at all). A no-op for every other species.
+  //
+  // She's home: the tank sits empty next to her own tank cage
+  // (travelTankHomeSpot) — she's already visible swimming in her home tank's
+  // own cage art, so the travel tank itself never contains her here.
+  // She's at the pond: same idea, sitting at the pond's edge
+  // (travelTankPondRestSpot) while she swims free in the pond itself.
+  // Anywhere else (reception, or no cage yet): no sensible rest spot, so it's
+  // simply hidden until she has one.
+  _refreshTravelTank(stay) {
+    if (stay.animal.species !== 'fish') return;
+    const rec = this._staySprites.get(stay);
+    if (!rec) return;
+    if (!rec.travelTank) rec.travelTank = this.add.image(0, 0, TRAVEL_TANK_KEY).setOrigin(0.5, 1);
+    const img = rec.travelTank;
+    const cage = CAGES[stay.cageIndex];
+    if (stay.location === LOCATION.CAGE && cage) {
+      const spot = travelTankHomeSpot(cage);
+      img.setPosition(spot.x, spot.y).setDisplaySize(20, 16).setDepth(cage.y + 1).setVisible(true);
+    } else if (stay.location === LOCATION.YARD) {
+      const spot = travelTankPondRestSpot(this._fishAtPondCount(stay));
+      img.setPosition(spot.x, spot.y).setDisplaySize(20, 16).setDepth(spot.y).setVisible(true);
+    } else {
+      img.setVisible(false);
+    }
+  }
+
+  // How many OTHER fish are currently out at the shared pond — used to fan
+  // both her swim spot (pondSwimSpot) and her travel tank's resting spot
+  // (travelTankPondRestSpot) so simultaneous fish guests don't stack on the
+  // exact same point. `except` is the stay being placed, same convention as
+  // isCageOpen's — she shouldn't count against her own slot.
+  _fishAtPondCount(except = null) {
+    return this.roster.stays.filter((s) => s !== except
+      && s.animal.species === 'fish' && s.location === LOCATION.YARD).length;
+  }
+
   // Owner note 2026-07-29: "is there a way to initiate sleep for the player
   // character? there should be" — sleep doesn't start on its own; the player
   // walks to her own bed (BED_SPOT) and acts (see _checkAct),
@@ -3864,9 +4044,21 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // act prompt at the bed now says why it isn't available — see _resolveAct.)
   _checkAllSettled() {
     if (!this.night.active) return;
-    const stillOut = this.roster.stays.some((s) => !s.noCageAvailable && (
-      s.location === LOCATION.YARD || s.location === LOCATION.CARRYING || this._isWalking(s)
-    ));
+    // Issue #77 edge case: a fish left at the pond overnight never walks
+    // herself home (no self-walk exists for her at all — _updateNightSettle
+    // skips her the same way), so treating her being out in the yard as
+    // "still out" would block bedtime forever unless the player remembers to
+    // fetch her first. She's still carrying-gated and walking-gated like
+    // anyone else (those DO mean "not resolved yet"); only the plain
+    // "parked at the pond" case is exempt. (_presentStays() below is
+    // cage-only, so she's not part of the "everyone tucked in" tally either
+    // — there's nothing left gating bedtime on a fish who's simply still out
+    // at the pond.)
+    const stillOut = this.roster.stays.some((s) => {
+      if (s.noCageAvailable) return false;
+      if (s.animal.species === 'fish' && s.location === LOCATION.YARD) return false;
+      return s.location === LOCATION.YARD || s.location === LOCATION.CARRYING || this._isWalking(s);
+    });
     const settled = !stillOut && this._presentStays().every((s) => s.tuckedIn);
     if (settled === this.night.allSettled) return;
     this.night.allSettled = settled;
@@ -4231,6 +4423,18 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (this._isWalking(stay)) continue;
       const rec = this._staySprites.get(stay);
       if (!rec) continue;
+      // Issue #77: a fish never "opens her cage and walks herself out" — she
+      // has no legs, and it's a sealed tank besides. HANDLE here is ALWAYS
+      // just "hold to pick up her travel tank" (day or night, gate open or
+      // shut — none of that matters to her since she's never self-walking
+      // anywhere regardless), same hold-to-pick-up convention every other
+      // species' disabled-tap branches already use.
+      if (stay.animal.species === 'fish') {
+        r.consider(rec.sprite.x, rec.sprite.y,
+          `${stay.animal.name} can't walk herself anywhere`,
+          () => {}, { disabled: true, hint: 'hold to pick up her travel tank', hold: () => this._pickUp(actor, stay) });
+        continue;
+      }
       // Cage-opening (i.e. SENDING her outside) is skipped at night —
       // everyone should be home asleep — EXCEPT for a dog who currently
       // needs the bathroom, the same exemption the old leash flow had. (Real
@@ -4325,6 +4529,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // is outside playing doesn't move with their visual... it should
       // move with them" — she wanders within her bounds (_updateWander), so
       // the target tracks her live sprite position, not her original spot.
+      // Issue #77: a fish at the pond never "sends herself home" (there's no
+      // self-walk to send — see _startWalkHome's species guard and
+      // _flagCheckoutsReady above). HANDLE here is always just hold-to-pick-
+      // up-her-travel-tank, the only way she ever leaves the pond.
+      if (stay.animal.species === 'fish') {
+        r.consider(rec.sprite.x, rec.sprite.y,
+          `${stay.animal.name} can't walk herself anywhere`,
+          () => {}, { disabled: true, hint: 'hold to pick up her travel tank', hold: () => this._pickUp(actor, stay) });
+        continue;
+      }
       // Since issue #54 she's assigned a cage at check-in, so this is almost
       // always the first clause; _startWalkHome's claim-any-free-cage fallback
       // (and so this second, pricier check) only matters for a pre-#54 save,
@@ -4678,7 +4892,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     for (const [stay, rec] of this._staySprites) {
       if (!rec.wanderBounds || stay.tuckedIn || this._isWalking(stay)) continue;
       const b = rec.wanderBounds;
-      const inYard = stay.location === LOCATION.YARD;
+      // Issue #77: a fish never gets the "roam the whole yard" treatment
+      // below, even while her `location` reads YARD — she's confined to the
+      // small POND_RECT (_renderStay's bounds) either way, so she always
+      // uses the small anchored drift every OTHER species only gets while
+      // in a cage.
+      const inYard = stay.location === LOCATION.YARD && stay.animal.species !== 'fish';
       const amp = wanderAmplitude(stay.animal.species, inYard);
       if (!rec.wander) {
         rec.wander = { tx: rec.sprite.x, ty: rec.sprite.y, t: pickWanderInterval(stay.animal.species) };
