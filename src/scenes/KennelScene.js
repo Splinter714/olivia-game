@@ -1879,11 +1879,26 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // cage stays hers the whole time (a yard trip has always counted as
     // still occupying it), so the nameplate, bowls and
     // blanket all stay put in it.
+    this._walkToYard(stay);
+  }
+
+  // The plain cage→yard half of "let herself out to play" — factored out of
+  // _openCage so issue #69's _reverseWalk can also start this exact walk
+  // (reversing a "send her home" trip back the other way) without
+  // duplicating it. Marked `reversible`/`dir: 'toYard'` on the walk itself:
+  // this is one of the two "plain cage↔yard trip" walks issue #69 scoped
+  // "switch directions" to (see _reverseWalk's own comment for the other one
+  // and the narrowing judgment call).
+  _walkToYard(stay) {
+    const rec = this._staySprites.get(stay);
+    if (!rec) return;
     const spot = this._openYardSpot(stay);
     stay.location = LOCATION.YARD;
     this._setStayMoving(rec, true);
     this._startWalk(rec.sprite, spot.x, spot.y, {
       stay,
+      reversible: true,
+      dir: 'toYard',
       onArrive: () => {
         this._stopStayMoving(stay);
         this._settleInYard(stay);
@@ -1901,8 +1916,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   // Issue #45 #6 ("pets walk go back into their cages at night from the play
   // area on their own") — a real walk home, not the instant teleport the old
-  // _recallYardToCages did.
-  _startWalkHome(stay) {
+  // _recallYardToCages did. `reversible` (issue #69) tags the walk so
+  // _reverseWalk can turn her back around mid-trip — ONLY set true by the
+  // player's own "send her back to her cage" handle action
+  // (_considerLoosePets below); every other caller (nightfall, a checkout
+  // flagged while she's out, walking back after hatching away from mom)
+  // leaves it false on purpose, so those trips can't be interrupted by a
+  // stray tap (narrowing judgment call, flagged in the report).
+  _startWalkHome(stay, opts = {}) {
+    const { reversible = false } = opts;
     const rec = this._staySprites.get(stay);
     if (!rec || this._isWalking(stay)) return;
     // Issue #55: "pets already outside when the door closes must still be
@@ -1939,11 +1961,32 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._setStayMoving(rec, true);
     this._startWalk(rec.sprite, spot.x, spot.y, {
       stay,
+      reversible,
+      dir: 'toCage',
       onArrive: () => {
         this._stopStayMoving(stay);
         this._settleInCage(stay, cageIndex);
       },
     });
+  }
+
+  // Issue #69 (owner: "Tapping 'animal' button on an animal that's heading
+  // between cage and play area should make them switch directions and go to
+  // the other place"): cancels stay's in-progress walk and starts a fresh one
+  // back the way she came — but ONLY for a walk tagged `reversible` when it
+  // started (see _walkToYard/_startWalkHome above). Scoped to the two plain
+  // cage↔yard trips on purpose: a checkout walk to her waiting owner, the
+  // nightfall walk-home, and the post-hatch walk back to mom's cage all start
+  // non-reversible, so a tap on one of those does nothing here — same as
+  // before this issue (judgment call: the issue's own suggested narrowing,
+  // "seems safest", flagged in the report rather than silently applied to
+  // every walk).
+  _reverseWalk(stay) {
+    const walk = this._walkers.find((w) => w.stay === stay);
+    if (!walk || !walk.reversible) return;
+    this._walkers = this._walkers.filter((w) => w !== walk);
+    if (walk.dir === 'toYard') this._startWalkHome(stay, { reversible: true });
+    else this._walkToYard(stay);
   }
 
   // Arrival end of a walk: she's standing where she was headed, so re-render
@@ -4031,22 +4074,36 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.YARD) continue;
-      // She's already on her way somewhere — leave her to it (issue #45: a
-      // walking animal is a transient state, not something to grab at).
-      if (this._isWalking(stay)) continue;
+      const rec = this._staySprites.get(stay);
+      if (!rec) continue;
+      // She's already on her way somewhere — issue #45's original rule was
+      // "leave her to it", a walking animal being a transient state, not
+      // something to grab at. Issue #69 carves out exactly one exception:
+      // a walk tagged `reversible` (a plain cage↔yard trip — see
+      // _walkToYard/_startWalkHome) offers "turn her around" instead of
+      // nothing. Every other in-progress walk (checkout, nightfall, post-
+      // hatch) still falls through to the plain `continue` below untouched.
+      if (this._isWalking(stay)) {
+        const walk = this._walkers.find((w) => w.stay === stay);
+        if (walk?.reversible) {
+          const label = walk.dir === 'toYard'
+            ? `Call ${stay.animal.name} back to her cage`
+            : `Send ${stay.animal.name} back out to play`;
+          r.consider(rec.sprite.x, rec.sprite.y, label, () => this._reverseWalk(stay));
+        }
+        continue;
+      }
       // Owner note 2026-07-29: "the interact location for an animal that
       // is outside playing doesn't move with their visual... it should
       // move with them" — she wanders within her bounds (_updateWander), so
       // the target tracks her live sprite position, not her original spot.
-      const rec = this._staySprites.get(stay);
-      if (!rec) continue;
       // Since issue #54 she's assigned a cage at check-in, so this is almost
       // always the first clause; _startWalkHome's claim-any-free-cage fallback
       // (and so this second, pricier check) only matters for a pre-#54 save,
       // and short-circuits away in the normal case.
       const hasHome = !!CAGES[stay.cageIndex] || this._findAnyOpenCage(stay) != null;
       if (hasHome) {
-        r.consider(rec.sprite.x, rec.sprite.y, `Send ${stay.animal.name} back to her cage`, () => this._startWalkHome(stay), {
+        r.consider(rec.sprite.x, rec.sprite.y, `Send ${stay.animal.name} back to her cage`, () => this._startWalkHome(stay, { reversible: true }), {
           hint: 'hold to pick her up instead',
           hold: () => this._pickUp(actor, stay),
         });
