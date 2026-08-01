@@ -9,6 +9,7 @@ import {
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS, BED, BED_SPOT,
   CAGES, LITTER_SPOTS, YARD_BOWL_SPOTS, YARD_RECT,
   cageAnimalSpot, yardGateSpot, clampToYard,
+  cageEggSpot, cagePlateSpot, CAGE_EGG_SPACING,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
@@ -485,6 +486,24 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       });
     }
 
+    // Cage-owned nameplates (issue #64) and clutches of eggs (issue #57).
+    // Both used to be drawn as part of the ANIMAL — created inside
+    // _renderStay and stored on her sprite record — which is exactly why the
+    // plate vanished the moment she was picked up (_destroyStaySprites tears
+    // that record down) and why a mom's eggs travelled out to the play yard
+    // with her. They're cage FURNITURE now, on the same occupancy-driven
+    // create/destroy pattern as the bowls and litter boxes above: keyed by
+    // (cage key, slot) and refreshed from `belongsToSection`, the same
+    // occupancy rule the rest of the cage furniture already uses — which
+    // deliberately still counts a stay who's out in the yard, mid-walk, or in
+    // the player's hands as this cage's occupant.
+    this._cagePlates = {};
+    this._cageEggs = {};
+    for (const key of Object.keys(CAGES)) {
+      this._cagePlates[key] = CAGES[key].map(() => null);
+      this._cageEggs[key] = CAGES[key].map(() => null);
+    }
+
     this._rebuildScooperRestSprite();
     // The scooper's rest sprite is destroyed/recreated whenever it's picked
     // up/set down (_pickUpScooper/_dropScooper), so the registry holds a
@@ -701,8 +720,108 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         }
       });
     }
+    this._refreshCageFurniture();
+  }
+
+  // Everything a cage owns that depends on WHO lives there rather than on
+  // where that animal happens to be standing right now: her bowls, her litter
+  // box, her nameplate (issue #64) and her clutch of eggs (issue #57).
+  _refreshCageFurniture() {
     this._refreshBowls();
     this._refreshLitterBoxes();
+    this._refreshCagePlates();
+    this._refreshCageEggs();
+  }
+
+  // Issue #64 (owner: "name tag should remain on an assigned cage no matter
+  // what. Even if they just arrived or if they're currently held").
+  //
+  // The plate was already anchored to the right place — issue #42 mounts it
+  // top-center on `stay.cageSection`'s cage rather than over her body — but it
+  // was created inside _renderStay and stored on her sprite record, so its
+  // LIFETIME was the animal's, not the cage's: _pickUp calls
+  // _destroyStaySprites, and the plate went with it. Same
+  // occupancy-refresh treatment as the bowls/litter box fixes that at the
+  // root, and `belongsToSection` is what makes it survive every state the
+  // issue names — freshly checked in and still being walked over by her
+  // owner, out playing in the yard, walking somewhere, or held.
+  _refreshCagePlates() {
+    if (!this._cagePlates || !this.roster) return;
+    for (const key of Object.keys(this._cagePlates)) {
+      this._cagePlates[key].forEach((existing, slot) => {
+        const occupant = this._cageOccupant(key, slot);
+        if (!occupant) {
+          existing?.container.destroy();
+          this._cagePlates[key][slot] = null;
+          return;
+        }
+        // Names can change under us (a baby named via the reception computer
+        // never owns a cage, but a returning guest's record is reused), so
+        // the plate is rebuilt only when the name it shows is actually stale.
+        if (existing && existing.shownName === occupant.animal.name) return;
+        existing?.container.destroy();
+        const spot = cagePlateSpot(CAGES[key][slot]);
+        const plate = this._addNameTag(spot.x, spot.y, occupant.animal.name);
+        plate.shownName = occupant.animal.name;
+        // A door plate is always readable — the proximity gate
+        // (_updateNameTagVisibility) only ever applied to a tag floating
+        // above an animal out in the open.
+        plate.container.setVisible(true);
+        this._cagePlates[key][slot] = plate;
+      });
+    }
+  }
+
+  // Issue #57 (owner: "mamas with eggs — the eggs should not move with them
+  // to the play area, they should stay in their cage"), plus the owner's
+  // correction on the open question: "I meant she's allowed to go outside
+  // still." So she CAN go out; the clutch simply waits at home.
+  //
+  // That has a consequence the correction spells out: the "ready to hatch"
+  // heart and the hatch interaction have to live with the EGGS, not with
+  // mom — otherwise a clutch that came due while she was out in the yard
+  // would show its icon out there in the grass, and hatching would happen
+  // nowhere near the eggs. So the heart is drawn here too, as part of the
+  // clutch, and _resolveAct targets this same spot (see _eggCageSpot).
+  _refreshCageEggs() {
+    if (!this._cageEggs || !this.roster) return;
+    for (const key of Object.keys(this._cageEggs)) {
+      this._cageEggs[key].forEach((existing, slot) => {
+        const occupant = this._cageOccupant(key, slot);
+        const count = occupant?.animal.hasEggs ? (occupant.animal.eggCount || 0) : 0;
+        const heart = !!(count && occupant.birthReady);
+        if (existing && existing.count === count && existing.heart === heart) return;
+        existing?.objs.forEach((o) => o.destroy());
+        if (!count) {
+          this._cageEggs[key][slot] = null;
+          return;
+        }
+        const cage = CAGES[key][slot];
+        const spot = cageEggSpot(cage);
+        const objs = [];
+        const startX = spot.x - ((count - 1) * CAGE_EGG_SPACING) / 2;
+        for (let i = 0; i < count; i++) {
+          const ex = startX + i * CAGE_EGG_SPACING;
+          const ey = spot.y + (i % 2 ? 3 : -3); // a slightly uneven nest, not a straight line
+          objs.push(this.add.image(ex, ey, EGG_KEY).setOrigin(0.5, 1).setDepth(ey));
+        }
+        if (heart) {
+          objs.push(this.add.image(spot.x, spot.y - 16, NEED_KEY.babies).setOrigin(0.5, 1).setDepth(9002));
+        }
+        this._cageEggs[key][slot] = { count, heart, objs };
+        objs.forEach((o) => this._snapCagePop(o));
+      });
+    }
+  }
+
+  // The clutch's world spot for a stay whose eggs live in a cage, or null if
+  // she has no eggs / no cage of her own (a pre-#54 restored save). This is
+  // both where _refreshCageEggs drew them and where the hatch interaction and
+  // its heart icon belong — see _resolveAct / _setNeedIcon.
+  _eggCageSpot(stay) {
+    if (!stay.animal.hasEggs) return null;
+    const cage = CAGES[stay.cageSection]?.[stay.cageSlot];
+    return cage ? cageEggSpot(cage) : null;
   }
 
   // Bowls only exist for an occupied cage (issue #22 #6, owner note
@@ -1492,30 +1611,19 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // spread bounds.
     const cage = CAGES[stay.location]?.[stay.cageSlot];
 
-    // Nameplate anchor: a caged/tanked/nested stay (per issue #20's
-    // unification, turtle islands/snake perches/bird nests all count) gets a
-    // FIXED plate mounted top-center of her cage, independent of wherever she
-    // currently wanders inside it (or whether she's even there at all right
-    // now) — reads as a nameplate on the cage door, not a floating label.
-    // (Briefly moved to just below the bowls, then reverted back up top per
-    // owner note 2026-07-29.) Anyone without a cage (waiting at reception,
-    // being carried) keeps the original behavior: the tag floats just above
-    // her current position.
+    // Nameplate: a stay with a cage of her own doesn't get one here AT ALL
+    // anymore — issue #64 moved the door plate out to _refreshCagePlates,
+    // where it's owned by the CAGE and lives and dies with the cage's
+    // occupancy rather than with this sprite record. (Its position is
+    // unchanged; issue #42 already mounted it top-center on `cageSection`'s
+    // cage. What was wrong was its lifetime: picking her up destroys this
+    // record, and the plate went with it.)
     //
-    // Bug fix (owner note 2026-07-29: "for assigned cages when there's an
-    // animal in the play-yard, the food/water bowls and name plate and all
-    // of that should stay put"): this used to reuse `cage` above, which is
-    // null the instant she's out playing (her `location` reads 'yard' then,
-    // even though the cage is still hers) — the nameplate would fall back to
-    // floating over her in the yard instead of staying on her cage. Looked
-    // up via `cageSection` instead (her actual home cage, set at drop-off
-    // and unchanged by a yard trip) so it stays put regardless of whether
-    // she's actually standing there right now.
+    // A stay with no cage at all — waiting at reception, or restored from a
+    // pre-#54 save — still gets the original floating tag just above her, kept
+    // on her position by _updateStayVisuals and proximity-gated like before.
     const homeCage = CAGES[stay.cageSection]?.[stay.cageSlot];
-    const cageNameAnchor = homeCage ? { x: homeCage.x + homeCage.w / 2, y: homeCage.y + 18 } : null;
-    const tag = cageNameAnchor
-      ? this._addNameTag(cageNameAnchor.x, cageNameAnchor.y, animal.name)
-      : this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
+    const tag = homeCage ? null : this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
     // Issue #47: one single undivided yard, so a yard-placed stay's bounds
     // are simply the whole play area — no per-zone lookup to lose track of
     // on a redraw (tie-breaker sync, a birth landing, the computer flow).
@@ -1537,16 +1645,21 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // follows her while she wanders (and while she walks herself somewhere,
     // issue #45) instead of being left behind at her original placement.
     const followers = containerExtras.map((obj) => ({ obj, dx: obj.x - x, dy: obj.y - y, dz: obj.depth - y }));
-    let cx = x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);
-    if (animal.hasEggs) {
-      for (let i = 0; i < animal.eggCount; i++) {
-        const jitterY = (Math.random() - 0.5) * (sharesHome ? 10 : 14) * spread;
-        const egg = this.add.image(cx, y - 1 + jitterY, EGG_KEY).setOrigin(0.5, 1).setDepth(y - 1);
-        extras.push(egg);
-        followers.push({ obj: egg, dx: cx - x, dy: -1 + jitterY, dz: -1 });
-        cx += (sharesHome ? 10 : 16) * spread;
-      }
-    }
+    // Issue #57: a clutch that hatched while its mother was off in the yard
+    // leaves the hatchlings at the CAGE (that's where the eggs were, and
+    // that's where the owner asked them to end up) — so the litter is laid
+    // out around the cage, not around her, until she gets home to them. The
+    // flag clears itself the moment a render puts her back in her own cage.
+    if (stay.babiesAtCage && (!homeCage || stay.location === stay.cageSection)) stay.babiesAtCage = false;
+    const babiesAtCage = !!stay.babiesAtCage;
+    const babyBase = babiesAtCage ? cageAnimalSpot(homeCage) : { x, y };
+    let cx = babyBase.x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);
+    // (Issue #57: her eggs used to be drawn right here, as `extras` that rode
+    // along at a fixed offset from her sprite — which is precisely what
+    // carried the whole clutch out to the play yard when she went out to
+    // play. Eggs belong to the CAGE now; see _refreshCageEggs. A mom with no
+    // cage of her own can't have a clutch to leave behind, so there's no
+    // fallback needed here.)
 
     // Companions (a mom's litter). Anyone whose coat+pattern is shared with
     // another animal currently in the kennel gets a coloured collar — and an
@@ -1575,9 +1688,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // Where she actually was a moment ago, if this redraw didn't move mom
       // far — otherwise the formation spot beside her.
       const prev = prevBabies[babies.length];
-      const keep = prev && Phaser.Math.Distance.Between(prev.x, prev.y, x, y) < BABY_KEEP_RADIUS;
+      const keep = prev && Phaser.Math.Distance.Between(prev.x, prev.y, babyBase.x, babyBase.y) < BABY_KEEP_RADIUS;
       const wx = keep ? prev.x : cx;
-      const wy = keep ? prev.y : y + jitterY;
+      const wy = keep ? prev.y : babyBase.y + jitterY;
       const babySprite = this._addAnimalSprite(wx, wy, baby, 'baby', tb);
       extras.push(babySprite);
       babySprites.push(babySprite);
@@ -1641,7 +1754,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       pos: { x, y }, sprite, tag, extras, followers, babies, babyLabels, babySprites,
       needIcons: {}, blanket: null, walking: false,
       wanderBounds, wanderAnchor, wander: null,
-      cageAnchored: !!cageNameAnchor,
+      // Issue #57: the clutch's fixed spot in her cage, when she has one —
+      // where _layOutNeedIcons parks the "ready to hatch" heart, so it stays
+      // with the eggs instead of floating over a mother who's out playing.
+      eggCageSpot: this._eggCageSpot(stay),
+      // Issue #57: a clutch that hatched while she was away leaves the
+      // hatchlings AT the cage; they anchor there (not to her) until she gets
+      // home — see _updateBabies.
+      babyAnchor: babiesAtCage ? cageAnimalSpot(homeCage) : null,
+      babyBounds: babiesAtCage ? homeCage : null,
       // What this render assumed about tie-breakers, so _syncTieBreakers can
       // tell when an arrival/checkout has changed who needs a collar.
       lookSig: this._lookSignature(stay, tb),
@@ -1680,7 +1801,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const rec = this._staySprites.get(stay);
     if (!rec) return;
     rec.sprite.destroy();
-    rec.tag.container.destroy();
+    // Issue #64: `tag` is null for anyone with a cage of her own — her plate
+    // is the CAGE's now (_refreshCagePlates), and must survive exactly the
+    // teardown this method performs (picking her up, a redraw mid-walk).
+    rec.tag?.container.destroy();
     rec.extras.forEach((e) => e.destroy());
     Object.values(rec.needIcons).forEach((icon) => icon.destroy());
     rec.blanket?.destroy();
@@ -1724,7 +1848,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const px = this.player.x, py = this.player.y;
     for (const rec of this._staySprites.values()) {
       const near = Phaser.Math.Distance.Between(px, py, rec.sprite.x, rec.sprite.y) <= NAME_TAG_RADIUS;
-      rec.tag.container.setVisible(rec.cageAnchored || near);
+      // Issue #64: a door plate isn't here anymore — it belongs to the cage
+      // and is permanently visible (_refreshCagePlates). Only a tag FLOATING
+      // over an animal with no cage of her own is proximity-gated.
+      rec.tag?.container.setVisible(near);
       for (const label of rec.babyLabels) label.setVisible(near);
     }
   }
@@ -1736,6 +1863,22 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _setNeedIcon(stay, key, show) {
     const rec = this._staySprites.get(stay);
     if (!rec) return;
+    // Issue #57 (owner's correction: "I meant she's allowed to go outside
+    // still"): the "ready to hatch" heart belongs with the EGGS, and the eggs
+    // stay at her cage — so for an egg mom this icon is drawn as part of the
+    // clutch (_refreshCageEggs) instead of floating above her head. Otherwise
+    // a clutch that came due while she was out playing would advertise itself
+    // in the middle of the yard, nowhere near the eggs the player has to walk
+    // up to. Any stray animal-anchored heart is cleared on the way through.
+    if (key === 'babies' && rec.eggCageSpot) {
+      if (rec.needIcons.babies) {
+        rec.needIcons.babies.destroy();
+        delete rec.needIcons.babies;
+        this._layOutNeedIcons(rec);
+      }
+      this._refreshCageEggs();
+      return;
+    }
     if (show) {
       if (rec.needIcons[key]) return;
       rec.needIcons[key] = this.add.image(rec.sprite.x, rec.sprite.y, NEED_KEY[key]).setOrigin(0.5, 1).setDepth(9002);
@@ -1789,7 +1932,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         baby.label.setPosition(baby.x, baby.y + 2).setDepth(baby.y + 0.3);
       }
       this._layOutNeedIcons(rec);
-      if (!rec.cageAnchored) {
+      if (rec.tag) {
         rec.tag.container.setPosition(s.x, s.y - s.displayHeight - 6 - rec.tag.height);
       }
     }
@@ -1823,8 +1966,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // clearing them — same as a yard trip already did. That supersedes the
     // owner's 2026-07-29 note about bowls disappearing on pickup, which was
     // written when being carried genuinely meant having no cage at all.
-    this._refreshBowls();
-    this._refreshLitterBoxes();
+    // Issue #64 ("name tag should remain on an assigned cage no matter what.
+    // Even if they just arrived or if they're currently held"): her door plate
+    // is cage furniture now, so this refresh is what re-asserts it right after
+    // _destroyStaySprites above tore her sprite record down — and
+    // belongsToSection still counts her as this cage's occupant while she's in
+    // the player's hands, so the plate simply stays.
+    this._refreshCageFurniture();
     // Arrivals with a carry prop (leash/cage/box/basket) ride in that prop,
     // composed with her own sprite the same "contained" way she showed at
     // reception (issue #21) — everything else (small pets, or any settled
@@ -2266,18 +2414,28 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const rec = this._staySprites.get(stay);
     const pos = rec ? { ...rec.pos } : null;
 
+    let hatchedAway = false;
     if (stay.animal.hasEggs) {
       const count = stay.animal.eggCount;
+      // Issue #57: the clutch is in her cage and she may well be off in the
+      // yard — the hatchlings belong where the EGGS were, not at her feet
+      // wherever she happens to be standing. `babiesAtCage` is what tells
+      // _renderStay/_updateBabies to keep the new litter at the cage; it
+      // clears itself the moment she's back in it.
+      hatchedAway = !!(CAGES[stay.cageSection]?.[stay.cageSlot] && stay.location !== stay.cageSection);
+      stay.babiesAtCage = hatchedAway;
       stay.animal.hasEggs = false;
       stay.animal.eggCount = 0;
-      // "Then you take out the shells!" (DESIGN.md) — the egg extras are
-      // simply gone once _renderStay redraws below; no separate pickup step.
+      // "Then you take out the shells!" (DESIGN.md) — the cage's egg sprites
+      // are simply gone on the next furniture refresh below; no pickup step.
       const babies = Array.from({ length: count }, () =>
         createAnimal(stay.animal.species, { stage: 'baby', name: BABY_PLACEHOLDER }));
       stay.companions = [...stay.companions, ...babies];
       stay.needsAnnouncement = true;
       stay.photoTaken = false; // issue #37: needs a photo taken before she can be announced
-      this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name}'s eggs are hatching!`);
+      this.game.events.emit(EVENTS.NOTIFY, hatchedAway
+        ? `${stay.animal.name}'s eggs are hatching — she's coming back to her cage!`
+        : `${stay.animal.name}'s eggs are hatching!`);
     } else if (stay.animal.isPregnant && SPECIES[stay.animal.species].family === FAMILY.EGGS_OR_BABIES) {
       // Owner note 2026-07-29 (issue #31): for an egg-laying species, the
       // next phase after "pregnant" is laying eggs, not live babies
@@ -2303,6 +2461,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
 
     if (pos) this._renderStay(stay, pos.x, pos.y);
+    // The clutch just appeared or just vanished — the cage's own egg sprites
+    // (and the plate, bowls, litter box) are refreshed from the roster, not
+    // from her sprite record, so they need telling.
+    this._refreshCageFurniture();
+
+    // Issue #57: her eggs hatched at home while she was out. The hatchlings
+    // are waiting in her cage, so she walks back to them under her own power
+    // — the same #45 walker nightfall uses. (Without this the litter would
+    // sit in an empty cage indefinitely, since a baby can't path through the
+    // building on her own.) Skipped if she's already mid-journey somewhere.
+    if (hatchedAway && !this._isWalking(stay)) this._startWalkHome(stay);
 
     // If this birth was the night's current "having babies" wake-up (issue
     // #11), it's now resolved on its own — resume toward morning.
@@ -3300,13 +3469,23 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // to walk over and act to actually have her babies/hatch her eggs. She's
     // usually standing inside her own cage, but that no longer shadows this —
     // her cage is on the cage button, the birth is on this one (issue #51).
+    //
+    // Issue #57: for a mom sitting on EGGS the interaction is at the eggs, not
+    // at her. Her clutch stays in her cage while she's free to go out and play
+    // ("I meant she's allowed to go outside still"), so anchoring the hatch to
+    // her body would put it out in the grass — and a clutch whose mother
+    // wandered off would be unhatchable. _eggCageSpot is the same point the
+    // eggs and their heart icon are actually drawn at (_refreshCageEggs).
     for (const stay of this.roster.stays) {
       if (!stay.birthReady) continue;
+      const eggs = this._eggCageSpot(stay);
       const rec = this._staySprites.get(stay);
+      const at = eggs || (rec ? { x: rec.sprite.x, y: rec.sprite.y } : null);
+      if (!at) continue;
       const label = stay.animal.hasEggs
         ? `Help ${stay.animal.name}'s eggs hatch`
         : `Help ${stay.animal.name} have her babies`;
-      if (rec) consider(rec.sprite.x, rec.sprite.y, label, () => this._triggerBirth(stay));
+      consider(at.x, at.y, label, () => this._triggerBirth(stay));
     }
 
     // Issue #37 ("can we add something where you actually get to take cute
@@ -3568,12 +3747,21 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // Tucked in under her blanket, or waiting at reception / in the
       // player's hands (no bounds at all) — the litter is one bundle with her
       // then, positioned by the render, and nobody wanders.
-      if (stay.tuckedIn || !rec.wanderBounds) continue;
+      if (stay.tuckedIn || (!rec.wanderBounds && !rec.babyAnchor)) continue;
 
-      const travelling = this._isWalking(stay);
-      const tether = stay.location === LOCATION.YARD ? BABY_TETHER.yard : BABY_TETHER.cage;
-      const b = travelling ? null : rec.wanderBounds;
-      const mx = rec.sprite.x, my = rec.sprite.y;
+      // Issue #57: hatchlings that came out of the clutch while their mother
+      // was elsewhere mill about at HER CAGE (where the eggs were) instead of
+      // homing on her — they'd have to cross the building to reach her, and
+      // babies don't path. She's already walking back to them (_triggerBirth),
+      // and the render that settles her in the cage re-forms the litter at her
+      // feet, so this only holds for the length of that walk.
+      const anchored = !!rec.babyAnchor;
+      const travelling = !anchored && this._isWalking(stay);
+      const tether = anchored ? BABY_TETHER.cage
+        : (stay.location === LOCATION.YARD ? BABY_TETHER.yard : BABY_TETHER.cage);
+      const b = anchored ? rec.babyBounds : (travelling ? null : rec.wanderBounds);
+      const mx = anchored ? rec.babyAnchor.x : rec.sprite.x;
+      const my = anchored ? rec.babyAnchor.y : rec.sprite.y;
 
       for (const baby of rec.babies) {
         const dm = Phaser.Math.Distance.Between(baby.x, baby.y, mx, my);

@@ -91,6 +91,30 @@ export function cageAnimalSpot(cage) {
   return { x: cage.x + cage.w / 2, y: cage.y + cage.h - 6 };
 }
 
+// Issue #57 (owner: "mamas with eggs — the eggs should not move with them to
+// the play area, they should stay in their cage"): where a clutch sits inside
+// its cage. Eggs used to be drawn as part of the MOTHER (KennelScene's
+// _renderStay `extras`), which meant they travelled out to the yard with her.
+// They're cage furniture now, like the bowls and the litter box, so this is
+// their fixed home: nestled toward the middle-right of the cage floor, clear
+// of the two bowls along the bottom edge (cage.w/2 ± 12, cage.h - 8) and the
+// litter box over at 0.26w/0.46h.
+export function cageEggSpot(cage) {
+  return { x: cage.x + cage.w * 0.64, y: cage.y + cage.h * 0.58 };
+}
+// Horizontal spacing between eggs in a clutch laid out around that spot.
+export const CAGE_EGG_SPACING = 10;
+
+// Where the nameplate hangs on a cage (issue #42: mounted top-center, reading
+// as a plate on the cage door). Issue #64 (owner: "name tag should remain on
+// an assigned cage no matter what — even if they just arrived or if they're
+// currently held") makes it cage furniture rather than part of the animal's
+// own sprite record, so it stays put while she's out in the yard, mid-walk,
+// or in the player's hands.
+export function cagePlateSpot(cage) {
+  return { x: cage.x + cage.w / 2, y: cage.y + 18 };
+}
+
 // Issue #54 (owner: "assignment order should be bottom row first, left to
 // right"): the order cages get handed out in, as a flat list of
 // `{ sectionKey, slot }` identities — the BOTTOM row of the grid (the one
