@@ -1788,7 +1788,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // exception is bringing her back in from the yard, which keeps its
   // original walk-up-and-it-happens feel (no interact needed), same as
   // before.
-  _checkDropoff(interactPressed) {
+  _checkDropoff(carryPressed) {
     const stay = this.carrying;
     // Issue #36: a checkout-ready stay goes home, not back into a cage —
     // regardless of where she was picked up from, walking her over to her
@@ -1802,7 +1802,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // cage to open) when her checkout came due.
     if (stay.checkoutReady) {
       const rec = this._checkoutOwners.get(stay);
-      if (rec?.arrived && interactPressed) {
+      if (rec?.arrived && carryPressed) {
         const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, rec.sprite.x, rec.sprite.y);
         if (d < PICKUP_RADIUS) this._completeCheckout(stay);
       }
@@ -1813,13 +1813,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // (change your mind / move her to a different spot), OR come back
       // inside to any open cage.
       if (this.player.x >= OUTSIDE.x + 8) {
-        if (!interactPressed) return;
+        if (!carryPressed) return;
         this._dropOffToYard(stay);
         this._carryOrigin = null;
         return;
       }
       const found = this._findOpenCageNear(this.player.x, this.player.y);
-      if (!found || !interactPressed) return;
+      if (!found || !carryPressed) return;
       if (this._dropOff(stay, found.section, { cageSlot: found.slot })) this._carryOrigin = null;
     } else if (this._carryOrigin === LOCATION.RECEPTION) {
       // Owner note 2026-07-29 ("why can't I take a pet directly to the play
@@ -1839,7 +1839,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // she's actually settled somewhere).
       const found = this._findOpenCageNear(this.player.x, this.player.y);
       if (!found) return;
-      if (!interactPressed) return;
+      if (!carryPressed) return;
       if (this._dropOff(stay, found.section, { fromReception: true, cageSlot: found.slot })) this._carryOrigin = null;
     } else {
       // Picked up from her own cage — she can go out to the yard to play, OR
@@ -1849,13 +1849,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         // enable setting her down there — an explicit interact press is
         // needed to actually place her, same as every other drop-off target,
         // rather than auto-placing the instant she crosses into the yard.
-        if (!interactPressed) return;
+        if (!carryPressed) return;
         this._dropOffToYard(stay);
         this._carryOrigin = null;
         return;
       }
       const found = this._findOpenCageNear(this.player.x, this.player.y);
-      if (!found || !interactPressed) return;
+      if (!found || !carryPressed) return;
       if (this._dropOff(stay, found.section, { cageSlot: found.slot })) this._carryOrigin = null;
     }
   }
@@ -2099,7 +2099,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   // Sets the scooper back down at the player's current spot (issue #22 #5) —
   // triggered as a fallback when the player interacts with nothing else
-  // nearby while holding it (see _checkInteractions).
+  // nearby while holding it (see _checkCarry).
   _dropScooper() {
     this.hasScooper = false;
     this._scooperVisual?.destroy();
@@ -2126,7 +2126,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // it just flags the mom as ready and waiting on the player (a small heart
   // icon, same convention as the food/bathroom/tuck-in bubbles), and the
   // player has to walk over and interact to actually have the babies/hatch
-  // the eggs (see _checkInteractions). Reception/carrying stays don't accrue
+  // the eggs (see _checkAct). Reception/carrying stays don't accrue
   // this — matches _updateNeeds' "only settled stays" rule.
 
   // Every stay considered "settled at the kennel" for need/birth ticking —
@@ -2166,7 +2166,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // (BABY_PLACEHOLDER) until the player sends the owner an announcement via
   // the reception computer (issue #10), and the stay is flagged so the
   // computer's "needs attention" icon picks it up. Called from
-  // _checkInteractions once the player walks up to a birth-ready stay and
+  // _checkAct once the player walks up to a birth-ready stay and
   // interacts — no longer automatic.
   _triggerBirth(stay) {
     if (!stay.birthReady) return;
@@ -2378,7 +2378,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   }
 
   // Phase 1: she sneaks in toward the tray. Nothing's stolen yet — if the
-  // player interacts near her during this window (_checkInteractions),
+  // player interacts near her during this window (_checkAct),
   // _scareRaccoon() cancels the theft outright.
   _triggerRaccoon() {
     const from = this._raccoonExitPoint();
@@ -2437,7 +2437,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     });
   }
 
-  // Issue #13 follow-up: scare her off. Called from _checkInteractions when
+  // Issue #13 follow-up: scare her off. Called from _checkAct when
   // the player is near her and interacts, at any point while she's present.
   _scareRaccoon() {
     const raccoon = this._raccoon;
@@ -2653,7 +2653,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   // Owner note 2026-07-29: "is there a way to initiate sleep for the player
   // character? there should be" — sleep doesn't start on its own; the player
-  // walks to her own bed (BED_SPOT) and interacts (see _checkInteractions),
+  // walks to her own bed (BED_SPOT) and acts (see _checkAct),
   // same "walk up and it happens" convention as everything else in this file.
   //
   // Issue #45 (owner, on what now ends the night): "wait until all pets are
@@ -2726,7 +2726,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     } else if (reason === WAKE_REASON.BABIES) {
       // Refinement: flags her ready-and-waiting the same as a daytime timer
       // expiry — the player resolves this wake-up the same way as any
-      // other, by walking over and interacting (_checkInteractions calls
+      // other, by walking over and acting (_checkAct calls
       // _triggerBirth, which resolves the current wake). If morning comes
       // first, that's fine — no forced auto-resolution, she just stays
       // flagged into the next day.
@@ -2910,75 +2910,110 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.messes.push({ kind, x, y, sprite, icon, stay });
   }
 
-  // ── Unified interaction (issues #5, #6, #7, #8, #20, #22) ────────────────
-  // A single interact press resolves to whichever nearby thing makes sense —
-  // picking up an arrival, taking a settled animal out to play, feeding a
-  // cage, topping off the tank, feeding the turtles, grabbing/dropping the
-  // scooper, scooping a mess, taking a dog out, baking a treat, or moving
-  // the yard divider — whichever is closest, so the same button works
-  // everywhere without stepping on itself. If nothing is in range and the
-  // scooper is equipped, interacting just sets it back down (issue #22 #5).
+  // ── Interaction: three buttons (issue #51) ───────────────────────────────
+  // Everything used to funnel through ONE button and one nearest-target
+  // resolver, so every action in the game competed with every other action by
+  // raw distance — and near-ties broke by registration order, which is
+  // invisible to the player and was wrong four separate times in one session
+  // (birth, checkout, take-photo, leash), each patched with a one-off
+  // `if (someFlag) continue;` in the pickup loop. Owner 2026-07-30: "we need
+  // to audit controls and what competes with what... separate some things
+  // into separate controls" → "Three: carry / cage / act."
+  //
+  // So there are three buttons now, each running its OWN resolution over only
+  // its own class of actions (see Controls.js for the key/pad/touch mapping):
+  //   carry — pick up / put down an animal; pick up / set down the scooper
+  //   cage  — open a cage and let the occupant take herself out
+  //   act   — everything else (feed, clean, help a birth, take a photo, the
+  //           computer, treats, the raccoon, going to bed)
+  // Two things at the same spot can no longer shadow each other, so the
+  // per-flag workaround guards are gone.
 
-  _checkInteractions(interactPressed) {
-    if (!interactPressed) return;
+  // Shared nearest-target picker — each button builds its own, so the classes
+  // are resolved independently and can never out-compete each other.
+  _resolver() {
     const px = this.player.x, py = this.player.y;
-    const dist = (x, y) => Phaser.Math.Distance.Between(px, py, x, y);
-
     let best = null, bestD = PICKUP_RADIUS;
-    const consider = (x, y, action) => {
-      const d = dist(x, y);
-      if (d < bestD) { bestD = d; best = action; }
+    return {
+      consider(x, y, action) {
+        const d = Phaser.Math.Distance.Between(px, py, x, y);
+        if (d < bestD) { bestD = d; best = action; }
+      },
+      run() {
+        if (!best) return false;
+        best();
+        return true;
+      },
     };
+  }
+
+  // CARRY — the pick-up/put-down button. Animals waiting at reception, animals
+  // out in the play yard (picking one up is still how she gets a cage of her
+  // own — nameplate + bowls), and the scooper. A pet out in the yard is
+  // pickup-able at night too, so she can always be brought straight back in.
+  // If nothing's in range and the scooper's in hand, this sets it back down
+  // (issue #22 #5).
+  _checkCarry(pressed) {
+    if (!pressed) return;
+    const r = this._resolver();
 
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.RECEPTION) continue;
       const rec = this._staySprites.get(stay);
-      if (rec) consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
+      if (rec) r.consider(rec.pos.x, rec.pos.y, () => this._pickUp(stay));
     }
 
-    // Issue #45: what happens at an animal now depends on where she is.
-    //  - Settled in her cage → OPEN THE CAGE and she takes herself out: to
-    //    her waiting owner if one's here for her, otherwise out to the play
-    //    yard. This one action replaces both carrying a pet out to play and
-    //    carrying a checkout-ready pet over to her owner, and it's also how
-    //    a dog who needs the bathroom gets outside (issue #38 — she does her
-    //    business out there on her own; no separate leash minigame).
-    //  - Out in the yard → PICK HER UP, which is still how she gets a cage
-    //    of her own (nameplate + bowls) — the unchanged carry mechanic.
-    // Cage-opening is skipped at night (everyone should be home asleep)
-    // EXCEPT for a dog who currently needs the bathroom — same exemption the
-    // old leash flow had. A pet already out in the yard stays pickup-able at
-    // night regardless, so she can always be brought straight back in.
-    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
     for (const stay of this.roster.stays) {
-      const inCage = sectionKeys.has(stay.location);
-      const inYard = stay.location === LOCATION.YARD;
-      if (!inCage && !inYard) continue;
+      if (stay.location !== LOCATION.YARD) continue;
       // She's already on her way somewhere — leave her to it (issue #45: a
       // walking animal is a transient state, not something to grab at).
       if (this._isWalking(stay)) continue;
-      const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
-      if (this.night.active && !bathroomDog && !inYard) continue;
-      // A mom flagged ready-and-waiting (birthReady, below) sits at this
-      // same sprite position — without this guard, the tie in consider()
-      // always resolves to whichever action was registered first (this one,
-      // registered earlier in the loop), so interacting with her silently
-      // opened her cage instead of ever triggering the birth.
-      if (stay.birthReady) continue;
-      // Issue #37: same tie-break issue as birthReady above — a mom with
-      // new babies not yet photographed sits at this same sprite position;
-      // without this guard interacting with her always did the other thing
-      // instead of ever taking the photo.
-      if (stay.needsAnnouncement && !stay.photoTaken) continue;
       // Owner note 2026-07-29: "the interact location for an animal that
       // is outside playing doesn't move with their visual... it should
       // move with them" — she wanders within her bounds (_updateWander), so
       // the target tracks her live sprite position, not her original spot.
       const rec = this._staySprites.get(stay);
-      if (!rec) continue;
-      if (inYard) consider(rec.sprite.x, rec.sprite.y, () => this._pickUp(stay));
-      else consider(rec.sprite.x, rec.sprite.y, () => this._openCage(stay));
+      if (rec) r.consider(rec.sprite.x, rec.sprite.y, () => this._pickUp(stay));
     }
+
+    if (!this.hasScooper) r.consider(this.scooperRestPos.x, this.scooperRestPos.y, () => this._pickUpScooper());
+
+    if (!r.run() && this.hasScooper) this._dropScooper();
+  }
+
+  // CAGE — issue #45's one action at an occupied cage: open it and the
+  // occupant takes herself out, to her waiting owner if one's here for her,
+  // otherwise out to the play yard. It replaced both carrying a pet out to
+  // play and carrying a checkout-ready pet over to her owner, and it's also
+  // how a dog who needs the bathroom gets outside (issue #38 — she does her
+  // business out there on her own; no separate leash minigame).
+  _checkCage(pressed) {
+    if (!pressed) return;
+    const r = this._resolver();
+    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
+    for (const stay of this.roster.stays) {
+      if (!sectionKeys.has(stay.location)) continue;
+      if (this._isWalking(stay)) continue;
+      // Cage-opening is skipped at night — everyone should be home asleep —
+      // EXCEPT for a dog who currently needs the bathroom, the same exemption
+      // the old leash flow had. (Real game logic, not a tie-break workaround:
+      // it belongs to the cage action specifically, which is why it now lives
+      // in the cage button's own loop.)
+      const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
+      if (this.night.active && !bathroomDog) continue;
+      const rec = this._staySprites.get(stay);
+      if (rec) r.consider(rec.sprite.x, rec.sprite.y, () => this._openCage(stay));
+    }
+    r.run();
+  }
+
+  // ACT — everything that isn't carrying or opening a cage (issues #5, #6,
+  // #7, #8, #13, #20, #22, #37): feeding, cleaning, births, photos, the
+  // reception computer, treats, the raccoon, and turning in for the night.
+  _checkAct(pressed) {
+    if (!pressed) return;
+    const r = this._resolver();
+    const consider = r.consider;
 
     // Owner note 2026-07-29 (bowl decoupling): filling food vs. water now
     // resolves to whichever specific bowl sprite is closer — same
@@ -3001,8 +3036,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     consider(YARD_BOWL_SPOTS.food.x, YARD_BOWL_SPOTS.food.y, () => this._fillYardBowl('food'));
     consider(YARD_BOWL_SPOTS.water.x, YARD_BOWL_SPOTS.water.y, () => this._fillYardBowl('water'));
 
-    if (!this.hasScooper) consider(this.scooperRestPos.x, this.scooperRestPos.y, () => this._pickUpScooper());
-
+    // (Picking the scooper up / setting it back down is the CARRY button's
+    // job now — see _checkCarry. Cleaning a mess is still an act.)
     for (const mess of this.messes) {
       consider(mess.x, mess.y, () => this._cleanMess(mess));
     }
@@ -3014,8 +3049,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
 
     // Issue #9 refinement: a mom flagged ready-and-waiting needs the player
-    // to walk over and interact to actually have her babies/hatch her eggs —
-    // same pattern as grabbing a dog's leash for a bathroom need.
+    // to walk over and act to actually have her babies/hatch her eggs. She's
+    // usually standing inside her own cage, but that no longer shadows this —
+    // her cage is on the cage button, the birth is on this one (issue #51).
     for (const stay of this.roster.stays) {
       if (!stay.birthReady) continue;
       const rec = this._staySprites.get(stay);
@@ -3054,8 +3090,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       consider(BED_SPOT.x, BED_SPOT.y, () => this._beginSleep());
     }
 
-    if (best) best();
-    else if (this.hasScooper) this._dropScooper(); // nothing nearby — set it down (issue #22 #5)
+    r.run();
   }
 
   // ── Per-frame ────────────────────────────────────────────────────────────
@@ -3089,14 +3124,22 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._updateNameTagVisibility();
     this.player.setDepth(this.player.y);
 
-    // interactJustDown() is stateful (edge-triggered) — read it exactly once
-    // per frame and route the single result to whichever action applies.
-    const interactPressed = this.controls.interactJustDown();
+    // The three action reads are stateful (edge-triggered) — read ALL of them
+    // exactly once per frame, unconditionally, before branching, so a press
+    // never survives into a later frame just because this frame's branch
+    // wasn't interested in it.
+    const carryPressed = this.controls.carryJustDown();
+    const cagePressed = this.controls.cageJustDown();
+    const actPressed = this.controls.actJustDown();
     if (this.carrying) {
       this._followCarry();
-      this._checkDropoff(interactPressed);
+      // Hands are full: carry is the only button that does anything, and it's
+      // what puts her down (issue #51 — this used to be the shared button).
+      this._checkDropoff(carryPressed);
     } else {
-      this._checkInteractions(interactPressed);
+      this._checkCarry(carryPressed);
+      this._checkCage(cagePressed);
+      this._checkAct(actPressed);
     }
     this._followScooper();
   }

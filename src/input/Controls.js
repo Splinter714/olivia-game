@@ -2,8 +2,9 @@
 // per-frame movement vector, and mouse/touch taps feed the SAME "walk to this
 // world point" request. Nothing in the scene's movement code should touch a raw
 // key/pad/pointer directly; read it all through this module (same idea as the
-// mech game's Controls.js, simplified: no aim stick, no fire buttons — this is a
-// tap-to-move kennel game, not a twin-stick shooter).
+// mech game's Controls.js, simplified: no aim stick, and three plain action
+// buttons instead of weapons — this is a tap-to-move kennel game, not a
+// twin-stick shooter).
 //
 // Devices are all first-class and interchangeable: whichever one the player
 // touches next just works, no explicit mode switch needed.
@@ -16,11 +17,31 @@ const DRAG_THRESHOLD = 12; // screen px of finger travel before a touch becomes 
 // On-screen joystick feel — same shape as the mech game's TOUCH_STICK dials.
 const JOY = { radius: 60, deadzone: 0.15, curve: 1.3 };
 
-// Fixed bottom-right "interact" button — touch has no Space/E/pad-A equivalent
-// otherwise, so without this touch-only players could never pick up/drop off/
-// feed/tuck in anything. Always visible (not just mid-drag, unlike the joystick
+// Fixed bottom-right action cluster — touch has no keyboard/gamepad equivalent
+// otherwise, so without these touch-only players could never pick up/drop off/
+// feed/open a cage. Always visible (not just mid-drag, unlike the joystick
 // ring) whenever a touch device is detected.
-const INTERACT_BTN = { r: 34, margin: 26 };
+//
+// Issue #51: there used to be ONE button here (and one `interactJustDown()`),
+// which meant every interaction in the game competed for the same press and
+// ties broke by invisible registration order. There are three now — carry,
+// cage, act — identical in meaning on all three input devices:
+//
+//   action   keyboard   gamepad        touch
+//   act      Space      A (button 0)   ✨ button
+//   carry    E          X (button 2)   🤲 button
+//   cage     Q          B (button 1)   🚪 button
+//
+// Laid out as an L-cluster anchored to the bottom-right corner (act in the
+// corner where the thumb rests, carry to its left, cage above it) — compact
+// enough to stay clear of the floating joystick on a phone-sized screen.
+const BTN = { r: 28, gap: 12, margin: 24 };
+const BTN_DEFS = [
+  // dx/dy are offsets from the corner anchor, in whole button pitches.
+  { id: 'act', icon: '✨', color: 0x8a5a1e, dx: 0, dy: 0 },
+  { id: 'carry', icon: '🤲', color: 0x1e4a7a, dx: -1, dy: 0 },
+  { id: 'cage', icon: '🚪', color: 0x1e5a34, dx: 0, dy: -1 },
+];
 
 export class Controls {
   constructor(scene) {
@@ -34,10 +55,12 @@ export class Controls {
       downArrow: Phaser.Input.Keyboard.KeyCodes.DOWN,
       leftArrow: Phaser.Input.Keyboard.KeyCodes.LEFT,
       rightArrow: Phaser.Input.Keyboard.KeyCodes.RIGHT,
-      interact: Phaser.Input.Keyboard.KeyCodes.SPACE,
-      interact2: Phaser.Input.Keyboard.KeyCodes.E,
+      act: Phaser.Input.Keyboard.KeyCodes.SPACE,
+      carry: Phaser.Input.Keyboard.KeyCodes.E,
+      cage: Phaser.Input.Keyboard.KeyCodes.Q,
     });
-    this._prevInteractDown = false;
+    // Edge-detection state, one entry per action (see _justDown).
+    this._prevDown = { act: false, carry: false, cage: false };
 
     // Known Phaser gamepad quirk (already hit and fixed in the sibling mech game,
     // its input/Controls.js #122/#524): each Scene gets its own GamepadPlugin, and
@@ -71,10 +94,10 @@ export class Controls {
     // there's no fixed on-screen real estate to reserve.
     this._ring = this.touchStickVisible ? scene.add.graphics().setScrollFactor(0).setDepth(9997) : null;
 
-    // One-shot flag set by a tap/click landing on the interact button; consumed
-    // by interactJustDown() alongside Space/E/pad-A.
-    this._touchInteractPending = false;
-    this._interactBtn = this.touchStickVisible ? this._buildInteractButton() : null;
+    // One-shot flags set by a tap/click landing on an action button; each is
+    // consumed by its own *JustDown() alongside that action's key/pad button.
+    this._touchPending = { act: false, carry: false, cage: false };
+    this._btns = this.touchStickVisible ? this._buildActionButtons() : null;
 
     scene.input.on('pointerdown', this._onPointerDown, this);
     scene.input.on('pointermove', this._onPointerMove, this);
@@ -88,36 +111,55 @@ export class Controls {
     return 'ontouchstart' in window || (navigator.maxTouchPoints ?? 0) > 0;
   }
 
-  _buildInteractButton() {
+  // One graphics object shared by all three circles; one text label each.
+  _buildActionButtons() {
     const g = this.scene.add.graphics().setScrollFactor(0).setDepth(9998);
-    const label = this.scene.add.text(0, 0, '✋', { fontSize: '30px' })
-      .setOrigin(0.5).setScrollFactor(0).setDepth(9999);
-    return { g, label, x: 0, y: 0, r: INTERACT_BTN.r };
+    return BTN_DEFS.map((def) => ({
+      ...def,
+      label: this.scene.add.text(0, 0, def.icon, { fontSize: '26px' })
+        .setOrigin(0.5).setScrollFactor(0).setDepth(9999),
+      x: 0,
+      y: 0,
+      r: BTN.r,
+      g,
+    }));
   }
 
-  // Re-anchors the button to the bottom-right corner every frame (cheap, and
+  // Re-anchors the cluster to the bottom-right corner every frame (cheap, and
   // keeps it correct across a resize/DPR change without a separate listener).
-  _layoutInteractButton() {
-    const btn = this._interactBtn;
-    if (!btn) return;
+  _layoutActionButtons() {
+    const btns = this._btns;
+    if (!btns) return;
     const off = worldUiOffset(this.scene);
-    btn.x = off.x + logicalW(this.scene) - INTERACT_BTN.margin;
-    btn.y = off.y + logicalH(this.scene) - INTERACT_BTN.margin;
-    btn.g.clear();
-    btn.g.fillStyle(0x2a3648, 0.55).fillCircle(btn.x, btn.y, btn.r);
-    btn.g.lineStyle(3, 0xffffff, 0.85).strokeCircle(btn.x, btn.y, btn.r);
-    btn.label.setPosition(btn.x, btn.y);
+    const ax = off.x + logicalW(this.scene) - BTN.margin - BTN.r;
+    const ay = off.y + logicalH(this.scene) - BTN.margin - BTN.r;
+    const pitch = BTN.r * 2 + BTN.gap;
+    const g = btns[0].g;
+    g.clear();
+    for (const btn of btns) {
+      btn.x = ax + btn.dx * pitch;
+      btn.y = ay + btn.dy * pitch;
+      g.fillStyle(btn.color, 0.6).fillCircle(btn.x, btn.y, btn.r);
+      g.lineStyle(3, 0xffffff, 0.85).strokeCircle(btn.x, btn.y, btn.r);
+      btn.label.setPosition(btn.x, btn.y);
+    }
   }
 
   // Same origin/off math as _drawRing's pointer→logical conversion, just
-  // compared against the button's fixed centre instead of a drag origin.
-  _hitInteractButton(p) {
-    const btn = this._interactBtn;
-    if (!btn) return false;
+  // compared against each button's fixed centre instead of a drag origin.
+  // Returns the action id that was hit, or null. Touch targets are grown a
+  // little, so the nearest centre wins rather than letting two overlap.
+  _hitActionButton(p) {
+    if (!this._btns) return null;
     const dpr = dprOf(this.scene);
     const off = worldUiOffset(this.scene);
     const px = p.x / dpr + off.x, py = p.y / dpr + off.y;
-    return Math.hypot(px - btn.x, py - btn.y) <= btn.r * 1.3; // generous touch target
+    let hit = null, bestD = Infinity;
+    for (const btn of this._btns) {
+      const d = Math.hypot(px - btn.x, py - btn.y);
+      if (d <= btn.r * 1.25 && d < bestD) { bestD = d; hit = btn.id; }
+    }
+    return hit;
   }
 
   // See _suspended above. Called by the dev-drag tool when it toggles on/off.
@@ -128,13 +170,15 @@ export class Controls {
       this._mouseDown = null;
       this.tapTarget = null;
       this._ring?.clear();
+      this._touchPending = { act: false, carry: false, cage: false };
     }
   }
 
   _onPointerDown(p) {
     if (this._suspended) return;
-    if (this._hitInteractButton(p)) {
-      this._touchInteractPending = true;
+    const hitId = this._hitActionButton(p);
+    if (hitId) {
+      this._touchPending[hitId] = true;
       return; // never let this also start a joystick drag or a tap-to-move
     }
     if (p.wasTouch) {
@@ -184,7 +228,7 @@ export class Controls {
   // nonzero source wins over "no input", and a direct steer cancels a pending
   // tap-to-move walk (handled by the scene reading mag > 0 to drop its nav path).
   getMove() {
-    this._layoutInteractButton();
+    this._layoutActionButtons();
     const k = this.keys;
     let x = (k.right.isDown || k.rightArrow.isDown ? 1 : 0) - (k.left.isDown || k.leftArrow.isDown ? 1 : 0);
     let y = (k.down.isDown || k.downArrow.isDown ? 1 : 0) - (k.up.isDown || k.upArrow.isDown ? 1 : 0);
@@ -242,17 +286,30 @@ export class Controls {
     this._ring.fillStyle(0xffffff, stick.mag > 0 ? 0.55 : 0.3).fillCircle(ox + dx * clampK, oy + dy * clampK, kr * 0.45);
   }
 
-  // One-shot "interact/confirm" trigger (kept simple — Phase B's feeding/tucking-in
-  // interactions will read this). Space/E on keyboard, A on gamepad, or a tap on
-  // the on-screen touch button.
-  interactJustDown() {
+  // ── The three one-shot action triggers (issue #51) ───────────────────────
+  // Each is edge-triggered and STATEFUL: calling it consumes the press, so the
+  // scene must read each exactly once per frame (KennelScene.update does).
+  //
+  //   act   — do the thing you're standing next to (feed, clean, help a birth,
+  //           take a photo, use the computer, bake/eat, scare the raccoon, bed)
+  //   carry — pick up / put down an animal, pick up / set down the scooper
+  //   cage  — open a cage and let its occupant take herself out
+  //
+  // Each button resolves its OWN nearest target in the scene over only its own
+  // class of actions, so the classes can never out-compete each other.
+  actJustDown() { return this._justDown('act', 0); }
+  carryJustDown() { return this._justDown('carry', 2); }
+  cageJustDown() { return this._justDown('cage', 1); }
+
+  // padIndex is the standard-gamepad face button: 0=A, 1=B, 2=X.
+  _justDown(id, padIndex) {
     const pad = this._pad();
-    const down = this.keys.interact.isDown || this.keys.interact2.isDown || !!pad?.buttons[0]?.pressed;
-    const justDown = down && !this._prevInteractDown;
-    this._prevInteractDown = down;
-    const btnJustDown = this._touchInteractPending;
-    this._touchInteractPending = false;
-    return justDown || btnJustDown;
+    const down = this.keys[id].isDown || !!pad?.buttons[padIndex]?.pressed;
+    const edge = down && !this._prevDown[id];
+    this._prevDown[id] = down;
+    const tapped = this._touchPending[id];
+    this._touchPending[id] = false;
+    return edge || tapped;
   }
 
   // Consumes and clears a pending mouse-click/touch-tap "walk here" request.
@@ -274,7 +331,7 @@ export class Controls {
     this.scene.input.off('pointerup', this._onPointerUp, this);
     this.scene.input.off('pointerupoutside', this._onPointerUp, this);
     this._ring?.destroy();
-    this._interactBtn?.g.destroy();
-    this._interactBtn?.label.destroy();
+    this._btns?.[0]?.g.destroy(); // one shared graphics object for all three
+    this._btns?.forEach((b) => b.label.destroy());
   }
 }
