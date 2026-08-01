@@ -1193,21 +1193,24 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.physics.add.collider(this.player, this.walls);
   }
 
-  // ── NPC helpers (issue #52) ──────────────────────────────────────────────
+  // ── NPC helpers (issue #52, reworked player-commanded in issue #80) ──────
   // Owner: "NPC helper that help with chores (make 3 of them, and they can
   // then be controlled by local multiplayer once we implement that)." Built
   // structurally like the player (physics sprite, same body size/collision)
   // so issue #53 has as little to retrofit as possible when a real player
-  // takes control of one — but nothing beyond that here; no control-takeover
-  // logic lives in this file yet.
+  // takes control of one.
   //
-  // They're present from create() (not earned), roam under their own steam,
-  // and handle bowls + messes ONLY — see _resolveHelperTarget/_forEachChore.
+  // They're present from create() (not earned). Issue #52 had them roam and
+  // self-direct bowl/mess upkeep automatically; issue #80 reversed that —
+  // each helper now only works a task CATEGORY the player has explicitly
+  // toggled on for her (walk up, interact, multi-select in her own menu — see
+  // _openHelperMenu/_toggleHelperTask). With nothing toggled on she just
+  // roams/idles. `tasks` is per-helper and independent, so one can be filling
+  // bowls while another does nothing and a third does cleaning only. Still
+  // handles bowls + messes ONLY — see _resolveHelperTarget/_forEachChore.
   // They never touch births, photos, the computer, carrying, or opening a
-  // cage: those are all decisions the player makes, not upkeep, and a helper
-  // doing them unprompted would fight the player (owner's own reasoning for
-  // excluding cage-opening applies to the same degree to the rest of that
-  // list).
+  // cage: those are all decisions the player makes, not upkeep, and are
+  // deliberately deferred to issue #81 (which depends on this one).
   _buildHelpers() {
     const startX = RECEPTION.desk.x + 40;
     const startY = RECEPTION.desk.y + RECEPTION.desk.h + 40;
@@ -1226,10 +1229,21 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // `actor` (in this.activePlayers) drives her instead. `choreKey` tracks
       // which _claimedChores entry (if any) is reserved for her mid-walk, so
       // a takeover mid-chore can release it instead of leaking a stuck claim
-      // nobody will ever pick up again.
+      // nobody will ever pick up again. So a helper is always in exactly one
+      // of three states: human-controlled (`playerControlled`), AI working a
+      // player-assigned task (`tasks` non-empty), or idle/roaming (`tasks`
+      // empty) — never two of these at once.
+      //
+      // Issue #80: `tasks` is the player-assigned set of category strings
+      // she's currently allowed to work ('bowls', 'cleaning') — starts empty,
+      // toggled via her own menu (_openHelperMenu). `choreCategory` mirrors
+      // `choreKey` but records WHICH category the in-progress chore belongs
+      // to, so toggling that category off mid-walk can interrupt her
+      // immediately (_stopHelperWalk) instead of letting her finish it.
       return {
         name, sprite, walking: false, roamTimer: 0,
-        playerControlled: false, choreKey: null, actor: null,
+        playerControlled: false, choreKey: null, choreCategory: null, actor: null,
+        tasks: new Set(),
       };
     });
   }
@@ -1485,22 +1499,25 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
   }
 
-  // ── Helper chore-picking + roaming (issue #52) ───────────────────────────
+  // ── Helper chore-picking + roaming (issue #52, gated per #80) ────────────
   // Helpers only ever do routine upkeep — bowls and messes. Reuses
   // _forEachChore's exact candidate list (so there's one definition of "what
   // counts as a chore", shared with the player's ACT button) but picks
-  // nearest to the HELPER's own position rather than the player's, and skips
+  // nearest to the HELPER's own position rather than the player's, skips
   // anything another helper has already claimed (see _updateHelpers) so two
-  // helpers don't both set off for the same empty bowl. A target that
-  // becomes stale before she arrives (the player beat her to it) is handled
-  // by _forEachChore's own run() guards, not here — worst case she walks up
-  // to an already-clean spot and simply looks for something else next.
-  _resolveHelperTarget(hx, hy) {
+  // helpers don't both set off for the same empty bowl, AND — issue #80 —
+  // skips any chore whose category isn't currently toggled on for THIS
+  // helper (`helper.tasks`). A target that becomes stale before she arrives
+  // (the player beat her to it) is handled by _forEachChore's own run()
+  // guards, not here — worst case she walks up to an already-clean spot and
+  // simply looks for something else next.
+  _resolveHelperTarget(helper) {
     let best = null, bestD = Infinity;
-    this._forEachChore((key, x, y, label, run) => {
+    this._forEachChore((key, x, y, label, run, category) => {
+      if (!helper.tasks.has(category)) return;
       if (this._claimedChores.has(key)) return;
-      const d = Phaser.Math.Distance.Between(hx, hy, x, y);
-      if (d < bestD) { bestD = d; best = { key, x, y, run }; }
+      const d = Phaser.Math.Distance.Between(helper.sprite.x, helper.sprite.y, x, y);
+      if (d < bestD) { bestD = d; best = { key, x, y, run, category }; }
     });
     return best;
   }
@@ -1549,24 +1566,27 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   }
 
   // Per-frame helper AI: each idle helper prefers the nearest unclaimed
-  // chore, walks to it, and does it on arrival; with nothing to do, she
-  // roams. Deliberately excludes births, photos, the computer, carrying,
-  // and cage-opening — none of those go through _forEachChore, so a helper
-  // structurally can't reach them.
+  // chore from a category the player has toggled on for her (issue #80 —
+  // with nothing toggled on, `_resolveHelperTarget` never returns a target
+  // and she just roams); with nothing to do, she roams. Deliberately
+  // excludes births, photos, the computer, carrying, and cage-opening —
+  // none of those go through _forEachChore, so a helper structurally can't
+  // reach them.
   _updateHelpers(delta) {
     if (!this.helpers) return;
     for (const helper of this.helpers) {
       if (helper.playerControlled) continue; // issue #53: a claimed helper is driven by her own player actor, not AI
       if (helper.walking) continue; // _updateWalkers is already moving her toward her current target
-      const { sprite } = helper;
 
-      const target = this._resolveHelperTarget(sprite.x, sprite.y);
+      const target = this._resolveHelperTarget(helper);
       if (target) {
         this._claimedChores.add(target.key);
         helper.choreKey = target.key;
+        helper.choreCategory = target.category;
         this._startHelperWalk(helper, target.x, target.y, () => {
           this._claimedChores.delete(target.key);
           helper.choreKey = null;
+          helper.choreCategory = null;
           target.run();
         });
         continue;
@@ -1618,10 +1638,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // She may have been mid-walk (mid-chore or mid-roam) the instant she was
     // claimed — stop her dead and release any chore claim she was holding, or
     // it would sit in _claimedChores forever with nobody left to finish it.
-    helper.walking = false;
-    this._walkers = this._walkers.filter((w) => w.sprite !== helper.sprite);
-    if (helper.choreKey != null) { this._claimedChores.delete(helper.choreKey); helper.choreKey = null; }
-    helper.sprite.body.setVelocity(0, 0);
+    this._stopHelperWalk(helper);
 
     const actor = {
       id: this.activePlayers.length,
@@ -1662,7 +1679,56 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       helper.walking = false; // resumes chore-picking/roaming fresh next _updateHelpers tick
       helper.roamTimer = 0;
       helper.sprite.setScale(1, 1); // clear any mid-wobble squash/stretch she was left in
+      // Her `tasks` set is untouched — whatever the player had toggled on for
+      // her stays on across a claim/release, same as it would for any other
+      // idle stretch (issue #80).
     }
+  }
+
+  // Halts a helper wherever she is right now — mid-chore-walk or mid-roam —
+  // and releases any chore claim she was holding so nobody else is stuck
+  // waiting on a claim that will never resolve. Shared by _claimHelper
+  // (issue #53, a human taking over) and _toggleHelperTask (issue #80, the
+  // player un-toggling the category she's actively working — "stops
+  // immediately" per the owner, not "finishes this one first").
+  _stopHelperWalk(helper) {
+    helper.walking = false;
+    this._walkers = this._walkers.filter((w) => w.sprite !== helper.sprite);
+    if (helper.choreKey != null) { this._claimedChores.delete(helper.choreKey); helper.choreKey = null; }
+    helper.choreCategory = null;
+    helper.sprite.body.setVelocity(0, 0);
+  }
+
+  // ── Player-commanded helper tasks (issue #80) ────────────────────────────
+  // Toggles one task category on/off for one specific helper — per-helper,
+  // independent of the other two (owner: "Per-helper"). Turning a category
+  // OFF while she's actively walking toward a chore in that exact category
+  // interrupts her right where she stands (owner: "Stops immediately") —
+  // _updateHelpers picks her back up fresh next frame, either onto another
+  // still-toggled-on category or into idle roaming if nothing's left on.
+  // Turning a category on has no immediate effect beyond making her eligible
+  // — _updateHelpers's normal per-frame pass finds her the nearest chore in
+  // it next time she's idle.
+  _toggleHelperTask(helper, category) {
+    if (helper.tasks.has(category)) {
+      helper.tasks.delete(category);
+      if (helper.choreCategory === category) this._stopHelperWalk(helper);
+    } else {
+      helper.tasks.add(category);
+    }
+  }
+
+  // Opens helper's own task menu (HelperMenuScene) — the walk-up-and-
+  // interact convention every other world interaction here uses (issue #58's
+  // ACT button), same "pause the game underneath, overlay scene on top"
+  // pattern as the pause menu. Interacting again while nothing changed just
+  // re-opens the same menu showing her current toggles, so turning something
+  // off is the same gesture as turning it on (owner: "to make her stop, you
+  // interact and un-select stuff").
+  _openHelperMenu(helper) {
+    this._saveGame(); // opening the menu is as good a checkpoint as any (same call as _openPauseMenu)
+    this.scene.pause();
+    this.scene.launch('HelperMenu', { helper });
   }
 
   // ── Shared camera framing (issue #53) ────────────────────────────────────
@@ -3999,9 +4065,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // exact same candidate logic from a DIFFERENT position without
   // duplicating the BOWL_SPOTS/WATER_BOWL_SPOTS/yardBowls/messes iteration
   // verbatim in two places. `consider` is called once per outstanding chore
-  // as (key, x, y, label, run); `key` exists purely so a caller can
+  // as (key, x, y, label, run, category); `key` exists purely so a caller can
   // dedupe/claim a target (see _resolveHelperTarget) — _resolveAct itself
-  // ignores it.
+  // ignores both `key` and `category`. `category` (issue #80) is one of
+  // 'bowls' or 'cleaning' — the same two task categories a helper's own menu
+  // toggles, so _resolveHelperTarget can gate each chore by whether the
+  // helper considering it has that category turned on.
   //
   // Owner note 2026-07-29 (bowl decoupling): filling food vs. water resolves
   // to whichever specific bowl sprite is closer rather than the cage's own
@@ -4019,12 +4088,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     BOWL_SPOTS.forEach((spot, i) => {
       const who = this._cageOccupant(i);
       if (!who?.bowl || who.bowl.food) return;
-      consider(`bowl-food-${i}`, spot.x, spot.y, `Fill ${who.animal.name}'s food bowl`, () => this._fillBowl(i, 'food'));
+      consider(`bowl-food-${i}`, spot.x, spot.y, `Fill ${who.animal.name}'s food bowl`, () => this._fillBowl(i, 'food'), 'bowls');
     });
     WATER_BOWL_SPOTS.forEach((spot, i) => {
       const who = this._cageOccupant(i);
       if (!who?.bowl || who.bowl.water) return;
-      consider(`bowl-water-${i}`, spot.x, spot.y, `Fill ${who.animal.name}'s water bowl`, () => this._fillBowl(i, 'water'));
+      consider(`bowl-water-${i}`, spot.x, spot.y, `Fill ${who.animal.name}'s water bowl`, () => this._fillBowl(i, 'water'), 'bowls');
     });
 
     // Issue #32 follow-up, one pair as of issue #47: the outside yard's
@@ -4032,10 +4101,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // (any time, regardless of who's hungry); see _fillYardBowl. Same
     // already-full skip as the cage bowls above (issue #58).
     if (!this.yardBowls.food) {
-      consider('yard-food', YARD_BOWL_SPOTS.food.x, YARD_BOWL_SPOTS.food.y, 'Fill the playground food bowl', () => this._fillYardBowl('food'));
+      consider('yard-food', YARD_BOWL_SPOTS.food.x, YARD_BOWL_SPOTS.food.y, 'Fill the playground food bowl', () => this._fillYardBowl('food'), 'bowls');
     }
     if (!this.yardBowls.water) {
-      consider('yard-water', YARD_BOWL_SPOTS.water.x, YARD_BOWL_SPOTS.water.y, 'Fill the playground water bowl', () => this._fillYardBowl('water'));
+      consider('yard-water', YARD_BOWL_SPOTS.water.x, YARD_BOWL_SPOTS.water.y, 'Fill the playground water bowl', () => this._fillYardBowl('water'), 'bowls');
     }
 
     // `mess` itself is a stable object reference, so it doubles as its own
@@ -4046,7 +4115,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     for (const mess of this.messes) {
       consider(mess, mess.x, mess.y, 'Clean up the mess', () => {
         if (this.messes.includes(mess)) this._cleanMess(mess);
-      });
+      }, 'cleaning');
     }
   }
 
@@ -4059,6 +4128,18 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const consider = r.consider;
 
     this._forEachChore((key, x, y, label, run) => consider(x, y, label, run));
+
+    // Issue #80: walking up to a helper and interacting opens HER OWN task
+    // menu (multi-select bowls/cleaning) rather than anything happening on
+    // its own — #52's automatic default is gone. Skipped for a helper who's
+    // currently a live second player (issue #53's gamepad takeover) — there's
+    // no AI task list to manage while a human's driving her.
+    if (this.helpers) {
+      for (const helper of this.helpers) {
+        if (helper.playerControlled) continue;
+        consider(helper.sprite.x, helper.sprite.y, `Open ${helper.name}'s tasks`, () => this._openHelperMenu(helper));
+      }
+    }
 
     // Issue #55: the gate to the play yard. It's a world object rather than an
     // animal, so it belongs on ACT alongside the other walk-up-and-use things,
