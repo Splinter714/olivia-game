@@ -104,6 +104,19 @@ export const NAME_POOLS = {
       'Blue', 'Sunshine', 'Percy',
     ],
   },
+  // Issue #28: lizards — sunny, scaly, snack-shaped names in the same
+  // kid-friendly register as everyone else's.
+  lizard: {
+    girl: [
+      'Emerald', 'Lizzie', 'Amber', 'Mango', 'Dottie', 'Pesto',
+      'Zuzu', 'Tangerine', 'Pebbles', 'Sunbeam', 'Twiggy', 'Lime',
+      'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
+    ],
+    boy: [
+      'Iggy', 'Spike', 'Chomper', 'Newt', 'Scales',
+      'Rango', 'Pancake', 'Mochi', 'Dash', 'Sprig',
+    ],
+  },
   // Secret bonus guest (src/dev/secretDragon.js) — playful storybook-dragon
   // names, same girl/boy shape as every other species.
   dragon: {

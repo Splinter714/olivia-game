@@ -5,7 +5,7 @@
 // whatever `roster.stays` currently holds and calls spawnArrival()/flagCheckoutReady()/finalizeCheckout()
 // off the game clock's HOUR_CHANGE event.
 import { createAnimal } from './animal.js';
-import { SPECIES_KEYS } from './species.js';
+import { SPECIES, SPECIES_KEYS, FAMILY } from './species.js';
 import { createNeeds, createBowlState } from './needs.js';
 import { attachBirthTimer } from './births.js';
 import { pickUpgradeKind } from './economy.js';
@@ -111,7 +111,7 @@ export function assignCageSlot(stays, sectionKey) {
 // How many named individuals live in the "returning guest" pool per species —
 // small on purpose so the same names come back around within a single session
 // ("every animal always comes back again someday").
-const RETURNING_POOL_SIZE = { turtle: 3, guineaPig: 2, hamster: 2, bunny: 2, cat: 3, dog: 3, snake: 2, bird: 2 };
+const RETURNING_POOL_SIZE = { turtle: 3, guineaPig: 2, hamster: 2, bunny: 2, cat: 3, dog: 3, snake: 2, bird: 2, lizard: 2 };
 
 function carryKindForSpecies(speciesKey) {
   if (speciesKey === 'dog') return CARRY_KIND.LEASH;
@@ -139,8 +139,12 @@ const FAMILY_STATE = { EGGS: 'eggs', PREGNANT: 'pregnant', BABIES: 'babies', SOL
 
 function rollFamilyState(speciesKey, rng) {
   if (rng() >= FAMILY_CHANCE) return FAMILY_STATE.SOLO;
-  // Issue #24: birds share turtle/snake's eggs-or-babies pattern (FAMILY.EGGS_OR_BABIES).
-  const eggSpecies = speciesKey === 'turtle' || speciesKey === 'snake' || speciesKey === 'bird';
+  // Which species can arrive with EGGS as well as live babies. This used to be
+  // a hardcoded turtle/snake/bird list that had to be remembered every time a
+  // new egg-laying species landed (issue #24's birds, then issue #28's
+  // lizards); species.js's `family` field already says exactly this, so read
+  // it from there instead and the list can't drift again.
+  const eggSpecies = SPECIES[speciesKey]?.family === FAMILY.EGGS_OR_BABIES;
   const roll = rng();
   if (eggSpecies) {
     if (roll < 0.34) return FAMILY_STATE.EGGS;

@@ -98,6 +98,7 @@ export const SECTIONS = [
   { key: 'bird',      label: '🐦 Birds' },
   { key: 'cat',       label: '🐱 Cats' },
   { key: 'dog',       label: '🐶 Dogs' },
+  { key: 'lizard',    label: '🦎 Lizards' }, // issue #28
 ];
 
 // Outer building walls; the east wall splits around the back-door gap, the

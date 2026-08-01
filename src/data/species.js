@@ -89,6 +89,18 @@ export const SPECIES = {
     size: { w: 16, h: 14 },
     babyScale: 0.6,
   },
+  // Issue #28: lizards — the owner asked for them as a regular 9th kennel
+  // species ("Did we add lizards? We should."), with the same eggs-or-babies
+  // family pattern as turtle/snake/bird ("Eggs, like turtles/snakes/birds")
+  // and no specific look requested ("whatever fits the style") — see
+  // art/animals.js LIZARD_GEO, whose adult grid this `size` must track.
+  lizard: {
+    key: 'lizard',
+    label: '🦎 Lizards',
+    family: FAMILY.EGGS_OR_BABIES,
+    size: { w: 26, h: 12 },
+    babyScale: 0.6,
+  },
   // Secret bonus guest (src/dev/secretDragon.js's "DRAGON" cheat code) — a
   // SMALL baby dragon, not an imposing full-size one. Uses the same
   // eggs-or-babies family pattern as turtle/snake/bird (reuses data/births.js'
@@ -114,6 +126,6 @@ export const SPECIES = {
 
 export const SPECIES_LIST = Object.values(SPECIES);
 // Excludes any `secret: true` entry (currently just the bonus dragon) so the
-// regular 8-species rotation (roster.js's pickSpecies/RETURNING_POOL_SIZE)
+// regular 9-species rotation (roster.js's pickSpecies/RETURNING_POOL_SIZE)
 // never sees her — she's exclusively a secret-triggered guest.
 export const SPECIES_KEYS = Object.keys(SPECIES).filter((k) => !SPECIES[k].secret);

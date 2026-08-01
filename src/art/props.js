@@ -37,6 +37,10 @@ export const BOWL_KEY_BY_SPECIES = {
   // shared-tank/lettuce mechanic is gone) — a small plain dish, same as
   // hamster, since no turtle-specific look was called out.
   turtle: BOWL_SIMPLE_KEY,
+  // Issue #28: lizards get the same small plain dish (owner asked only for
+  // "ordinary per-cage bowls" and "whatever fits the style" — a shallow dish
+  // in a terrarium needs no new art).
+  lizard: BOWL_SIMPLE_KEY,
 };
 // Empty counterparts of every food-bowl variant above (owner note 2026-07-29:
 // "filling a bowl and an animal eating from it should be decoupled" — the
@@ -56,6 +60,7 @@ export const BOWL_EMPTY_KEY_BY_SPECIES = {
   dog: BOWL_KIBBLE_EMPTY_KEY,
   hamster: BOWL_SIMPLE_EMPTY_KEY,
   turtle: BOWL_SIMPLE_EMPTY_KEY,
+  lizard: BOWL_SIMPLE_EMPTY_KEY,
 };
 // Water bowl (owner note 2026-07-29: "same with water bowls") — one shared
 // blue-tinted dish look, full/empty, for every bowl-eligible species (no
@@ -125,6 +130,7 @@ function cageBgDrawFn(key) {
   if (key === 'turtle') return drawIslandSlotBg;
   if (key === 'snake') return drawPerchSlotBg;
   if (key === 'bird') return drawNestSlotBg;
+  if (key === 'lizard') return drawTerrariumSlotBg;
   if (key === 'dragon') return drawDragonCastleBg;
   return drawCagePenBg;
 }
@@ -136,6 +142,7 @@ function cageFgDrawFn(key) {
   if (key === 'turtle') return drawIslandSlotFg;
   if (key === 'snake') return drawPerchSlotFg;
   if (key === 'bird') return drawNestSlotFg;
+  if (key === 'lizard') return drawTerrariumSlotFg;
   if (key === 'dragon') return drawDragonCastleFg;
   return drawCagePenFg;
 }
@@ -182,6 +189,47 @@ function drawPerchSlotBg(g, w, h) {
 }
 function drawPerchSlotFg(g, w, h) {
   g.lineStyle(2, 0xcfe9f2, 0.55).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
+}
+
+// A small individual desert terrarium (issue #28) — one per lizard cage slot.
+// Same self-contained treatment as the turtle tank and the snake perch above
+// (which this is deliberately modeled on): the whole vivarium is baked into
+// the per-cage texture, so a lizard's cage looks like her own little glass box
+// whichever grid slot she's settled in. Warm sand floor rather than the
+// snake's paler tank sand, a flat basking rock to sun herself on, a small
+// leafy plant in the corner, and a heat-lamp glow spilling down from the top.
+//
+// Issue #43 split: sand/rock/plant/lamp glow are BACKGROUND (what she stands
+// on and among); the glass pane — its highlight rim plus a diagonal glare
+// streak and the lamp fixture itself — is FOREGROUND, so she reads as being
+// inside the tank looking out through the glass.
+function drawTerrariumSlotBg(g, w, h) {
+  g.fillStyle(0x8a7248, 1).fillRoundedRect(0, 0, w, h, 8);                  // tank frame
+  g.fillStyle(0xe6c68c, 0.95).fillRoundedRect(2, 2, w - 4, h - 4, 6);       // warm sand fill
+  // Heat-lamp glow spilling down from the top of the tank.
+  g.fillStyle(0xffd89a, 0.35).fillEllipse(w * 0.5, h * 0.16, w * 0.62, h * 0.34);
+  // Scattered grit on the sand.
+  g.fillStyle(0xc9a468, 1);
+  g.fillCircle(w * 0.22, h * 0.78, 1.2);
+  g.fillCircle(w * 0.66, h * 0.86, 1.0);
+  g.fillCircle(w * 0.44, h * 0.7, 0.9);
+  // Flat basking rock, low and wide across the middle.
+  g.fillStyle(0x8e8a82, 1).fillRoundedRect(w * 0.14, h * 0.5, w * 0.5, h * 0.2, h * 0.07);
+  g.fillStyle(0xaeaaa0, 1).fillRoundedRect(w * 0.16, h * 0.5, w * 0.46, h * 0.09, h * 0.05); // sunlit top
+  // Small leafy plant tucked into the right-hand corner.
+  g.fillStyle(0x5e7a34, 1).fillRect(w * 0.79, h * 0.56, w * 0.03, h * 0.24); // stem
+  g.fillStyle(0x6f9c3e, 1);
+  g.fillEllipse(w * 0.74, h * 0.56, w * 0.16, h * 0.09);
+  g.fillEllipse(w * 0.87, h * 0.6, w * 0.15, h * 0.08);
+  g.fillEllipse(w * 0.8, h * 0.46, w * 0.13, h * 0.1);
+}
+function drawTerrariumSlotFg(g, w, h) {
+  g.lineStyle(2, 0xcfe9f2, 0.6).strokeRoundedRect(1, 1, w - 2, h - 2, 7);   // glass rim
+  g.lineStyle(3, 0xffffff, 0.16).lineBetween(w * 0.18, h * 0.92, w * 0.6, h * 0.1); // glass glare
+  // Clamp heat lamp hanging over the tank, its hood doubling as the name-tag
+  // mount every other cage look has at top-center.
+  g.fillStyle(0x6b6b74, 1).fillRoundedRect(w / 2 - 7, 0, 14, 6, 2);
+  g.fillStyle(0xffcf7a, 1).fillEllipse(w / 2, h * 0.07, w * 0.1, h * 0.05);
 }
 
 // A small individual twig nest (issue #24) — one per bird cage slot, sitting

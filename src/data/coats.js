@@ -249,6 +249,48 @@ const BIRD_COATS = {
   },
 };
 
+// ── Lizards (issue #28) ─────────────────────────────────────────────────────
+// Owner asked for "whatever fits the style", so these follow the turtle/snake
+// convention: no fur, so the variation lives in the scale colour ramp plus a
+// few flat extras the art asks for directly — `belly` (the pale underside),
+// `crest` (the little dorsal spike row down the back), `throat` (the dewlap
+// under the chin) and `mark` (the stripe/speckle colour). Four naturalistic
+// reptile colours on the full pattern axis, plus one leopard-gecko morph that
+// bakes in its speckles the way the sparrow/banded-snake coats do.
+const LIZARD_COATS = {
+  green: {
+    label: 'Green',
+    body: { hi: 0x9ad86a, mid: 0x6faa42, lo: 0x4c7a2c },
+    belly: 0xe2eec0, crest: 0x3d6323, throat: 0xe0a05a,
+    eye: 0x140f08, mark: 0x35571e,
+  },
+  desertTan: {
+    label: 'Desert Tan',
+    body: { hi: 0xdcb87a, mid: 0xb8904f, lo: 0x8a6832 },
+    belly: 0xf2e4c4, crest: 0x6e4f26, throat: 0xd9b98a,
+    eye: 0x1a1208, mark: 0x60441f,
+  },
+  slate: {
+    label: 'Slate Grey',
+    body: { hi: 0xb4b8c2, mid: 0x8a8e9a, lo: 0x62666f },
+    belly: 0xdcdee4, crest: 0x4d5158, throat: 0xc9ccd2,
+    eye: 0x14161a, mark: 0x474b52,
+  },
+  fireOrange: {
+    label: 'Fire Orange',
+    body: { hi: 0xf5a95c, mid: 0xd97c2c, lo: 0xa8551a },
+    belly: 0xf7dcae, crest: 0x8a4212, throat: 0xf2c98a,
+    eye: 0x1c1206, mark: 0x7c3c10,
+  },
+  leopard: {
+    label: 'Yellow Leopard',
+    body: { hi: 0xf6dd8a, mid: 0xe3bf4f, lo: 0xb8952e },
+    belly: 0xfbf1cf, crest: 0x9a7a24, throat: 0xf6e6b0,
+    eye: 0x1c1406, mark: 0x5c4416,
+    patterns: ['speckled'], // a leopard gecko is its speckles
+  },
+};
+
 // ── Dragon (secret bonus guest) ─────────────────────────────────────────────
 // A small, fun set for a hidden extra, not a fully-fleshed 9th species: four
 // storybook-dragon colours plus a light 'scaled'/'smooth' pattern axis (a
@@ -331,6 +373,7 @@ export const COATS = {
   turtle: TURTLE_COATS,
   snake: SNAKE_COATS,
   bird: BIRD_COATS,
+  lizard: LIZARD_COATS,
   dragon: DRAGON_COATS,
 };
 
@@ -346,6 +389,7 @@ export const PATTERNS = {
   turtle: ['plain', 'starburst', 'rings', 'speckled'], // shell markings
   snake: ['solid', 'banded'],
   bird: ['solid', 'speckled'],
+  lizard: ['solid', 'striped', 'speckled'], // issue #28
   dragon: ['smooth', 'scaled'],
 };
 

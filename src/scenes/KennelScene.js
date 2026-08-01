@@ -1474,10 +1474,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const bounds = cage || (stay.location === LOCATION.YARD ? YARD_RECT : null);
     const spread = Math.min(1.7, Math.max(0.9, (bounds?.w ?? 90) / 90));
 
-    // Turtle/snake/bird eggs/babies sit tucked close to mom on her own
-    // individual island/perch/nest (small space, plenty of room to share) —
-    // tighter spacing than the wider spread used for cat/dog companions.
-    const sharesHome = animal.species === 'turtle' || animal.species === 'snake' || animal.species === 'bird' || animal.species === 'dragon';
+    // Turtle/snake/bird/lizard eggs/babies sit tucked close to mom on her own
+    // individual island/perch/nest/terrarium (small space, plenty of room to
+    // share) — tighter spacing than the wider spread used for cat/dog
+    // companions. Keyed off the eggs-or-babies family (data/species.js) rather
+    // than a hand-maintained species list, so a new egg-laying species (issue
+    // #28's lizards) can't be forgotten here; the secret dragon shares that
+    // family too, which is exactly the behavior she already had.
+    const sharesHome = SPECIES[animal.species]?.family === FAMILY.EGGS_OR_BABIES;
     const extras = [...containerExtras];
     // Issue #48: everything that belongs to the ANIMAL rather than to her
     // cage — her eggs, her little gold upgrade sparkles, an arrival's carry

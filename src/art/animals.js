@@ -960,6 +960,150 @@ function drawBird(g, pose, look, G) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// LIZARD (issue #28) — design grid 26x12 (hatchling 16x8). A long, low
+// four-legged reptile: sprawling legs, a long tapering tail sweeping out to
+// the left (same overlapping-ellipse trick as the dragon's), a little row of
+// dorsal crest spikes down the back, a wedge snout and a soft throat dewlap.
+// Walks with the standard four-leg cycle, quicker and lower-lift than the
+// turtle's waddle — she darts a few steps, then basks (see WANDER.lizard).
+//
+// NOTE: W/H here must stay equal to data/species.js SPECIES.lizard.size —
+// buildAnimalTextures()'s drift guard at the bottom of this file warns if
+// they diverge (which is exactly what bit the dragon when her tail grew).
+// ═══════════════════════════════════════════════════════════════════════════
+
+const LIZARD_GEO = {
+  adult: {
+    W: 26, H: 12,
+    leg: { topY: 7.6, w: 1.8, h: 3, pawY: 10.4, pawW: 3.2, pawDX: -0.7, pawH: 0.6 },
+    hindX: [7.5, 10], foreX: [16, 18.5],
+    // Tail: overlapping ellipses tapering from a thick base at the haunch out
+    // to a slender tip, with a gentle up/down wave so it reads as a sweeping
+    // curve rather than a straight stick.
+    tail: {
+      points: [
+        { x: 6.4, y: 6.8, w: 5.0, h: 2.6 },
+        { x: 3.6, y: 6.2, w: 3.6, h: 1.9 },
+        { x: 1.7, y: 6.8, w: 2.4, h: 1.3 },
+        { x: 0.6, y: 6.3, w: 1.2, h: 0.8 },
+      ],
+    },
+    body: { cx: 13, cy: 6.4, w: 14, h: 5.2 },
+    crest: { x0: 8.5, x1: 19, count: 8, spike: 1.3, w: 1.0 },
+    neck: { x: 19.2, y: 4.6, w: 2.8, h: 3.0 },
+    head: { cx: 22.2, cy: 5.2, r: 2.4 },
+    snout: { x: 23.8, y: 4.6, w: 2.2, h: 2.0 },
+    throat: { cx: 21.6, cy: 7.4, w: 3.2, h: 1.8 },
+    eye: { x: 22.4, y: 4.0, w: 1.1, h: 1.1 },
+    dot: { x: 14.5, y: 5.2, rad: 1.0 },
+    tattoo: { x: 9.5, y: 5.4 },
+  },
+  // Hatchling: same silhouette on a shorter body with a proportionally bigger
+  // head and stubbier legs, matching how every other species' baby is drawn.
+  baby: {
+    W: 16, H: 8,
+    leg: { topY: 4.8, w: 1.2, h: 1.9, pawY: 6.5, pawW: 2.0, pawDX: -0.4, pawH: 0.5 },
+    hindX: [4.6, 6.2], foreX: [9.8, 11.2],
+    tail: {
+      points: [
+        { x: 3.4, y: 4.6, w: 3.4, h: 1.8 },
+        { x: 1.9, y: 4.2, w: 2.4, h: 1.3 },
+        { x: 0.9, y: 4.6, w: 1.6, h: 0.9 },
+        { x: 0.4, y: 4.3, w: 0.8, h: 0.5 },
+      ],
+    },
+    body: { cx: 8.2, cy: 4.3, w: 9.2, h: 3.6 },
+    crest: { x0: 5.5, x1: 11.5, count: 5, spike: 0.7, w: 0.7 },
+    neck: { x: 12.0, y: 3.0, w: 1.8, h: 2.0 },
+    head: { cx: 13.6, cy: 3.4, r: 1.6 },
+    snout: { x: 14.6, y: 3.0, w: 1.4, h: 1.3 },
+    throat: { cx: 13.2, cy: 4.7, w: 2.0, h: 1.1 },
+    eye: { x: 13.7, y: 2.6, w: 0.7, h: 0.7 },
+    dot: { x: 9.2, y: 3.4, rad: 0.7 },
+    tattoo: { x: 6.0, y: 3.4 },
+  },
+};
+
+function drawLizard(g, bob, [lhf, lhn, lff, lfn], look, G) {
+  const c = coatDef('lizard', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'solid';
+  const leg = makeLeg({ ...G.leg, pawColor: lo });
+  const b = G.body;
+
+  // ── Legs ── sprawling out sideways: far pair in the shadow tone, near pair
+  // in the base tone, so the two sides read apart at this size.
+  leg(g, G.hindX[0], lhf, lo, bob);  leg(g, G.foreX[0], lff, lo, bob);
+  leg(g, G.hindX[1], lhn, mid, bob); leg(g, G.foreX[1], lfn, mid, bob);
+
+  // ── Tail ── long taper out to the left, each segment with a lighter
+  // highlight riding its upper edge so it doesn't flatten into a silhouette.
+  for (const seg of G.tail.points) {
+    g.fillStyle(lo, 1);  g.fillEllipse(seg.x, seg.y + bob, seg.w, seg.h);
+    g.fillStyle(mid, 1); g.fillEllipse(seg.x + seg.w * 0.12, seg.y + bob - seg.h * 0.2, seg.w * 0.6, seg.h * 0.58);
+  }
+
+  // ── Body ── long low barrel, sunlit along the back, pale underneath.
+  g.fillStyle(mid, 1);     g.fillEllipse(b.cx, b.cy + bob, b.w, b.h);
+  g.fillStyle(hi, 1);      g.fillEllipse(b.cx - b.w * 0.04, b.cy + bob - b.h * 0.28, b.w * 0.66, b.h * 0.34);
+  g.fillStyle(c.belly, 1); g.fillEllipse(b.cx, b.cy + bob + b.h * 0.3, b.w * 0.68, b.h * 0.3);
+
+  // ── Pattern overlay ──
+  if (pat === 'striped') {
+    // Two dark bands running nose-to-tail down the flank.
+    g.fillStyle(c.mark, 0.85);
+    g.fillEllipse(b.cx, b.cy + bob - b.h * 0.16, b.w * 0.86, Math.max(0.6, b.h * 0.14));
+    g.fillEllipse(b.cx - b.w * 0.04, b.cy + bob + b.h * 0.12, b.w * 0.68, Math.max(0.5, b.h * 0.1));
+  } else if (pat === 'speckled') {
+    const d = Math.max(0.6, b.h * 0.17);
+    g.fillStyle(c.mark, 0.85);
+    [[-0.34, -0.1], [-0.18, 0.12], [-0.04, -0.18], [0.1, 0.06], [0.24, -0.12], [0.3, 0.14], [-0.26, 0.22]]
+      .forEach(([fx, fy]) => g.fillRect(b.cx + b.w * fx, b.cy + bob + b.h * fy, d, d));
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+
+  // ── Dorsal crest ── a row of little spikes riding the body's actual top
+  // edge (solved off the body ellipse rather than a straight line, so they
+  // hug the back's curve), tallest over the middle of the spine.
+  const cr = G.crest;
+  g.fillStyle(c.crest, 1);
+  for (let i = 0; i < cr.count; i++) {
+    const t = i / (cr.count - 1);
+    const x = cr.x0 + t * (cr.x1 - cr.x0);
+    const k = (x - b.cx) / (b.w / 2);
+    const topY = b.cy + bob - (b.h / 2) * Math.sqrt(Math.max(0, 1 - k * k));
+    const spike = cr.spike * (0.55 + 0.45 * Math.sin(t * Math.PI));
+    g.fillTriangle(x - cr.w / 2, topY + 0.3, x + cr.w / 2, topY + 0.3, x, topY - spike);
+  }
+
+  // Lizards don't wear collars in a terrarium — a dab of coloured paint on the
+  // back does the tie-breaking job, same as the turtle/snake/bird dot.
+  drawShellDot(g, { x: G.dot.x, y: G.dot.y + bob, rad: G.dot.rad }, look?.collar);
+
+  // ── Neck + head ──
+  g.fillStyle(mid, 1); g.fillRect(G.neck.x, G.neck.y + bob, G.neck.w, G.neck.h);
+  g.fillStyle(mid, 1); g.fillCircle(G.head.cx, G.head.cy + bob, G.head.r);
+  g.fillStyle(hi, 1);  g.fillCircle(G.head.cx - G.head.r * 0.3, G.head.cy + bob - G.head.r * 0.4, G.head.r * 0.42);
+
+  // ── Snout ── a blunt wedge with a dark mouth line and a nostril speck.
+  const s = G.snout;
+  g.fillStyle(mid, 1); g.fillRect(s.x, s.y + bob, s.w, s.h);
+  g.fillStyle(hi, 1);  g.fillRect(s.x, s.y + bob, s.w, s.h * 0.34);
+  g.fillStyle(lo, 1);  g.fillRect(s.x, s.y + bob + s.h * 0.62, s.w, Math.max(0.4, s.h * 0.16));
+  // Nostril, kept proportional to the snout so the hatchling's smaller snout
+  // doesn't push it past the right edge of the design grid.
+  g.fillStyle(lo, 1);  g.fillRect(s.x + s.w * 0.66, s.y + bob + s.h * 0.2, Math.max(0.4, s.w * 0.22), 0.5);
+
+  // ── Throat dewlap ── the soft pouch under the chin.
+  g.fillStyle(c.throat, 1); g.fillEllipse(G.throat.cx, G.throat.cy + bob, G.throat.w, G.throat.h);
+
+  // ── Eye ──
+  g.fillStyle(c.eye, 1);      g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w, G.eye.h);
+  g.fillStyle(0xffffff, 0.75); g.fillRect(G.eye.x, G.eye.y + bob, G.eye.w * 0.45, G.eye.h * 0.45);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // DRAGON (secret bonus guest, src/dev/secretDragon.js) — design grid 20x16
 // (hatchling 12x10). A small reptilian quadruped, closest to the turtle's
 // waddling gait (low-lift legs, no proper walk cycle needed), plus a pair of
@@ -1186,6 +1330,11 @@ const BUILDERS = {
       ];
       buildPoseFrames(scene, key, G.W, G.H, (g, p) => drawBird(g, p, look, G), poses);
     },
+  },
+  lizard: {
+    geo: LIZARD_GEO, walkFps: 10, // quick scurry — faster than the turtle's waddle
+    build: (scene, key, G, look) =>
+      buildFrames(scene, key, G.W, G.H, (g, bob, legs) => drawLizard(g, bob, legs, look, G), idleWalkLegs(1.2)),
   },
   dragon: {
     geo: DRAGON_GEO, walkFps: 6, // slow, low-lift waddle, same tempo family as the turtle

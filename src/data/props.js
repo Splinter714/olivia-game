@@ -3,7 +3,7 @@
 // rects that both KennelScene's rendering and its interaction/collision code
 // can share, so the numbers only live in one place.
 import {
-  RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE, SECTIONS,
+  RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE, SECTIONS, WALL,
 } from './sections.js';
 
 // ── The cage grid (issue #18, reworked into one single grid by issue #32) ──
@@ -21,22 +21,50 @@ import {
 // both of those — a stay's `location`/`cageSlot` still just means "species
 // key s's Nth nominal cage" — only the physical (x, y) position changes.
 //
-// 8 species x CAGES_PER_SECTION(6) = 48 cages, laid out as a flat 8-column x
-// 6-row grid (48 cells exactly), each cell a clean uniform 100x100 (owner:
-// "the kennels themselves need to be smaller... like 100x100"), with a
-// consistent gap between cells, centered in the room's open floor north of
-// the reception desk, spanning roughly the same overall area the old 8
-// sections used to occupy.
-const CAGE_COLS = 8;
-const CAGE_ROWS = 6; // 8*6 = 48 = SECTIONS.length * CAGES_PER_SECTION
+// SECTIONS.length species x CAGES_PER_SECTION(6) = one cage per (species,
+// slot) pair, laid out as a flat grid of exactly that many cells, each cell a
+// clean uniform 100x100 (owner: "the kennels themselves need to be smaller...
+// like 100x100"), with a consistent gap between cells, centered in the room's
+// open floor north of the reception desk, spanning roughly the same overall
+// area the old per-species sections used to occupy.
+//
+// Issue #28 (adding lizards as a 9th species): these used to be the hardcoded
+// literals 8 and 6, which exactly covered the then-8 species' 48 cages — a 9th
+// species' extra 6 cages would have silently overflowed past the last row the
+// arithmetic allocated. They're derived from the real species list now — one
+// column per SPECIES, one row per CAGE SLOT — so COLS*ROWS always equals
+// SECTIONS.length * CAGES_PER_SECTION exactly, for any species count, and
+// nobody's cages can fall off the end. (The flat index below still fills the
+// grid row-major, so a given species' six cages are NOT a single column and
+// aren't clustered — issue #32 made any pet placeable in any open cage, so
+// where a slot physically sits carries no species meaning.)
+//
+// Room fit, 9 species (checked explicitly rather than eyeballed):
+//   interior width  = ROOM.w - 2*WALL = 1440 - 48 = 1392
+//   grid width      = 9*100 + 8*12 = 996  ->  198px clear on each side
+//   grid height     = 6*100 + 5*12 = 660  (unchanged by the extra column)
+//   grid top        = ROOM.y + 48 = 428   (24px below the north wall's inner
+//                                          face at ROOM.y + WALL = 404)
+//   grid bottom     = 428 + 660 = 1088    (42px above the reception desk's top
+//                                          edge at ROOM.y + 750 = 1130; the rug
+//                                          starts at 1210, the mat at 1316)
+// So the 9x6 grid clears the north wall, both side walls and the whole
+// reception cluster. Headroom for later species: a 13th column would need
+// 1444 > 1392 and would have to shrink CAGE_GAP or CAGE_W instead.
+const CAGE_COLS = SECTIONS.length;
+const CAGE_ROWS = CAGES_PER_SECTION;
 export const CAGE_W = 100;
 export const CAGE_H = 100;
 const CAGE_GAP = 12;
 const CAGE_GRID_W = CAGE_COLS * CAGE_W + (CAGE_COLS - 1) * CAGE_GAP;
 const CAGE_GRID_H = CAGE_ROWS * CAGE_H + (CAGE_ROWS - 1) * CAGE_GAP;
 // Centered horizontally in the room's interior; vertically just below the
-// north wall, ending well clear of the reception desk/rug below it.
-const CAGE_ORIGIN_X = ROOM.w / 2 - CAGE_GRID_W / 2;
+// north wall, ending well clear of the reception desk/rug below it. The
+// max() is a floor, not a layout choice: at today's 9 columns the centered
+// origin (222) is far clear of the west wall's inner face (WALL = 24), but if
+// a future species count ever pushed the grid wider than the interior, this
+// keeps its left edge out of the wall instead of drawing cages inside it.
+const CAGE_ORIGIN_X = Math.max(WALL + 4, ROOM.w / 2 - CAGE_GRID_W / 2);
 const CAGE_ORIGIN_Y = ROOM.y + 48;
 
 export const CAGES = Object.fromEntries(
@@ -107,7 +135,12 @@ export const SCOOPER_SPOT = { x: CAGE_ORIGIN_X - 22, y: CAGE_ORIGIN_Y + CAGE_GRI
 function bowlSpotForCage(cage) {
   return { x: cage.x + cage.w / 2 - 12, y: cage.y + cage.h - 8 };
 }
-const BOWL_ELIGIBLE_KEYS = ['turtle', 'guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird'];
+// Every cage-slot key gets bowl bookkeeping — a stay's slot key is only her
+// NOMINAL cage, not her species (issue #32: any pet, any open cage), so a key
+// missing from this list means whoever lands there gets no bowl sprite at all
+// (the coverage bug written up in KennelScene._refreshBowls). Issue #28's
+// lizard is here for exactly that reason as much as for lizards themselves.
+const BOWL_ELIGIBLE_KEYS = ['turtle', 'guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird', 'lizard'];
 export const BOWL_SPOTS = Object.fromEntries(
   BOWL_ELIGIBLE_KEYS.map((key) => [key, CAGES[key].map(bowlSpotForCage)]),
 );
