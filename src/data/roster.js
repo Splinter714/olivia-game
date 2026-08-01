@@ -384,10 +384,18 @@ export function createRoster(saved = null) {
     for (const stay of stays) {
       if (flagged.length >= limit) break;
       if (stay.checkoutReady) continue;
-      // A stay out playing in the yard, still at reception, or mid-carry
-      // hasn't "settled" back into her cage yet — skip until she has (issue
-      // #20); same condition checkoutDue used to gate on.
-      if (stay.location === LOCATION.RECEPTION || stay.location === LOCATION.CARRYING || stay.location === LOCATION.YARD) continue;
+      // A stay still at reception or mid-carry has no settled home to be
+      // collected from — skip until she has one (issue #20).
+      //
+      // Issue #67 (owner's decision): a stay out playing in the YARD is no
+      // longer skipped. She used to be silently deferred until she happened
+      // to come back inside, which in practice meant nightfall — her owner
+      // just never showed up. She's flagged like anyone else now, and
+      // KennelScene walks her back to her own cage to wait (reusing issue
+      // #45's walker, the same one nightfall uses) — see
+      // _flagCheckoutsReady. Once she's home she behaves exactly like any
+      // other checkout-ready caged pet.
+      if (stay.location === LOCATION.RECEPTION || stay.location === LOCATION.CARRYING) continue;
       if (day < stay.checkoutDay) continue;
       stay.checkoutReady = true;
       flagged.push(stay);

@@ -1387,6 +1387,20 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     for (const stay of this.roster.flagCheckoutReady(day, room)) {
       this._setNeedIcon(stay, 'checkout', true);
       this._runOwnerCheckout(stay);
+      // Issue #67 (owner): a pet out playing when her checkout day comes up
+      // walks herself back to her own cage to wait, instead of being skipped
+      // and deferred until she happened to come back in on her own. Same
+      // walker nightfall uses (issue #45's _startWalkHome) — no second
+      // implementation, and it already guards against starting a second walk
+      // for someone who's mid-journey. Once she's home she's an ordinary
+      // checkout-ready caged pet: the icon shows, and opening her cage sends
+      // her to her waiting owner.
+      //
+      // Robustness: if the player interrupts the walk (picks her up, sets her
+      // back down out in the yard), nothing here latches — she keeps
+      // `checkoutReady`, and _resolveDropoff's existing carry-her-to-her-owner
+      // fallback still completes the checkout from anywhere.
+      if (stay.location === LOCATION.YARD) this._startWalkHome(stay);
     }
   }
 
