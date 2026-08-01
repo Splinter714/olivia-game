@@ -97,6 +97,29 @@ const BAD_DREAM_MS = 2600; // flavor-only wake-up: no fix needed, just settles b
 const ANIMAL_WALK_SPEED = 82;  // px/s, world units
 const OWNER_WALK_SPEED = 150;  // px/s
 
+// Issue #65 (owner: "we should give pets collision on each other or some way
+// of not just walking through each other" — "solid bump", applying
+// "everywhere"): a pairwise separation push between animals' own sprites,
+// run once per frame after every other movement system (wander, walkers,
+// helpers) has already moved them. Not routed through data/path.js's
+// findPath at all — findPath plans a route ONCE against static obstacles
+// (walls/cages), which is the wrong tool for two things that are both
+// moving; a simple "push apart if overlapping" each frame is enough to read
+// as solid blocking without either animal ever needing to replan.
+//
+// Judgment call (flagged per the issue): a mom's own babies (rendered via
+// rec.babies, tethered to her by _updateBabies) are deliberately EXCLUDED
+// from this — issue #9's "near mom" litter rendering means a cramped cage
+// with a litter packed in close to her is the intended look, and colliding
+// them against each other/against her would fight that. Every cage only
+// ever holds one PRIMARY stay (data/roster.js's findOpenCage guarantees
+// unique cageIndex per stay), so this system's pairwise loop over primary
+// stay sprites never fires between two "family" members sharing a cage in
+// the first place — it only ever engages between different stays, i.e.
+// exactly the "different animals from a different stay" case the issue's
+// open question asked about.
+const ANIMAL_COLLIDE_PAD = 4; // extra clearance beyond the two sprites' own half-widths
+
 // Issue #53 (local multiplayer): shared-camera framing tuning. MIN_FRAME_ZOOM
 // is the "sensible zoom-out limit" the owner asked for — the multiplier on
 // top of the DPR baseline the camera will never go below, so the game never
@@ -4323,6 +4346,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._updateHelpers(delta);      // issue #52: helper NPCs picking/walking to/doing chores
     this._updateWander(delta);
     this._updateBabies(delta);       // issue #62: babies wander on their own, loosely tethered to mom
+    this._updateAnimalCollisions();  // issue #65: pets solid-bump each other instead of overlapping
     this._updateStayVisuals();       // issue #48: bubbles/labels/babies follow their animal
     this._updateNightSettle();       // issue #45/#46: walk home, get under the blanket
     this._updateNameTagVisibility();
@@ -4518,6 +4542,47 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         // She reads as walking when she's actually going somewhere, on her
         // own legs — not just because her mother happens to be on the move.
         this._setAnimalMoving(baby.sprite, moved > 0.2);
+      }
+    }
+  }
+
+  // Issue #65: "solid bump" collision between animals (see the constant
+  // comment above `ANIMAL_COLLIDE_PAD`). Runs after every other per-frame
+  // movement system that can move a stay's own sprite (_updateWalkers,
+  // _updateHelpers only moves helpers not stays, _updateWander) so it always
+  // has this frame's final positions to separate — the push itself is just a
+  // plain position nudge, so a walker mid-path simply resumes toward her next
+  // waypoint from wherever this shoved her, which is what makes the walk read
+  // as routing around a blocking neighbor instead of overlapping her.
+  //
+  // Excludes anyone tucked in for the night (settled under her cage blanket —
+  // nothing to bump into once she's there) — everyone else (cage, yard,
+  // reception, mid-walk) is fair game, matching the owner's "everywhere".
+  _updateAnimalCollisions() {
+    const entries = [];
+    for (const [stay, rec] of this._staySprites) {
+      if (stay.tuckedIn) continue;
+      entries.push(rec.sprite);
+    }
+    for (let i = 0; i < entries.length; i++) {
+      const a = entries[i];
+      const ra = (a.displayWidth || 24) / 2;
+      for (let j = i + 1; j < entries.length; j++) {
+        const b = entries[j];
+        const rb = (b.displayWidth || 24) / 2;
+        const minD = ra + rb - ANIMAL_COLLIDE_PAD;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let d = Math.hypot(dx, dy);
+        if (d >= minD) continue;
+        if (d < 0.01) { dx = 1; dy = 0; d = 1; } // exactly stacked — nudge apart along an arbitrary axis
+        const push = (minD - d) / 2;
+        const nx = dx / d, ny = dy / d;
+        a.x -= nx * push;
+        a.y -= ny * push;
+        b.x += nx * push;
+        b.y += ny * push;
+        a.setDepth(a.y);
+        b.setDepth(b.y);
       }
     }
   }
