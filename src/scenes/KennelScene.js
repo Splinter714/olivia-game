@@ -1001,6 +1001,25 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       ? [...this._outerObstacleRects]
       : [...this._outerObstacleRects, YARD_DOOR];
 
+    // Issue #76: a walker's path is planned once, up front, and just stepped
+    // along afterward (_updateWalkers) — it never re-checks obstacles. So
+    // shutting the gate mid-walk left anyone already en route following a
+    // route planned before the gate existed as an obstacle, straight through
+    // it. Replan every active walk against the fresh obstacle set the instant
+    // it closes, same endpoint-cage-ignoring rule ordinary walks use.
+    if (changed && !open) {
+      for (const walk of this._walkers) {
+        const target = walk.path[walk.path.length - 1];
+        if (!target) continue;
+        const replanned = findPath(walk.sprite.x, walk.sprite.y, target.x, target.y, {
+          minX: 0, minY: 0, maxX: WORLD.w, maxY: WORLD.h,
+          collides: this._walkCollides(walk.sprite.x, walk.sprite.y, target.x, target.y),
+          cell: 20, clearance: 9, planMargin: 4,
+        });
+        if (replanned) walk.path = replanned;
+      }
+    }
+
     if (this._yardDoorImg) {
       if (open) {
         // Swung out into the grass: an ordinary y-sorted world object, so a
