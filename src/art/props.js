@@ -10,7 +10,6 @@ import {
 } from '../data/props.js';
 
 export const LITTER_BOX_KEY = 'prop-litter-box';
-export const SCOOPER_KEY = 'prop-scooper';
 export const BOWL_KEY = 'prop-bowl';
 // Species-informed bowl variants (issue #22 #6 follow-up, owner note
 // 2026-07-29: "the food bowls should be informed based on the animal that's
@@ -307,12 +306,6 @@ function drawLitterBox(g, w, h) {
   g.fillCircle(w * 0.3, h * 0.5, 1.6);
   g.fillCircle(w * 0.55, h * 0.4, 1.4);
   g.fillCircle(w * 0.7, h * 0.6, 1.4);
-}
-
-function drawScooper(g, w, h) {
-  g.lineStyle(4, 0x8a5a34, 1).lineBetween(w * 0.5, h * 0.98, w * 0.5, h * 0.4);
-  g.fillStyle(0x6fa8d6, 1).fillRoundedRect(w * 0.12, h * 0.02, w * 0.76, h * 0.42, 6);
-  g.fillStyle(0x4b86b8, 1).fillRoundedRect(w * 0.2, h * 0.1, w * 0.6, h * 0.26, 4);
 }
 
 // Every food-bowl variant below takes a `filled` flag (owner note 2026-07-29:
@@ -612,7 +605,6 @@ function drawBag(g, w, h) {
 
 export function buildPropTextures(scene) {
   gen(scene, LITTER_BOX_KEY, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h, (g) => drawLitterBox(g, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h));
-  gen(scene, SCOOPER_KEY, 26, 32, (g) => drawScooper(g, 26, 32));
   gen(scene, BOWL_KEY, 24, 18, (g) => drawBowl(g, 24, 18, true));
   gen(scene, BOWL_HAY_KEY, 24, 18, (g) => drawHayBowl(g, 24, 18, true));
   gen(scene, BOWL_SEED_KEY, 24, 18, (g) => drawSeedBowl(g, 24, 18, true));

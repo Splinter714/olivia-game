@@ -5,7 +5,7 @@ import {
   wallRects, backWingWallRects, outsideFenceRects,
 } from '../data/sections.js';
 import {
-  SCOOPER_SPOT, BOWL_SPOTS, WATER_BOWL_SPOTS, COMPUTER_SPOT,
+  BOWL_SPOTS, WATER_BOWL_SPOTS, COMPUTER_SPOT,
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS, BED, BED_SPOT,
   CAGES, LITTER_SPOTS, YARD_BOWL_SPOTS, YARD_RECT,
   cageAnimalSpot, yardGateSpot, clampToYard,
@@ -37,7 +37,7 @@ import { lookId } from '../data/coats.js';
 import { buildCarryTextures, CARRY_KEY, CARRY_DISPLAY_SCALE } from '../art/carry.js';
 import {
   buildPropTextures, LITTER_BOX_KEY,
-  SCOOPER_KEY, BOWL_KEY, BOWL_KEY_BY_SPECIES, BOWL_EMPTY_KEY, BOWL_EMPTY_KEY_BY_SPECIES,
+  BOWL_KEY, BOWL_KEY_BY_SPECIES, BOWL_EMPTY_KEY, BOWL_EMPTY_KEY_BY_SPECIES,
   WATER_BOWL_KEY, WATER_BOWL_EMPTY_KEY,
   MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_FG_KEY, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY, BED_KEY,
@@ -139,13 +139,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     // (Issue #47: the movable yard divider is gone — the outside yard is one
     // single undivided play area, YARD_RECT in data/props.js.)
-
-    // ── Feeding / potty (issues #6, #7, #22 #6) — scooperRestPos must exist
-    // before _buildProps() below, which draws the resting scooper sprite there. ──
-    this.hasScooper = false;
-    this._scooperVisual = null;
-    this._scooperRestSprite = null;
-    this.scooperRestPos = { x: SCOOPER_SPOT.x, y: SCOOPER_SPOT.y };
 
     this._drawWorld();
     this._buildProps();
@@ -504,14 +497,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this._cageEggs[key] = CAGES[key].map(() => null);
     }
 
-    this._rebuildScooperRestSprite();
-    // The scooper's rest sprite is destroyed/recreated whenever it's picked
-    // up/set down (_pickUpScooper/_dropScooper), so the registry holds a
-    // live getter rather than a fixed reference — the drag tool filters out
-    // any entry whose obj is currently null (scooper in the player's hands).
-    const scene = this;
-    this._devRegistry.push({ name: 'SCOOPER_SPOT', get obj() { return scene._scooperRestSprite; } });
-
     // One bowl per individual cage slot (issue #22 #6), refined by owner note
     // 2026-07-29: bowls don't exist until an animal is actually settled in
     // that cage. No sprite is created here — this._bowlImgs just tracks the
@@ -526,8 +511,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this._bowlImgs[key] = BOWL_SPOTS[key].map(() => null);
       this._waterBowlImgs[key] = WATER_BOWL_SPOTS[key].map(() => null);
       BOWL_SPOTS[key].forEach((spot, i) => {
-        // Live getter (same pattern as SCOOPER_SPOT above) since the actual
-        // sprite is created/destroyed dynamically, not fixed at build time.
+        // Live getter since the actual sprite is created/destroyed
+        // dynamically, not fixed at build time.
         this._devRegistry.push({ name: `BOWL_SPOTS.${key}.${i}`, get obj() { return scopedScene._bowlImgs[key][i]; } });
         this._devRegistry.push({ name: `WATER_BOWL_SPOTS.${key}.${i}`, get obj() { return scopedScene._waterBowlImgs[key][i]; } });
       });
@@ -616,15 +601,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     return this._devRegistry
       .map((e) => ({ name: e.name, obj: e.obj, kind: e.kind, rectSize: e.rectSize }))
       .filter((e) => e.obj);
-  }
-
-  // (Re)creates the resting scooper sprite at its current rest spot — called
-  // once at build time and again whenever the scooper is set back down
-  // (issue #22 #5).
-  _rebuildScooperRestSprite() {
-    this._scooperRestSprite?.destroy();
-    const { x, y } = this.scooperRestPos;
-    this._scooperRestSprite = this.add.image(x, y, SCOOPER_KEY).setOrigin(0.5, 1).setDepth(y);
   }
 
   // ── Pause menu (issue #34) ────────────────────────────────────────────────
@@ -2340,26 +2316,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // ── Potty: scooper / litter box / dogs outside (issue #7, #20, #22 #5) ──
   // Issue #20: dogs no longer have an indoor mess of their own — the leash
   // walk (needs.bathroom, below) is their only potty pathway now, entirely
-  // outside. Only the cat litter box still needs the scooper.
-
-  _pickUpScooper() {
-    this.hasScooper = true;
-    this._scooperRestSprite?.destroy();
-    this._scooperRestSprite = null;
-    this.game.events.emit(EVENTS.NOTIFY, 'Got the scooper!');
-  }
-
-  // Sets the scooper back down at the player's current spot (issue #22 #5) —
-  // triggered as a fallback when the player interacts with nothing else
-  // nearby while holding it (see _resolveAct's fallback).
-  _dropScooper() {
-    this.hasScooper = false;
-    this._scooperVisual?.destroy();
-    this._scooperVisual = null;
-    this.scooperRestPos = { x: this.player.x, y: this.player.y };
-    this._rebuildScooperRestSprite();
-    this.game.events.emit(EVENTS.NOTIFY, 'Set the scooper down!');
-  }
+  // outside.
+  //
+  // Owner note 2026-07-31: "Get rid of the separate scoop tool, we can just
+  // pick up without it as it works now" — cleaning a litter-box mess
+  // (_cleanMess, below) never actually required holding the scooper (see
+  // its unconditional consider() in _resolveAct), so the whole pick-up-a-
+  // scooper-first step was pure overhead with no gameplay purpose. Removed
+  // entirely: hasScooper/_scooperVisual/_scooperRestSprite/scooperRestPos,
+  // _pickUpScooper/_dropScooper/_rebuildScooperRestSprite/_followScooper,
+  // and the SCOOPER_SPOT/SCOOPER_KEY prop. Walking up and acting on a mess
+  // just cleans it, no tool required.
 
   // Owner note 2026-07-29: "'litter box cleaned' is an unnecessary
   // notification" — that's an action-confirmation for something the player
@@ -3466,13 +3433,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       consider(mess.x, mess.y, 'Clean up the mess', () => this._cleanMess(mess));
     }
 
-    // Owner 2026-07-31: "picking up the scooper should be the Act button, not
-    // this one" — the scooper is a chore tool, so it sits with the rest of the
-    // chores rather than on the animals button (issue #22 #5, #51, #58).
-    if (!this.hasScooper) {
-      consider(this.scooperRestPos.x, this.scooperRestPos.y, 'Pick up the scooper', () => this._pickUpScooper());
-    }
-
     // Issue #37: the computer's only for SENDING now — she needs her photo
     // taken first (see the photo consider() loop below).
     if (!this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement && s.photoTaken)) {
@@ -3535,12 +3495,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
 
     if (r.best) return r.best;
-
-    // Nothing in range and the scooper's in hand — this sets it down wherever
-    // she's standing (issue #22 #5, moved here from the carry button). Not a
-    // proximity target, so it's a fallback rather than part of the competition
-    // above; the prompt is what makes it discoverable instead of folklore.
-    if (this.hasScooper) return { label: 'Put down the scooper', run: () => this._dropScooper() };
 
     // Issue #58, the owner's actual complaint ("got the prompt to go to bed,
     // but can't figure out how to go to bed"): standing at the bed while it
@@ -3657,7 +3611,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     } else {
       this._checkAct(actPressed);
     }
-    this._followScooper();
     this._updatePrompts();           // issue #58: what each button would do right now
   }
 
@@ -3825,16 +3778,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         this._setAnimalMoving(baby.sprite, moved > 0.2);
       }
     }
-  }
-
-  _followScooper() {
-    if (!this.hasScooper) return;
-    if (!this._scooperVisual) {
-      this._scooperVisual = this.add.image(this.player.x, this.player.y, SCOOPER_KEY).setOrigin(0.5, 1).setDepth(9499);
-    }
-    this._scooperVisual.x = this.player.x - PLAYER_W * 0.6;
-    this._scooperVisual.y = this.player.y - 4;
-    this._scooperVisual.setDepth(this.player.y);
   }
 
   _updateMovement(delta) {

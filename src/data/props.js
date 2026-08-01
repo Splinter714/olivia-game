@@ -163,13 +163,6 @@ export const LITTER_SPOTS = Object.fromEntries(
   Object.keys(CAGES).map((key) => [key, CAGES[key].map(litterBoxSpotForCage)]),
 );
 
-// Scooper pickup prop (issue #32: the dog section it used to be tucked into
-// no longer exists — relocated to a small stand just outside the cage
-// grid's entrance, on the walk-in side facing reception). Purely for the cat
-// litter box now — dogs' only potty pathway is the outside leash walk (see
-// needs.bathroom).
-export const SCOOPER_SPOT = { x: CAGE_ORIGIN_X - 22, y: CAGE_ORIGIN_Y + CAGE_GRID_H - 30 };
-
 // One food/water bowl SPRITE spot per individual cage slot (issue #22 #6,
 // refined by owner note 2026-07-29: "the interact point should be the cage,
 // not the food bowl... don't need to be there before placing the animal").
