@@ -20,7 +20,10 @@ import { pickWakeEvent, WAKE_REASON } from '../data/night.js';
 import { createAnimal } from '../data/animal.js';
 import { randomName } from '../data/names.js';
 import { createEconomy, computePayout, upgradeMessage } from '../data/economy.js';
-import { pickWanderInterval, wanderAmplitude, wanderSpeed } from '../data/wander.js';
+import {
+  pickWanderInterval, wanderAmplitude, wanderSpeed,
+  BABY_TETHER, BABY_TETHER_RELEASE, BABY_CATCHUP_SPEED, BABY_KEEP_RADIUS, babyWanderSpeed,
+} from '../data/wander.js';
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
@@ -1457,6 +1460,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // sprites, or eggs for a turtle mom with hasEggs) at a fixed world position —
   // used for both reception-waiting and section-placed stays.
   _renderStay(stay, x, y, opts = {}) {
+    // Issue #62: babies own a world position of their own now, so a redraw
+    // must not silently re-form the litter into formation beside mom. Grab
+    // where they actually were BEFORE the old record is torn down — the baby
+    // loop below keeps any that are still plausibly around this anchor (see
+    // BABY_KEEP_RADIUS) and only re-forms the ones that clearly aren't.
+    const prevBabies = this._staySprites.get(stay)?.babies || [];
     this._destroyStaySprites(stay);
     const { animal } = stay;
     const tb = this._tieBreakers();
@@ -1545,18 +1554,31 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // the tie-breaker resolution above (data/distinguish.js).
     //
     // Issue #48 bug 2 ("we need to get babies to wander also, not just
-    // adults"): each baby keeps a BASE OFFSET from mom, and drifts gently
-    // around that offset on her own little timer (see _updateWander /
-    // _updateStayVisuals). Because every position is expressed relative to
-    // mom, the babies automatically stay with her when she wanders — or
-    // walks across the whole kennel — and their distinct base offsets are
-    // what keeps them from piling onto her or onto each other.
+    // adults") first gave each baby a drift of her own, but expressed as a
+    // jitter around a FIXED offset from mom, with her screen position
+    // re-derived from mom's sprite every frame — a litter welded to her in
+    // formation, which reads worse and worse the further mom roams (#60).
+    //
+    // Issue #62 (owner: "baby animals should wander and play SEPARATELY from
+    // their grownup", "let babies wander away from mom further, like a lot
+    // further"): each baby carries her OWN world position and her own world
+    // target instead, and only heads back toward mom once she's past her
+    // tether — see _updateBabies. The offset computed here is still useful
+    // twice over: it's her starting spot beside mom, and it's the spot she
+    // aims for when she IS catching up, which keeps a scampering litter
+    // spread out behind mom rather than converging on one point.
     const babies = [];
     const babyLabels = [];
     const babySprites = [];
     for (const baby of stay.companions) {
       const jitterY = (sharesHome ? (Math.random() - 0.5) * 10 : (Math.random() - 0.5) * 8) * spread;
-      const babySprite = this._addAnimalSprite(cx, y + jitterY, baby, 'baby', tb);
+      // Where she actually was a moment ago, if this redraw didn't move mom
+      // far — otherwise the formation spot beside her.
+      const prev = prevBabies[babies.length];
+      const keep = prev && Phaser.Math.Distance.Between(prev.x, prev.y, x, y) < BABY_KEEP_RADIUS;
+      const wx = keep ? prev.x : cx;
+      const wy = keep ? prev.y : y + jitterY;
+      const babySprite = this._addAnimalSprite(wx, wy, baby, 'baby', tb);
       extras.push(babySprite);
       babySprites.push(babySprite);
 
@@ -1564,19 +1586,29 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // reception computer (issue #10), then its real name. Proximity-gated
       // like every other name tag (issue #22 #2), and it follows its baby
       // around now (issue #48).
-      const label = this.add.text(cx, y + jitterY + 2, baby.name || BABY_PLACEHOLDER, {
+      const label = this.add.text(wx, wy + 2, baby.name || BABY_PLACEHOLDER, {
         fontFamily: 'system-ui, sans-serif',
         fontSize: '8px',
         fontStyle: 'bold',
         color: '#4a341c',
         backgroundColor: '#ffffffb0',
         padding: { x: 2, y: 0 },
-      }).setOrigin(0.5, 0).setDepth(y + 0.2).setVisible(false);
+      }).setOrigin(0.5, 0).setDepth(wy + 0.2).setVisible(false);
       extras.push(label);
       babyLabels.push(label);
 
-      const bx = cx - x, by = jitterY;
-      babies.push({ sprite: babySprite, label, bx, by, ox: bx, oy: by, tx: bx, ty: by, t: pickWanderInterval(baby.species) });
+      babies.push({
+        sprite: babySprite,
+        label,
+        species: baby.species,
+        bx: cx - x,        // her formation offset beside mom (catch-up target)
+        by: jitterY,
+        x: wx, y: wy,      // her own world position
+        tx: keep ? prev.tx : wx,
+        ty: keep ? prev.ty : wy,
+        chasing: keep ? prev.chasing : false,
+        t: keep ? prev.t : pickWanderInterval(baby.species),
+      });
 
       cx += (sharesHome ? 13 : 20) * spread;
     }
@@ -1746,17 +1778,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       for (const f of rec.followers) {
         f.obj.setPosition(s.x + f.dx, s.y + f.dy).setDepth(s.y + f.dz);
       }
+      // Issue #62: a baby's position is her OWN now (moved by _updateBabies,
+      // in world space) rather than mom's position plus an offset — this just
+      // paints her sprite and her little label wherever she's got to. Her
+      // label following her is what the issue means by "her name label must
+      // follow her"; it already worked, and still does, because it's derived
+      // from the same one position.
       for (const baby of rec.babies) {
-        baby.ox += (baby.tx - baby.ox) * 0.04;
-        baby.oy += (baby.ty - baby.oy) * 0.04;
-        let bx = s.x + baby.ox, by = s.y + baby.oy;
-        const b = rec.wanderBounds;
-        if (b) {
-          bx = Phaser.Math.Clamp(bx, b.x + 4, b.x + b.w - 4);
-          by = Phaser.Math.Clamp(by, b.y + 4, b.y + b.h - 4);
-        }
-        baby.sprite.setPosition(bx, by).setDepth(by + 0.2);
-        baby.label.setPosition(bx, by + 2).setDepth(by + 0.3);
+        baby.sprite.setPosition(baby.x, baby.y).setDepth(baby.y + 0.2);
+        baby.label.setPosition(baby.x, baby.y + 2).setDepth(baby.y + 0.3);
       }
       this._layOutNeedIcons(rec);
       if (!rec.cageAnchored) {
@@ -2306,9 +2336,22 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     flash.fillStyle(0xffffff, 1).fillRect(-sw, -sh, sw * 3, sh * 3);
     this.tweens.add({ targets: flash, alpha: 0, duration: 350, ease: 'Sine.easeOut', onComplete: () => flash.destroy() });
 
-    // Snapshot mom + every baby's current sprite frame into a small
+    // Snapshot mom + her babies' current sprite frames into a small
     // polaroid-style render texture — a real picture of exactly who's here.
-    const sprites = [rec.sprite, ...(rec.babySprites || [])];
+    //
+    // Issue #62 gave babies a much longer leash, so "every baby" is no longer
+    // safe to frame: the texture is sized to the bounding box of whatever it
+    // draws and then shown at scale 1 beside the computer (_useComputer), and
+    // a baby off across the yard would blow that polaroid up to yard-sized.
+    // Frame whoever's actually gathered round her, and if they're ALL off
+    // playing, at least get the nearest one in shot rather than a picture of
+    // mom on her own.
+    const PHOTO_RADIUS = 150;
+    const inShot = (rec.babySprites || [])
+      .map((s) => ({ s, d: Phaser.Math.Distance.Between(s.x, s.y, rec.sprite.x, rec.sprite.y) }))
+      .sort((a, b) => a.d - b.d);
+    const near = inShot.filter(({ d }) => d <= PHOTO_RADIUS).map(({ s }) => s);
+    const sprites = [rec.sprite, ...(near.length ? near : inShot.slice(0, 1).map(({ s }) => s))];
     const pad = 12;
     const minX = Math.min(...sprites.map((s) => s.x - s.displayWidth / 2)) - pad;
     const maxX = Math.max(...sprites.map((s) => s.x + s.displayWidth / 2)) + pad;
@@ -3399,6 +3442,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._updateRaccoon(delta);
     this._updateWalkers(delta);      // issue #45: animals/owners walking themselves around
     this._updateWander(delta);
+    this._updateBabies(delta);       // issue #62: babies wander on their own, loosely tethered to mom
     this._updateStayVisuals();       // issue #48: bubbles/labels/babies follow their animal
     this._updateNightSettle();       // issue #45/#46: walk home, get under the blanket
     this._updateNameTagVisibility();
@@ -3485,19 +3529,98 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         rec.sprite.y += (wdy / wdist) * step;
       }
       rec.sprite.setDepth(rec.sprite.y);
+    }
+  }
 
-      // Babies: same idea one level down — each drifts around her OWN base
-      // offset from mom (a gentle fraction of mom's amplitude), so the litter
-      // mills about with her without piling onto her or onto each other. The
-      // sprites themselves are positioned in _updateStayVisuals, which is
-      // also what keeps them with her while she's walking.
+  // ── Babies wandering on their own (issue #62) ─────────────────────────────
+  // Owner: "baby animals should wander and play SEPARATELY from their
+  // grownup, not linked exactly together" — and, on how far: "let babies
+  // wander away from mom further, like a lot further."
+  //
+  // So this is deliberately NOT a slice of _updateWander: a baby is not
+  // drifting inside mom's box, she's going where she likes and coming back
+  // when she's gone too far. Two things follow from that:
+  //
+  //  - It runs even while mom is WALKING somewhere (_updateWander skips
+  //    those). Under the old welded rendering the litter came along for free;
+  //    now they have to actually follow her, which they do by scampering at
+  //    BABY_CATCHUP_SPEED — a shade over her own walking speed, so they close
+  //    the gap instead of stringing out behind her across the kennel.
+  //  - Her cage/yard bounds are ignored WHILE she's walking. This is issue
+  //    #66 (owner: "babies are getting stuck in the cage or in playpen when
+  //    their mom is in location transition; they should follow their mother
+  //    when they're transitioning"): `rec.wanderBounds` is only ever set by
+  //    _renderStay, for wherever she was last DRAWN, and a walk (#45's
+  //    _startWalk/_updateWalkers) moves her sprite without redrawing her — so
+  //    mid-journey those bounds are the cage she's leaving or the yard she
+  //    hasn't reached yet. Clamping to them pinned the babies against an
+  //    invisible wall in the old location while their mother walked off
+  //    without them. Bounds re-apply the moment she arrives and is redrawn.
+  //
+  // Movement is a constant capped px/sec (data/wander.js's babyWanderSpeed),
+  // never a distance-scaled lerp — issue #63's lesson, which matters more
+  // here than anywhere since the yard tether is deliberately enormous.
+  _updateBabies(delta) {
+    if (this.night.sleeping && !this.night.currentWake) return;
+    const step = delta / 1000;
+    for (const [stay, rec] of this._staySprites) {
+      if (!rec.babies.length) continue;
+      // Tucked in under her blanket, or waiting at reception / in the
+      // player's hands (no bounds at all) — the litter is one bundle with her
+      // then, positioned by the render, and nobody wanders.
+      if (stay.tuckedIn || !rec.wanderBounds) continue;
+
+      const travelling = this._isWalking(stay);
+      const tether = stay.location === LOCATION.YARD ? BABY_TETHER.yard : BABY_TETHER.cage;
+      const b = travelling ? null : rec.wanderBounds;
+      const mx = rec.sprite.x, my = rec.sprite.y;
+
       for (const baby of rec.babies) {
-        baby.t -= delta;
-        if (baby.t > 0) continue;
-        const babyAmp = amp * 0.35;
-        baby.tx = baby.bx + (Math.random() * 2 - 1) * babyAmp;
-        baby.ty = baby.by + (Math.random() * 2 - 1) * babyAmp * 0.6;
-        baby.t = pickWanderInterval(stay.animal.species) * 0.8;
+        const dm = Phaser.Math.Distance.Between(baby.x, baby.y, mx, my);
+        if (travelling || dm > tether) baby.chasing = true;
+        else if (dm < tether * BABY_TETHER_RELEASE) baby.chasing = false;
+
+        if (baby.chasing) {
+          // Back to her own spot beside mom, re-aimed every frame since mom
+          // may still be moving. Per-baby offsets keep the litter from all
+          // converging on the same point.
+          baby.tx = mx + baby.bx;
+          baby.ty = my + baby.by;
+          baby.t = pickWanderInterval(baby.species) * 0.8;
+        } else {
+          baby.t -= delta;
+          if (baby.t <= 0) {
+            // Somewhere new within the tether, measured from wherever mom is
+            // right now — an ellipse rather than a circle, since the floor
+            // reads much wider than it is deep.
+            const ang = Math.random() * Math.PI * 2;
+            const r = tether * (0.15 + Math.random() * 0.85);
+            baby.tx = mx + Math.cos(ang) * r;
+            baby.ty = my + Math.sin(ang) * r * 0.7;
+            baby.t = pickWanderInterval(baby.species) * 0.8;
+          }
+        }
+        if (b) {
+          baby.tx = Phaser.Math.Clamp(baby.tx, b.x + 4, b.x + b.w - 4);
+          baby.ty = Phaser.Math.Clamp(baby.ty, b.y + 4, b.y + b.h - 4);
+        }
+
+        const dx = baby.tx - baby.x, dy = baby.ty - baby.y;
+        const d = Math.hypot(dx, dy);
+        let moved = 0;
+        if (d > 0.5) {
+          const speed = baby.chasing ? BABY_CATCHUP_SPEED : babyWanderSpeed(baby.species);
+          moved = Math.min(d, speed * step);
+          baby.x += (dx / d) * moved;
+          baby.y += (dy / d) * moved;
+        }
+        if (b) {
+          baby.x = Phaser.Math.Clamp(baby.x, b.x + 4, b.x + b.w - 4);
+          baby.y = Phaser.Math.Clamp(baby.y, b.y + 4, b.y + b.h - 4);
+        }
+        // She reads as walking when she's actually going somewhere, on her
+        // own legs — not just because her mother happens to be on the move.
+        this._setAnimalMoving(baby.sprite, moved > 0.2);
       }
     }
   }

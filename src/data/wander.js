@@ -51,3 +51,51 @@ export function wanderSpeed(speciesKey) {
   const amp = (WANDER[speciesKey] || WANDER.cat).amp;
   return 10 + amp * 2.2; // turtle ~21 px/s, cat ~32, hamster ~39
 }
+
+// ── Babies (issue #62) ─────────────────────────────────────────────────────
+// Owner: "baby animals should wander and play SEPARATELY from their grownup,
+// not linked exactly together." Asked how far a baby may get from mom out in
+// the yard he first said "loosely near mom", then revised it the same day:
+// "let babies wander away from mom further, like a lot further."
+//
+// Issue #48 gave each baby a FIXED offset from mom plus a jitter of amp*0.35
+// around it, and re-derived her screen position from mom's sprite every
+// frame — so the litter was welded to her in formation and got dragged around
+// the yard behind her once #60 let her roam all of it.
+//
+// Now a baby owns a WORLD-space position and target of her own. She potters
+// off wherever she likes; the tether below is only the leash length at which
+// she gives up and heads back toward mom. In a cage it barely matters (the
+// cage is 100px across, so the walls are the real limit); out in the yard
+// it's most of the play area, which is what "a lot further" buys — a litter
+// scattered across the grass playing, still recognisably mom's.
+export const BABY_TETHER = { cage: 30, yard: 300 };
+
+// Hysteresis, so a baby sitting right on the tether doesn't flicker between
+// "off playing" and "heading back" every frame: she starts heading back at
+// the full tether, and only resumes her own business once she's back inside
+// this fraction of it.
+export const BABY_TETHER_RELEASE = 0.55;
+
+// Issue #63's rule applied at baby scale: a constant capped px/sec, never a
+// distance-scaled lerp, so a much wider tether can't turn into a baby flung
+// across the yard the way mom used to be. A shade quicker than her mother —
+// small legs, more energy.
+export function babyWanderSpeed(speciesKey) {
+  return wanderSpeed(speciesKey) * 1.2; // turtle ~25 px/s, cat ~38, hamster ~47
+}
+
+// The scamper she uses when she's past her tether, or when mom is actually
+// walking somewhere: a shade over KennelScene's ANIMAL_WALK_SPEED (82 px/s)
+// so she can genuinely close the gap on a mother who's on the move, rather
+// than trailing further and further behind her.
+export const BABY_CATCHUP_SPEED = 95;
+
+// How far a baby's remembered position may be from a fresh render anchor
+// before we give up on it and re-form the litter beside mom. A redraw happens
+// for reasons that have nothing to do with the babies (a tie-breaker sync
+// when someone new checks in, a birth landing), and snapping the whole litter
+// back into formation every time one of those fires would undo the wandering;
+// but a redraw that MOVED mom (she settled into her cage after a yard trip)
+// genuinely should re-form them at her feet.
+export const BABY_KEEP_RADIUS = BABY_TETHER.yard + 40;
