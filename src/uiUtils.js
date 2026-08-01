@@ -23,8 +23,19 @@ export function applyDpr(scene, { topLeft = false } = {}) {
 // Offset to add to a logical screen position for a scrollFactor-0 overlay drawn on
 // a scene whose camera keeps the default CENTRED origin (KennelScene). Counteracts
 // the zoom-about-centre so the overlay lands where the logical coordinate intends.
+//
+// Issue #53 (local multiplayer): KennelScene's camera zoom is no longer always
+// exactly the device pixel ratio — its shared-camera framing multiplies the DPR
+// baseline by a factor that shrinks as active players spread apart (see
+// KennelScene's _updateCameraFraming). This has to counteract whatever the
+// camera's zoom ACTUALLY is right now, not assume it's still bare dpr, or every
+// scrollFactor(0) overlay (the touch button cluster, the joystick ring, the
+// pause button) drifts off its intended spot the moment the camera zooms out.
+// Reading the live zoom keeps this correct in both modes: solo play never
+// changes zoom away from dpr, so this is byte-for-byte the same math as before.
 export function worldUiOffset(scene) {
-  const k = (dprOf(scene) - 1) / 2;
+  const zoom = scene.cameras.main.zoom;
+  const k = (zoom - 1) / 2;
   return { x: logicalW(scene) * k, y: logicalH(scene) * k };
 }
 

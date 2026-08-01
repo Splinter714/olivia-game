@@ -52,7 +52,7 @@ import {
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
 import { createRoster, LOCATION, CARRY_KIND, isCageOpen, anyOpenCageAnywhere, findOpenCage } from '../data/roster.js';
 import { loadGame, saveGame, clearSave, seedGlobalNameState } from '../data/persistence.js';
-import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
+import { applyDpr, dprOf, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
 import { WithSecretDragon } from '../dev/secretDragon.js';
 
@@ -96,6 +96,19 @@ const BAD_DREAM_MS = 2600; // flavor-only wake-up: no fix needed, just settles b
 // so nobody ever walks through a wall. Animals amble; owners stride.
 const ANIMAL_WALK_SPEED = 82;  // px/s, world units
 const OWNER_WALK_SPEED = 150;  // px/s
+
+// Issue #53 (local multiplayer): shared-camera framing tuning. MIN_FRAME_ZOOM
+// is the "sensible zoom-out limit" the owner asked for — the multiplier on
+// top of the DPR baseline the camera will never go below, so the game never
+// reads as unreadably tiny no matter how far apart four players spread.
+// Beyond that limit the camera stops zooming out further and instead pans
+// toward the group's average position, gently pulling a straggler back
+// toward frame rather than fighting her movement outright (the owner's own
+// stated preference among the two options put to him). CAMERA_FRAME_MARGIN
+// is clearance around the tightest box that contains everyone, so a player
+// at the edge of frame isn't glued to the literal screen edge.
+const MIN_FRAME_ZOOM = 0.45;
+const CAMERA_FRAME_MARGIN = 160;
 
 // Circle-vs-axis-aligned-rect overlap test, used by findPath's `collides` callback.
 function circleRectOverlap(cx, cy, r, rect) {
@@ -157,9 +170,61 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._buildHelpers();
 
     this.cameras.main.setBounds(0, 0, WORLD.w, WORLD.h);
-    this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
+    // Pre-#53 this came from startFollow(player, true, ...)'s `roundPixels`
+    // argument — pixel-art crispness depends on it, so now that
+    // _updateCameraFraming drives the camera manually it has to be set
+    // explicitly instead of inherited as a side effect of startFollow.
+    this.cameras.main.roundPixels = true;
+    // Issue #53: a single shared camera has to keep EVERY active player in
+    // frame (not just Player 1), so Phaser's built-in single-target
+    // startFollow can't drive it any more — _updateCameraFraming (called from
+    // update()) replaces it with a per-frame recompute. this._camCenter is
+    // the lerped focus point it maintains; seeded at the player's own start
+    // spot so the very first frame doesn't pop in from (0,0).
+    this._camCenter = { x: this.player.x, y: this.player.y };
 
     this.controls = new Controls(this);
+
+    // Issue #53: local multiplayer. `activePlayers[0]` is always Player 1 —
+    // deliberately built as getters/setters onto the SAME fields the rest of
+    // this file already reads/writes directly (this.player, this.controls,
+    // this.carrying, this._carryOrigin, this._carryVisual, this.navPath), so
+    // every existing single-player call site keeps working unchanged and
+    // Player 1 solo play is byte-for-byte what it was before this issue.
+    // Entries 1-3 are pushed/removed as helpers are claimed/dropped by
+    // _claimHelper/_releaseHelper below — real objects, not aliases, since
+    // there's no pre-existing single-player state for them to alias onto.
+    const scene = this;
+    this.activePlayers = [{
+      id: 0,
+      isPlayer1: true,
+      helper: null,
+      get sprite() { return scene.player; },
+      get controls() { return scene.controls; },
+      get carrying() { return scene.carrying; },
+      set carrying(v) { scene.carrying = v; },
+      get carryOrigin() { return scene._carryOrigin; },
+      set carryOrigin(v) { scene._carryOrigin = v; },
+      get carryVisual() { return scene._carryVisual; },
+      set carryVisual(v) { scene._carryVisual = v; },
+      get navPath() { return scene.navPath; },
+      set navPath(v) { scene.navPath = v; },
+      wobbleT: 0,
+    }];
+
+    // Issue #53: drop-in/drop-out. A fresh face-button press on a gamepad
+    // that ISN'T bound to anyone yet claims the next free helper; her own
+    // controller disconnecting reverts her to AI immediately, no restart
+    // needed. Gamepad index 0 is always Player 1's own fallback pad (today's
+    // single-player behavior — her Controls instance reads it directly), so
+    // only indices 1+ are ever up for grabs here.
+    this._unclaimedPadPrevDown = new Map(); // gamepad index -> was a face button down last frame
+    this.input.gamepad?.on('disconnected', (pad) => {
+      const actor = this.activePlayers.find((a) => !a.isPlayer1 && a.controls.gamepadIndex === pad.index);
+      if (actor) this._releaseHelper(actor);
+      this._unclaimedPadPrevDown.delete(pad.index);
+    });
+
     this.buildDevDrag(); // F9 to toggle — see src/dev/dragTool.js
     this.buildSecretDragon(); // type "DRAGON" — see src/dev/secretDragon.js
 
@@ -1054,13 +1119,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // The point on the gate nearest the player, so it's interactable from
   // anywhere along its height (and from either side) rather than only from
   // dead-center — same clamp-to-rect trick _findOpenCageNear uses.
-  _yardDoorTarget() {
+  // `actor` is whichever active player's ACT button is asking (issue #53) —
+  // each player reaches the gate from her own position, same as everything
+  // else in _resolveAct.
+  _yardDoorTarget(actor) {
     const rect = this.yardDoorOpen
       ? { x: YARD_DOOR.x, y: YARD_DOOR.y, w: YARD_DOOR.w + 8, h: YARD_DOOR.h }
       : YARD_DOOR;
     return {
-      x: Phaser.Math.Clamp(this.player.x, rect.x, rect.x + rect.w),
-      y: Phaser.Math.Clamp(this.player.y, rect.y, rect.y + rect.h),
+      x: Phaser.Math.Clamp(actor.sprite.x, rect.x, rect.x + rect.w),
+      y: Phaser.Math.Clamp(actor.sprite.y, rect.y, rect.y + rect.h),
     };
   }
 
@@ -1114,7 +1182,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       sprite.setCollideWorldBounds(true);
       sprite.setDepth(sprite.y);
       this.physics.add.collider(sprite, this.walls);
-      return { name, sprite, walking: false, roamTimer: 0 };
+      // Issue #53: `playerControlled` is the drop-in/drop-out switch —
+      // _updateHelpers skips her entirely while it's true, and her own
+      // `actor` (in this.activePlayers) drives her instead. `choreKey` tracks
+      // which _claimedChores entry (if any) is reserved for her mid-walk, so
+      // a takeover mid-chore can release it instead of leaking a stuck claim
+      // nobody will ever pick up again.
+      return {
+        name, sprite, walking: false, roamTimer: 0,
+        playerControlled: false, choreKey: null, actor: null,
+      };
     });
   }
 
@@ -1440,14 +1517,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _updateHelpers(delta) {
     if (!this.helpers) return;
     for (const helper of this.helpers) {
+      if (helper.playerControlled) continue; // issue #53: a claimed helper is driven by her own player actor, not AI
       if (helper.walking) continue; // _updateWalkers is already moving her toward her current target
       const { sprite } = helper;
 
       const target = this._resolveHelperTarget(sprite.x, sprite.y);
       if (target) {
         this._claimedChores.add(target.key);
+        helper.choreKey = target.key;
         this._startHelperWalk(helper, target.x, target.y, () => {
           this._claimedChores.delete(target.key);
+          helper.choreKey = null;
           target.run();
         });
         continue;
@@ -1464,6 +1544,146 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         this._startHelperWalk(helper, p.x, p.y, null);
       }
     }
+  }
+
+  // ── Local multiplayer drop-in / drop-out (issue #53) ─────────────────────
+  // Every frame: any gamepad NOT already bound to an active player (index 0
+  // is always Player 1's own fallback — see the Controls constructor) is
+  // watched for a FRESH press of either face button used elsewhere in this
+  // game (A/act or X/handle — whichever a new player happens to reach for
+  // first works, so there's no separate "press THIS specific button to
+  // join" button to discover). Edge-triggered against
+  // `_unclaimedPadPrevDown` so a held button doesn't repeatedly re-claim.
+  _updateGamepadDropIn() {
+    const gp = this.input.gamepad;
+    if (!gp) return;
+    const claimedIndices = new Set(this.activePlayers.filter((a) => !a.isPlayer1).map((a) => a.controls.gamepadIndex));
+    for (const pad of gp.getAll()) {
+      if (!pad.connected || pad.index === 0 || claimedIndices.has(pad.index)) continue;
+      const down = !!(pad.buttons[0]?.pressed || pad.buttons[2]?.pressed);
+      const was = this._unclaimedPadPrevDown.get(pad.index) || false;
+      this._unclaimedPadPrevDown.set(pad.index, down);
+      if (down && !was) this._claimHelper(pad.index);
+    }
+  }
+
+  // Hands one currently-AI helper over to a human on gamepad `padIndex` — she
+  // stops being AI-driven immediately (mid-chore or mid-roam) and becomes a
+  // full player-actor with her own Controls/carrying/navPath, using the same
+  // movement + act/handle scheme as Player 1. Does nothing if every helper is
+  // already claimed (kennel only has 3, so a 5th pad simply can't join).
+  _claimHelper(padIndex) {
+    const helper = this.helpers?.find((h) => !h.playerControlled);
+    if (!helper) return;
+    helper.playerControlled = true;
+    // She may have been mid-walk (mid-chore or mid-roam) the instant she was
+    // claimed — stop her dead and release any chore claim she was holding, or
+    // it would sit in _claimedChores forever with nobody left to finish it.
+    helper.walking = false;
+    this._walkers = this._walkers.filter((w) => w.sprite !== helper.sprite);
+    if (helper.choreKey != null) { this._claimedChores.delete(helper.choreKey); helper.choreKey = null; }
+    helper.sprite.body.setVelocity(0, 0);
+
+    const actor = {
+      id: this.activePlayers.length,
+      isPlayer1: false,
+      helper,
+      sprite: helper.sprite,
+      controls: new Controls(this, { gamepadIndex: padIndex }),
+      carrying: null,
+      carryOrigin: null,
+      carryVisual: null,
+      navPath: null,
+      wobbleT: 0,
+    };
+    helper.actor = actor;
+    this.activePlayers.push(actor);
+  }
+
+  // Reverts a player-controlled helper back to AI the instant her gamepad
+  // disconnects — no restart needed. If she happened to be mid-carry (an
+  // animal in her hands) when the controller dropped, settle the animal back
+  // into the cage she already holds (issue #54: a stay keeps her assigned
+  // cage the whole time she's carried) rather than leaving her stranded with
+  // no sprite at all — this is a live-session-only handoff, not something
+  // worth building real "drop it where you stand" placement for.
+  _releaseHelper(actor) {
+    if (!actor || actor.isPlayer1) return;
+    if (actor.carrying) {
+      const stay = actor.carrying;
+      if (CAGES[stay.cageIndex]) this._dropOff(actor, stay, stay.cageIndex, {});
+      else this._dropOffToYard(actor, stay);
+    }
+    actor.controls.destroy();
+    this.activePlayers = this.activePlayers.filter((a) => a !== actor);
+    const helper = actor.helper;
+    if (helper) {
+      helper.playerControlled = false;
+      helper.actor = null;
+      helper.walking = false; // resumes chore-picking/roaming fresh next _updateHelpers tick
+      helper.roamTimer = 0;
+      helper.sprite.setScale(1, 1); // clear any mid-wobble squash/stretch she was left in
+    }
+  }
+
+  // ── Shared camera framing (issue #53) ────────────────────────────────────
+  // One camera for up to 4 players: it has to keep everyone in frame, so
+  // Phaser's single-target startFollow (used pre-#53) can't drive it any
+  // more. Zooms out as active players spread apart and back in as they
+  // converge — bounded by MIN_FRAME_ZOOM so it never zooms out past
+  // legibility — and pans to the centroid (the AVERAGE position, not the
+  // bounding-box midpoint) of everyone active, which is what gives a player
+  // near the min-zoom edge a gentle pull toward the group rather than a hard
+  // stop (the owner's explicitly-flagged tradeoff — see #53's "known
+  // constraint": "gently pulling stragglers along... rather than letting the
+  // camera fight the players"). A LONE player (solo, or everyone else
+  // clustered close by) always resolves to zoom factor 1 — i.e. today's
+  // exact tight follow, unchanged.
+  _updateCameraFraming(delta) {
+    const players = this.activePlayers;
+    const cam = this.cameras.main;
+    const dpr = dprOf(this);
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, sx = 0, sy = 0;
+    for (const p of players) {
+      const { x, y } = p.sprite;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      sx += x; sy += y;
+    }
+    const centroid = { x: sx / players.length, y: sy / players.length };
+
+    // How much room the spread actually needs, plus a fixed margin so nobody
+    // is glued to the very edge of frame (her sprite/prompt bubble needs
+    // clearance too).
+    const boxW = (maxX - minX) + CAMERA_FRAME_MARGIN * 2;
+    const boxH = (maxY - minY) + CAMERA_FRAME_MARGIN * 2;
+    const fitW = logicalW(this) / Math.max(1, boxW);
+    const fitH = logicalH(this) / Math.max(1, boxH);
+    // Capped at 1 (never zoom in TIGHTER than the solo baseline) and floored
+    // at MIN_FRAME_ZOOM (the owner's "sensible zoom-out limit" — beyond this
+    // the game reads as unreadably small, so the centroid pull-along below
+    // takes over instead of zooming out further).
+    const targetFactor = Phaser.Math.Clamp(Math.min(fitW, fitH, 1), MIN_FRAME_ZOOM, 1);
+
+    // Pan lerp factor matches the OLD startFollow(player, true, 0.15, 0.15)
+    // exactly, so solo Player 1 follow feels identical to before this issue —
+    // with only her in activePlayers, centroid === her own position every
+    // frame, same as startFollow's single target. Zoom eases at the same
+    // rate so neither snaps instantly when a helper's taken over/dropped.
+    this._camFactor = this._camFactor == null ? targetFactor : Phaser.Math.Linear(this._camFactor, targetFactor, 0.15);
+    this._camCenter.x = Phaser.Math.Linear(this._camCenter.x, centroid.x, 0.15);
+    this._camCenter.y = Phaser.Math.Linear(this._camCenter.y, centroid.y, 0.15);
+
+    cam.setZoom(dpr * this._camFactor);
+    cam.centerOn(this._camCenter.x, this._camCenter.y);
+
+    // worldUiOffset-based overlays (pause button, Player 1's touch cluster/
+    // joystick) are normally only laid out once + on a real resize event —
+    // but our zoom now changes every frame without a resize firing, so they
+    // need their own re-layout call here or they'd drift the instant the
+    // camera zooms away from bare dpr.
+    this._layoutPauseButton();
   }
 
   // Swaps an animal sprite between its idle and walk animation (art/animals.js
@@ -1715,9 +1935,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // She walked over on her own two feet: her own sprites are what needs
     // clearing. (When she was carried instead, it's the carry visual.)
     this._destroyStaySprites(stay);
-    this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
-    this._carryVisual = null;
-    if (this.carrying === stay) this.carrying = null;
+    // Issue #53: whoever's carrying her (any active player, not just Player
+    // 1) has her carry visual cleared too — this fires both from a real
+    // player-triggered drop-off AND from the automatic "she walked herself
+    // over" path (_openCage), so it can't assume a specific actor.
+    this._clearCarryingFor(stay);
 
     if (rec) {
       rec.tag?.container.destroy(); // the pet's gone now — no more name to show
@@ -1735,6 +1957,20 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._payOutForCheckout(stay);
     this._syncTieBreakers(); // whoever's left may no longer need a collar
     this._refreshCageArt(); // her cage may now read as empty (issue #27)
+  }
+
+  // Issue #53: clears `stay` out of whichever active player is holding her
+  // (there's at most one, but which one varies with multiple players), or
+  // does nothing if nobody currently is. Factored out so call sites that
+  // don't know/care who's carrying — an automatic arrival, a checkout — don't
+  // have to hunt through this.activePlayers themselves.
+  _clearCarryingFor(stay) {
+    for (const actor of this.activePlayers) {
+      if (actor.carrying !== stay) continue;
+      actor.carryVisual?.parts.forEach(({ obj }) => obj.destroy());
+      actor.carryVisual = null;
+      actor.carrying = null;
+    }
   }
 
   // Issue #12 ("Doing a Great Job"): the owner pays for the stay a moment
@@ -2127,9 +2363,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // Proximity is measured against where she actually IS (her live sprite),
   // not her original placement — issue #48.
   _updateNameTagVisibility() {
-    const px = this.player.x, py = this.player.y;
+    // Issue #53: any active player standing close enough reveals a tag — not
+    // just Player 1 — so a helper-controlled player reading a nameplate works
+    // the same way solo play always has.
     for (const rec of this._staySprites.values()) {
-      const near = Phaser.Math.Distance.Between(px, py, rec.sprite.x, rec.sprite.y) <= NAME_TAG_RADIUS;
+      const near = this.activePlayers.some((a) =>
+        Phaser.Math.Distance.Between(a.sprite.x, a.sprite.y, rec.sprite.x, rec.sprite.y) <= NAME_TAG_RADIUS);
       // Issue #64: a door plate isn't here anymore — it belongs to the cage
       // and is permanently visible (_refreshCagePlates). Only a tag FLOATING
       // over an animal with no cage of her own is proximity-gated.
@@ -2229,15 +2468,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // (A reception pickup is still supported for a stay restored from an
   // older save that was left waiting at the desk.)
 
-  _pickUp(stay) {
-    this._carryOrigin = stay.location;
+  // `actor` is whichever active player (Player 1 or a claimed helper)
+  // pressed handle (issue #53) — she's the one whose hands the pet rides in.
+  _pickUp(actor, stay) {
+    actor.carryOrigin = stay.location;
     // Issue #25: this was the last waiting reception stay her owner was
     // lingering beside — now that the player's taking the pet, the owner
     // walks back out through the front door and despawns.
-    if (this._carryOrigin === LOCATION.RECEPTION) this._walkOwnerOut(stay);
+    if (actor.carryOrigin === LOCATION.RECEPTION) this._walkOwnerOut(stay);
     this._destroyStaySprites(stay);
     stay.location = LOCATION.CARRYING;
-    this.carrying = stay;
+    actor.carrying = stay;
     // Keeps the cage's bowl/litter box in sync the instant she's picked back
     // up — _refreshCageArt isn't otherwise called on pickup (cage ART itself
     // only changes per-occupant in generalized mode, refreshed on the next
@@ -2260,30 +2501,31 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // reception (issue #21) — everything else (small pets, or any settled
     // animal taken out to play) is carried bare, so just its own animated
     // sprite rides along.
-    const anchorX = this.player.x, anchorY = this.player.y;
+    const anchorX = actor.sprite.x, anchorY = actor.sprite.y;
     let sprite, extraObjs;
-    if (this._carryOrigin === LOCATION.RECEPTION && stay.carryKind !== CARRY_KIND.NONE) {
+    if (actor.carryOrigin === LOCATION.RECEPTION && stay.carryKind !== CARRY_KIND.NONE) {
       ({ sprite, extras: extraObjs } = this._addContainedAnimal(anchorX, anchorY, stay, this._tieBreakers()));
     } else {
       sprite = this._addAnimalSprite(anchorX, anchorY, stay.animal, stay.animal.stage, this._tieBreakers());
       extraObjs = [];
     }
-    // Every part follows the player as one group — record each part's offset
-    // from the shared anchor point at creation time so _followCarry can just
-    // re-apply it every frame without needing to know per-container layout.
+    // Every part follows the carrying player as one group — record each
+    // part's offset from the shared anchor point at creation time so
+    // _followCarry can just re-apply it every frame without needing to know
+    // per-container layout.
     const parts = [sprite, ...extraObjs].map((obj) => ({ obj, dx: obj.x - anchorX, dy: obj.y - anchorY }));
     parts.forEach(({ obj }) => obj.setDepth(9500));
-    this._carryVisual = { parts };
+    actor.carryVisual = { parts };
   }
 
-  _followCarry() {
-    if (!this._carryVisual) return;
-    const ax = this.player.x;
-    const ay = this.player.y - PLAYER_H * 0.55;
-    this._carryVisual.parts.forEach(({ obj, dx, dy }, i) => {
+  _followCarry(actor) {
+    if (!actor.carryVisual) return;
+    const ax = actor.sprite.x;
+    const ay = actor.sprite.y - PLAYER_H * 0.55;
+    actor.carryVisual.parts.forEach(({ obj, dx, dy }, i) => {
       obj.x = ax + dx;
       obj.y = ay + dy;
-      obj.setDepth(this.player.y + 1 + i * 0.01);
+      obj.setDepth(actor.sprite.y + 1 + i * 0.01);
     });
   }
 
@@ -2301,8 +2543,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // now (and what to call it on screen), without doing it. An
   // `auto: true` target is one that has always fired on proximity alone, with
   // no press (see the reception → yard case below).
-  _resolveDropoff() {
-    const stay = this.carrying;
+  // `actor` is whichever active player is holding `actor.carrying` (issue
+  // #53) — every position check below is against HER position, not
+  // necessarily Player 1's.
+  _resolveDropoff(actor) {
+    const stay = actor.carrying;
     if (!stay) return null;
     const name = stay.animal.name;
     // Issue #36: a checkout-ready stay goes home, not back into a cage —
@@ -2318,13 +2563,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (stay.checkoutReady) {
       const rec = this._checkoutOwners.get(stay);
       if (!rec?.arrived) return null;
-      if (!this._inRange(rec.sprite.x, rec.sprite.y)) return null;
+      if (!this._inRange(actor, rec.sprite.x, rec.sprite.y)) return null;
       return { label: `Give ${name} back to her owner`, run: () => this._completeCheckout(stay) };
     }
-    const inYard = this.player.x >= OUTSIDE.x + 8;
+    const inYard = actor.sprite.x >= OUTSIDE.x + 8;
     const toYard = () => ({
       label: `Put ${name} down to play`,
-      run: () => { this._dropOffToYard(stay); this._carryOrigin = null; },
+      run: () => { this._dropOffToYard(actor, stay); actor.carryOrigin = null; },
     });
     const toCage = (fromReception) => {
       // Walking up to ANY specific currently-empty cage anywhere accepts the
@@ -2333,21 +2578,21 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // cage art of her own until she's actually settled somewhere).
       // Issue #54: `stay` is passed so the cage she already holds isn't
       // counted against her — she's about to release it by taking this one.
-      const found = this._findOpenCageNear(this.player.x, this.player.y, stay);
+      const found = this._findOpenCageNear(actor.sprite.x, actor.sprite.y, stay);
       if (found == null) return null;
       return {
         label: `Put ${name} in this cage`,
-        run: () => { this._dropOff(stay, found, { fromReception }); this._carryOrigin = null; },
+        run: () => { this._dropOff(actor, stay, found, { fromReception }); actor.carryOrigin = null; },
       };
     };
 
-    if (this._carryOrigin === LOCATION.YARD) {
+    if (actor.carryOrigin === LOCATION.YARD) {
       // Picked up from the yard — she can go right back into the yard
       // (change your mind / move her to a different spot), OR come back
       // inside to any open cage.
       return inYard ? toYard() : toCage(false);
     }
-    if (this._carryOrigin === LOCATION.RECEPTION) {
+    if (actor.carryOrigin === LOCATION.RECEPTION) {
       // Owner note 2026-07-29 ("why can't I take a pet directly to the play
       // yard?"): a fresh arrival can go straight to the yard instead of a
       // cage — checked FIRST, as an ADDITIONAL option alongside (not instead
@@ -2376,10 +2621,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // whole failure path that existed only because a cage's identity was a
   // (species, slot) pair. A cage is a single free-or-not index now, checked
   // before this is ever called, so the drop always succeeds.
-  _dropOff(stay, cageIndex, opts = {}) {
-    this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
-    this._carryVisual = null;
-    this.carrying = null;
+  _dropOff(actor, stay, cageIndex, opts = {}) {
+    actor.carryVisual?.parts.forEach(({ obj }) => obj.destroy());
+    actor.carryVisual = null;
+    actor.carrying = null;
     stay.location = LOCATION.CAGE;
     // A late dropoff during the night (rare — only if the player was still
     // mid-carry when night fell): she gets under her cage's blanket the same
@@ -2420,12 +2665,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // overlap and clamped inside the fence — the player walked her here, so here
   // is where she goes. (An owner NPC's delivery drops at the gate instead —
   // _openYardSpot — because the owner isn't the one choosing the spot.)
-  _dropOffToYard(stay) {
-    this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
-    this._carryVisual = null;
-    this.carrying = null;
+  _dropOffToYard(actor, stay) {
+    actor.carryVisual?.parts.forEach(({ obj }) => obj.destroy());
+    actor.carryVisual = null;
+    actor.carrying = null;
     stay.location = LOCATION.YARD;
-    const pos = clampToYard(this.player.x + 26, this.player.y + 6);
+    const pos = clampToYard(actor.sprite.x + 26, actor.sprite.y + 6);
     this._renderStay(stay, pos.x, pos.y);
     // Issue #73: she's out of the player's hands, so her cage's nameplate
     // stops being highlighted. (The cage drop-off paths get this via
@@ -3129,7 +3374,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // blanket before morning, and the player can't see her do it anyway.
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.YARD) continue;
-      if (this.carrying === stay || this._isWalking(stay)) continue;
+      if (this.activePlayers.some((a) => a.carrying === stay) || this._isWalking(stay)) continue;
       // A dog who still needs to go finishes her business first (issue #38 —
       // she does it right where she's playing after a short while); she
       // heads home on a later pass, once her need has cleared.
@@ -3497,10 +3742,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // cannot disagree. Nothing may re-implement the target picking.
   //
   // Shared nearest-target picker — each button builds its own, so the classes
-  // are resolved independently and can never out-compete each other.
-  _resolver() {
-    const px = this.player.x, py = this.player.y;
-    const reach = (x, y) => this._cageReach(x, y);
+  // are resolved independently and can never out-compete each other. `actor`
+  // is whichever active player is asking (issue #53) — every other active
+  // player is irrelevant to THIS resolve, same as the single-player original.
+  _resolver(actor) {
+    const px = actor.sprite.x, py = actor.sprite.y;
+    const reach = (x, y) => this._cageReach(actor, x, y);
     let best = null, bestD = PICKUP_RADIUS;
     return {
       // `label` is the kid-facing sentence for the prompt ("Fill Biscuit's
@@ -3527,21 +3774,21 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // placing a pet ("interact should accept the placement anywhere within the
   // cage, not just towards the bottom", 2026-07-29). A no-op for anything not
   // in a cage, so it's applied to every target rather than a chosen few.
-  _cageReach(x, y) {
+  _cageReach(actor, x, y) {
     const cage = CAGES.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
     if (!cage) return { x, y };
     return {
-      x: Phaser.Math.Clamp(this.player.x, cage.x, cage.x + cage.w),
-      y: Phaser.Math.Clamp(this.player.y, cage.y, cage.y + cage.h),
+      x: Phaser.Math.Clamp(actor.sprite.x, cage.x, cage.x + cage.w),
+      y: Phaser.Math.Clamp(actor.sprite.y, cage.y, cage.y + cage.h),
     };
   }
 
-  // True if (x, y) is close enough to interact with — same radius and same
-  // reach-into-a-cage rule the resolver uses, for the couple of places that
-  // need the test without a competition.
-  _inRange(x, y) {
-    const at = this._cageReach(x, y);
-    return Phaser.Math.Distance.Between(this.player.x, this.player.y, at.x, at.y) < PICKUP_RADIUS;
+  // True if (x, y) is close enough to `actor` to interact with — same radius
+  // and same reach-into-a-cage rule the resolver uses, for the couple of
+  // places that need the test without a competition.
+  _inRange(actor, x, y) {
+    const at = this._cageReach(actor, x, y);
+    return Phaser.Math.Distance.Between(actor.sprite.x, actor.sprite.y, at.x, at.y) < PICKUP_RADIUS;
   }
 
   // Whose cage this is — the single occupancy rule every piece of cage
@@ -3618,13 +3865,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // carrying as a second option"), for when the player wants to place her
   // somewhere specific. A pet out in the yard is still handle-able at night,
   // so she can always be sent (or brought) straight back in.
-  _considerLoosePets(r) {
+  // `actor` is whichever active player pressed handle (issue #53) — she's
+  // the one who'll end up carrying whoever gets picked up here.
+  _considerLoosePets(actor, r) {
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.RECEPTION) continue;
       // A fresh arrival has no cage of her own yet, so there's nowhere to send
       // her — picking her up is how she gets one (nameplate + bowls).
       const rec = this._staySprites.get(stay);
-      if (rec) r.consider(rec.pos.x, rec.pos.y, `Pick up ${stay.animal.name}`, () => this._pickUp(stay));
+      if (rec) r.consider(rec.pos.x, rec.pos.y, `Pick up ${stay.animal.name}`, () => this._pickUp(actor, stay));
     }
 
     for (const stay of this.roster.stays) {
@@ -3646,29 +3895,29 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (hasHome) {
         r.consider(rec.sprite.x, rec.sprite.y, `Send ${stay.animal.name} back to her cage`, () => this._startWalkHome(stay), {
           hint: 'hold to pick her up instead',
-          hold: () => this._pickUp(stay),
+          hold: () => this._pickUp(actor, stay),
         });
       } else {
         // Every cage is spoken for — there's no home to send her to, so the
         // only honest offer is carrying her.
-        r.consider(rec.sprite.x, rec.sprite.y, `Pick up ${stay.animal.name}`, () => this._pickUp(stay));
+        r.consider(rec.sprite.x, rec.sprite.y, `Pick up ${stay.animal.name}`, () => this._pickUp(actor, stay));
       }
     }
   }
 
-  _resolveHandle() {
+  _resolveHandle(actor) {
     // Hands full — the only thing this button can do is put her down.
-    if (this.carrying) return this._resolveDropoff();
+    if (actor.carrying) return this._resolveDropoff(actor);
 
-    const r = this._resolver();
+    const r = this._resolver(actor);
     this._considerCages(r);
-    this._considerLoosePets(r);
+    this._considerLoosePets(actor, r);
     return r.best;
   }
 
   // `event` is Controls.handleEvent()'s 'tap' | 'hold' | null (issue #59).
-  _checkHandle(event) {
-    const target = this._resolveHandle();
+  _checkHandle(actor, event) {
+    const target = this._resolveHandle(actor);
     if (!target) return;
     // `auto` targets (only the reception → yard drop-off) have always fired on
     // proximity alone, with no press — see _resolveDropoff.
@@ -3740,8 +3989,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // ACT — everything that isn't handling an animal (issues #5, #6,
   // #7, #8, #13, #20, #22, #37): feeding, cleaning, births, photos, the
   // reception computer, treats, the raccoon, and turning in for the night.
-  _resolveAct() {
-    const r = this._resolver();
+  // `actor` is whichever active player pressed act (issue #53).
+  _resolveAct(actor) {
+    const r = this._resolver(actor);
     const consider = r.consider;
 
     this._forEachChore((key, x, y, label, run) => consider(x, y, label, run));
@@ -3753,7 +4003,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // from either side of the wall — including from the grass, which is what
     // stops the player shutting herself out.
     {
-      const at = this._yardDoorTarget();
+      const at = this._yardDoorTarget(actor);
       consider(at.x, at.y,
         this.yardDoorOpen ? 'Close the gate to the play yard' : 'Open the gate to the play yard',
         () => this._toggleYardDoor());
@@ -3828,15 +4078,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Added only when nothing else resolved, so a real nearby action can never
     // be shadowed by an explanation. `disabled` targets are never run.
     if (this.night.active && !this.night.sleeping && !this.night.allSettled
-        && this._inRange(BED_SPOT.x, BED_SPOT.y)) {
+        && this._inRange(actor, BED_SPOT.x, BED_SPOT.y)) {
       return { label: 'Go to bed — every pet has to be in her cage first', disabled: true, run: () => {} };
     }
     return null;
   }
 
-  _checkAct(pressed) {
+  _checkAct(actor, pressed) {
     if (!pressed) return;
-    const target = this._resolveAct();
+    const target = this._resolveAct(actor);
     if (target && !target.disabled) target.run();
   }
 
@@ -3850,9 +4100,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // here", never "you pressed the wrong one". That matters more than ever now
   // that HANDLE has several meanings depending on where the animal is.
   //
+  // Issue #53 design call: this stays PLAYER-1-ONLY rather than growing a
+  // multi-player prompt UI. The issue doesn't spec one, HudScene's single
+  // prompt strip has nowhere obvious to put up to 4 independent lines without
+  // its own redesign, and a claimed helper still gets fully working act/
+  // handle regardless (only the on-screen TEXT is Player-1-only) — flagged in
+  // the report as a judgment call the owner may want to revisit.
+  //
   // Emitted (to HudScene) only when the visible set actually changes, not
   // every frame.
-  _updatePrompts() {
+  _updatePrompts(actor) {
     const prompts = [];
     // `blockedBy` is the reason this button won't fire even though there IS
     // something in range — shown greyed out rather than hidden, because
@@ -3862,7 +4119,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       const label = target.disabled || !blockedBy ? target.label : `${target.label} — ${blockedBy}`;
       prompts.push({
         action,
-        button: this.controls.buttonName(action),
+        button: actor.controls.buttonName(action),
         label,
         // Issue #59: the secondary hold action has to be SHOWN or nobody will
         // ever find it — one button meaning four things is only workable if
@@ -3878,9 +4135,9 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // says what it WOULD do and why it won't — the silent version of this is
       // what left the player standing at the bed with an animal in her arms
       // wondering why nothing happened.
-      const blocked = this.carrying ? `put ${this.carrying.animal.name} down first` : null;
-      push('act', this._resolveAct(), blocked);
-      push('handle', this._resolveHandle());
+      const blocked = actor.carrying ? `put ${actor.carrying.animal.name} down first` : null;
+      push('act', this._resolveAct(actor), blocked);
+      push('handle', this._resolveHandle(actor));
     }
 
     const sig = prompts.map((p) => `${p.action}|${p.button}|${p.label}|${p.hint}|${p.disabled}`).join('\n');
@@ -3905,7 +4162,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this.game.events.emit(EVENTS.PHASE_CHANGE, { phase, isNight: phase === PHASE.NIGHT });
     }
 
-    this._updateMovement(delta);
+    // Issue #53: watch for a fresh press on any not-yet-claimed gamepad
+    // (drop-in) before anything else reads input this frame.
+    this._updateGamepadDropIn();
+
+    for (const actor of this.activePlayers) this._updateMovement(actor, delta);
     this._updateTint();
     this._updateSleepOverlay();
     this._updateNeeds(delta);
@@ -3920,25 +4181,34 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._updateStayVisuals();       // issue #48: bubbles/labels/babies follow their animal
     this._updateNightSettle();       // issue #45/#46: walk home, get under the blanket
     this._updateNameTagVisibility();
-    this.player.setDepth(this.player.y);
+    for (const actor of this.activePlayers) actor.sprite.setDepth(actor.sprite.y);
 
     // Both action reads are stateful (edge-triggered) — read BOTH of them
     // exactly once per frame, unconditionally, before branching, so a press
     // never survives into a later frame just because this frame's branch
-    // wasn't interested in it.
-    const handleEvent = this.controls.handleEvent(); // 'tap' | 'hold' | null
-    const actPressed = this.controls.actJustDown();
-    // Handle works the same whether her hands are full or empty — _resolveHandle
-    // is what knows the difference (put down vs. send home vs. open a cage).
-    this._checkHandle(handleEvent);
-    if (this.carrying) {
-      this._followCarry();
-      // Hands are full: act is disabled, and the on-screen prompt says so
-      // rather than leaving the player pressing a dead button (issue #58).
-    } else {
-      this._checkAct(actPressed);
+    // wasn't interested in it. Issue #53: every active player (Player 1 and
+    // any claimed helper) gets her own independent pass over her own Controls
+    // instance — none of this competes across players, each actor only ever
+    // reads/writes her own carrying/navPath/carryVisual.
+    for (const actor of this.activePlayers) {
+      const handleEvent = actor.controls.handleEvent(); // 'tap' | 'hold' | null
+      const actPressed = actor.controls.actJustDown();
+      // Handle works the same whether her hands are full or empty — _resolveHandle
+      // is what knows the difference (put down vs. send home vs. open a cage).
+      this._checkHandle(actor, handleEvent);
+      if (actor.carrying) {
+        this._followCarry(actor);
+        // Hands are full: act is disabled, and the on-screen prompt says so
+        // rather than leaving the player pressing a dead button (issue #58).
+      } else {
+        this._checkAct(actor, actPressed);
+      }
     }
-    this._updatePrompts();           // issue #58: what each button would do right now
+    this._updatePrompts(this.activePlayers[0]); // issue #58: what each button would do right now (Player-1-only prompt UI — see _updatePrompts)
+
+    // Issue #53: one shared camera keeping everyone in frame, replacing the
+    // old single-target startFollow.
+    this._updateCameraFraming(delta);
   }
 
   // ── Wander (issue #22 #4, extended by issue #48) ──────────────────────────
@@ -4107,19 +4377,26 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
   }
 
-  _updateMovement(delta) {
-    const move = this.controls.getMove();
+  // `actor` is one entry of this.activePlayers — Player 1 or a claimed helper
+  // (issue #53). Reads/writes only HER OWN sprite/controls/navPath, so
+  // multiple actors calling this in the same frame never step on each other.
+  _updateMovement(actor, delta) {
+    const move = actor.controls.getMove();
     let moving = false;
 
     if (move.mag > 0.05) {
       // Direct steering always wins and cancels any in-progress tap-to-move walk.
-      this.navPath = null;
-      this.controls.clearTapTarget();
-      this.player.body.setVelocity(move.x * SPEED, move.y * SPEED);
+      actor.navPath = null;
+      actor.controls.clearTapTarget();
+      actor.sprite.body.setVelocity(move.x * SPEED, move.y * SPEED);
       moving = true;
     } else {
       // A fresh tap/click redirects (or starts) the walk, even mid-path.
-      const target = this.controls.consumeTapTarget();
+      // (Tap-to-move only ever comes from actor.controls.consumeTapTarget(),
+      // which is null for a gamepad-only Controls instance — see Controls.js
+      // — so a claimed helper simply never gets a tap target, no extra guard
+      // needed here.)
+      const target = actor.controls.consumeTapTarget();
       if (target) {
         // planMargin trimmed from 6 to 4 by issue #71: the planner refuses a
         // corridor narrower than 2*(clearance + planMargin) plus its own 20px
@@ -4128,41 +4405,44 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         // aisles as solid and walked all the way around the block, which is
         // the decorative-aisle outcome #71 exists to avoid. Her actual body is
         // 14x12, so 4 is still generous padding.
-        this.navPath = findPath(this.player.x, this.player.y, target.x, target.y, {
+        actor.navPath = findPath(actor.sprite.x, actor.sprite.y, target.x, target.y, {
           minX: 0, minY: 0, maxX: WORLD.w, maxY: WORLD.h,
           collides: this._collides, cell: 20, clearance: 10, planMargin: 4,
         });
       }
 
-      if (this.navPath && this.navPath.length) {
-        const wp = this.navPath[0];
-        if (Phaser.Math.Distance.Between(this.player.x, this.player.y, wp.x, wp.y) < 4) {
-          this.navPath.shift();
+      if (actor.navPath && actor.navPath.length) {
+        const wp = actor.navPath[0];
+        if (Phaser.Math.Distance.Between(actor.sprite.x, actor.sprite.y, wp.x, wp.y) < 4) {
+          actor.navPath.shift();
         }
       }
-      if (this.navPath && this.navPath.length) {
-        const wp = this.navPath[0];
-        const ang = Phaser.Math.Angle.Between(this.player.x, this.player.y, wp.x, wp.y);
-        this.player.body.setVelocity(Math.cos(ang) * SPEED, Math.sin(ang) * SPEED);
+      if (actor.navPath && actor.navPath.length) {
+        const wp = actor.navPath[0];
+        const ang = Phaser.Math.Angle.Between(actor.sprite.x, actor.sprite.y, wp.x, wp.y);
+        actor.sprite.body.setVelocity(Math.cos(ang) * SPEED, Math.sin(ang) * SPEED);
         moving = true;
       } else {
-        this.navPath = null;
-        this.player.body.setVelocity(0, 0);
+        actor.navPath = null;
+        actor.sprite.body.setVelocity(0, 0);
       }
     }
 
-    this._updateWobble(delta, moving);
+    this._updateWobble(actor, delta, moving);
   }
 
-  // Squash/stretch walk-cycle wobble — a cheap stand-in for a full frame animation.
-  _updateWobble(delta, moving) {
+  // Squash/stretch walk-cycle wobble — a cheap stand-in for a full frame
+  // animation. Issue #53: `actor.wobbleT` instead of a single scene-level
+  // timer, so up to 4 simultaneously-moving actors each wobble on their own
+  // clock instead of all sharing (and fighting over) one.
+  _updateWobble(actor, delta, moving) {
     if (moving) {
-      this._wobbleT = (this._wobbleT || 0) + delta;
-      const s = Math.sin(this._wobbleT / 90) * 0.06;
-      this.player.setScale(1 + s, 1 - s);
+      actor.wobbleT = (actor.wobbleT || 0) + delta;
+      const s = Math.sin(actor.wobbleT / 90) * 0.06;
+      actor.sprite.setScale(1 + s, 1 - s);
     } else {
-      this._wobbleT = 0;
-      this.player.setScale(1, 1);
+      actor.wobbleT = 0;
+      actor.sprite.setScale(1, 1);
     }
   }
 

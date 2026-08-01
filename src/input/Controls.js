@@ -78,9 +78,24 @@ const BUTTON_NAMES = {
 export const ACTION_COLORS = Object.fromEntries(BTN_DEFS.map((d) => [d.id, d.color]));
 
 export class Controls {
-  constructor(scene) {
+  // Issue #53 (local multiplayer): a `Controls` instance is now bound to ONE
+  // specific device rather than always reading "whichever the player last
+  // touched". Player 1 keeps today's exact behavior — pass no `opts` (or
+  // `gamepadIndex: null`) and she gets keyboard + touch + a gamepad-0
+  // fallback, all interchangeable, same as before this issue. Players 2-4 are
+  // gamepad-only: pass `{ gamepadIndex: N }` and this instance reads ONLY
+  // that specific gamepad slot — no keyboard keys are bound at all, and it
+  // never wires up touch/pointer handling or draws the on-screen button
+  // cluster/joystick (those stay exclusively Player 1's — a gamepad-only
+  // instance has no touch equivalent, and only one on-screen cluster should
+  // ever exist per the issue's "gamepads for players 2+" answer).
+  constructor(scene, opts = {}) {
     this.scene = scene;
-    this.keys = scene.input.keyboard.addKeys({
+    const gamepadIndex = opts.gamepadIndex;
+    this._gamepadOnly = gamepadIndex != null;
+    this.gamepadIndex = this._gamepadOnly ? gamepadIndex : 0; // Player 1's own fallback stays hardcoded to pad 0, unchanged from before this issue
+
+    this.keys = this._gamepadOnly ? null : scene.input.keyboard.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.W,
       down: Phaser.Input.Keyboard.KeyCodes.S,
       left: Phaser.Input.Keyboard.KeyCodes.A,
@@ -97,10 +112,9 @@ export class Controls {
 
     // Issue #58: which device the player last actually used, so the on-screen
     // prompt can name the right button ("Space" vs "A" vs "✨"). Devices stay
-    // fully interchangeable — this only affects wording, never what works.
-    // Seeded from "is this a touch device", then corrected the instant any
-    // real input arrives.
-    this.lastDevice = Controls.touchCapable() ? 'touch' : 'keyboard';
+    // fully interchangeable for Player 1 — this only affects wording, never
+    // what works. A gamepad-only instance never changes device.
+    this.lastDevice = this._gamepadOnly ? 'gamepad' : (Controls.touchCapable() ? 'touch' : 'keyboard');
 
     // Known Phaser gamepad quirk (already hit and fixed in the sibling mech game,
     // its input/Controls.js #122/#524): each Scene gets its own GamepadPlugin, and
@@ -111,12 +125,14 @@ export class Controls {
     // Bluetooth/USB pads on iPad — often paired before the page even loads) and
     // is then held steady reads as permanently all-zero, i.e. "not working".
     // Force an unconditional resync for every pad already known at construction,
-    // and for any pad that connects mid-scene.
+    // and for any pad that connects mid-scene. Every Controls instance in the
+    // scene does this independently, which is harmless (idempotent stamp).
     for (const pad of scene.input.gamepad?.getAll?.() ?? []) pad._created = 0;
     scene.input.gamepad?.on?.('connected', (pad) => { pad._created = 0; });
 
     // Pending "walk here" request from a mouse click or a non-dragging touch tap.
-    // The scene consumes it once per request via consumeTapTarget().
+    // The scene consumes it once per request via consumeTapTarget(). Never set
+    // for a gamepad-only instance (no pointer handling wired up below).
     this.tapTarget = null;
 
     // Dev-drag tool (src/dev/dragTool.js): while suspended, pointer-driven
@@ -127,7 +143,10 @@ export class Controls {
 
     // Live touch-drag state, only ever set on a real touch pointer (never mouse).
     this._touch = null; // { id, origin:{x,y} (logical), point:{x,y} (logical), dragging }
-    this.touchStickVisible = Controls.touchCapable();
+    // Touch is exclusively Player 1's (issue #53: "gamepads for players 2+") —
+    // a gamepad-only instance never shows the joystick ring or button cluster,
+    // regardless of the device's actual touch capability.
+    this.touchStickVisible = !this._gamepadOnly && Controls.touchCapable();
 
     // Only the on-screen joystick ring is touch-only; a floating stick appears
     // wherever the finger lands (mirrors the mech game's `floating` dial), so
@@ -149,10 +168,16 @@ export class Controls {
     this._press = { handle: { down: false, since: 0, fired: false } };
     this._btns = this.touchStickVisible ? this._buildActionButtons() : null;
 
-    scene.input.on('pointerdown', this._onPointerDown, this);
-    scene.input.on('pointermove', this._onPointerMove, this);
-    scene.input.on('pointerup', this._onPointerUp, this);
-    scene.input.on('pointerupoutside', this._onPointerUp, this);
+    // Pointer/touch handling (and the on-screen button cluster it drives) is
+    // scene-global input — only Player 1's instance may wire it up, or a
+    // second `Controls` would double-register the same events and draw a
+    // second cluster on top of the first.
+    if (!this._gamepadOnly) {
+      scene.input.on('pointerdown', this._onPointerDown, this);
+      scene.input.on('pointermove', this._onPointerMove, this);
+      scene.input.on('pointerup', this._onPointerUp, this);
+      scene.input.on('pointerupoutside', this._onPointerUp, this);
+    }
     scene.events.once('shutdown', () => this.destroy());
   }
 
@@ -285,9 +310,12 @@ export class Controls {
     this.tapTarget = { x: world.x, y: world.y };
   }
 
+  // Player 1 reads gamepad slot 0 as a fallback (unchanged single-player
+  // behavior); a gamepad-only instance (players 2-4) reads its OWN assigned
+  // index, never "whichever pad moved last".
   _pad() {
     const gp = this.scene.input.gamepad;
-    const p = gp && gp.total > 0 ? gp.getPad(0) : null;
+    const p = gp && gp.total > 0 ? gp.getPad(this.gamepadIndex) : null;
     return p && p.connected ? p : null;
   }
 
@@ -297,10 +325,13 @@ export class Controls {
   // tap-to-move walk (handled by the scene reading mag > 0 to drop its nav path).
   getMove() {
     this._layoutActionButtons();
-    const k = this.keys;
-    let x = (k.right.isDown || k.rightArrow.isDown ? 1 : 0) - (k.left.isDown || k.leftArrow.isDown ? 1 : 0);
-    let y = (k.down.isDown || k.downArrow.isDown ? 1 : 0) - (k.up.isDown || k.upArrow.isDown ? 1 : 0);
-    if (x || y) this.lastDevice = 'keyboard'; // issue #58: prompt wording only
+    let x = 0, y = 0;
+    if (this.keys) {
+      const k = this.keys;
+      x = (k.right.isDown || k.rightArrow.isDown ? 1 : 0) - (k.left.isDown || k.leftArrow.isDown ? 1 : 0);
+      y = (k.down.isDown || k.downArrow.isDown ? 1 : 0) - (k.up.isDown || k.upArrow.isDown ? 1 : 0);
+      if (x || y) this.lastDevice = 'keyboard'; // issue #58: prompt wording only
+    }
 
     const pad = this._pad();
     if (pad) {
@@ -404,7 +435,7 @@ export class Controls {
 
     // ── Key / gamepad: polled, so the state machine lives here.
     const pad = this._pad();
-    const keyDown = this.keys[id].isDown;
+    const keyDown = !!this.keys?.[id].isDown;
     const padDown = !!pad?.buttons[padIndex]?.pressed;
     const down = keyDown || padDown;
     const st = this._press[id];
@@ -430,7 +461,7 @@ export class Controls {
   // padIndex is the standard-gamepad face button: 0=A, 1=B, 2=X.
   _justDown(id, padIndex) {
     const pad = this._pad();
-    const keyDown = this.keys[id].isDown;
+    const keyDown = !!this.keys?.[id].isDown;
     const padDown = !!pad?.buttons[padIndex]?.pressed;
     const down = keyDown || padDown;
     const edge = down && !this._prevDown[id];
@@ -464,10 +495,12 @@ export class Controls {
   }
 
   destroy() {
-    this.scene.input.off('pointerdown', this._onPointerDown, this);
-    this.scene.input.off('pointermove', this._onPointerMove, this);
-    this.scene.input.off('pointerup', this._onPointerUp, this);
-    this.scene.input.off('pointerupoutside', this._onPointerUp, this);
+    if (!this._gamepadOnly) {
+      this.scene.input.off('pointerdown', this._onPointerDown, this);
+      this.scene.input.off('pointermove', this._onPointerMove, this);
+      this.scene.input.off('pointerup', this._onPointerUp, this);
+      this.scene.input.off('pointerupoutside', this._onPointerUp, this);
+    }
     this._ring?.destroy();
     this._btns?.[0]?.g.destroy(); // one shared graphics object for both
     this._btns?.forEach((b) => b.label.destroy());
