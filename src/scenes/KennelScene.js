@@ -746,7 +746,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this._cagePlates[key].forEach((existing, slot) => {
         const occupant = this._cageOccupant(key, slot);
         if (!occupant) {
-          existing?.glowTween?.remove();
           existing?.container.destroy();
           this._cagePlates[key][slot] = null;
           return;
@@ -759,7 +758,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         // never owns a cage, but a returning guest's record is reused), so
         // the plate is rebuilt only when what it shows is actually stale.
         if (existing && existing.shownName === occupant.animal.name && existing.held === held) return;
-        existing?.glowTween?.remove();
         existing?.container.destroy();
         const spot = cagePlateSpot(CAGES[key][slot]);
         const plate = this._addNameTag(spot.x, spot.y, occupant.animal.name, { highlight: held });
@@ -1954,29 +1952,20 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const height = 20;
     const parts = [];
     // Issue #73 (owner: "if you're holding a pet, there should be a slight
-    // highlight of some kind on its cage nameplate") — a soft warm glow behind
-    // the plate plus a brighter border, so the cage a carried pet belongs to
-    // is findable at a glance without shouting. Deliberately gentle: the
-    // plates are permanent scenery, and a loud one would read as an alarm.
-    let glowTween = null;
-    if (opts.highlight) {
-      const glow = this.add.graphics();
-      glow.fillStyle(0xffd97a, 0.55).fillRoundedRect(-width / 2 - 4, -4, width + 8, height + 4, 7);
-      parts.push(glow);
-      // A slow breathe, so it catches the eye even at the edge of the screen.
-      glowTween = this.tweens.add({ targets: glow, alpha: 0.35, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-    }
+    // highlight of some kind on its cage nameplate"; revised same day — "needs
+    // to change the background color of the plate, not do a glow like that")
+    // — the plate's own fill swaps to a warmer gold and its border brightens,
+    // so the cage a carried pet belongs to is findable at a glance. No glow
+    // graphic, no tween.
     const bg = this.add.graphics();
-    bg.fillStyle(0xead9b3, 1).fillRoundedRect(-width / 2, 0, width, height - 2, 4);
+    bg.fillStyle(opts.highlight ? 0xf5c95c : 0xead9b3, 1).fillRoundedRect(-width / 2, 0, width, height - 2, 4);
     bg.lineStyle(2, opts.highlight ? 0xd8a63c : 0xa9824a, 1).strokeRoundedRect(-width / 2 + 1, 1, width - 2, height - 4, 4);
     bg.fillStyle(0x8a6a3e, 1);
     bg.fillCircle(-width / 2 + 6, 3, 2);
     bg.fillCircle(width / 2 - 6, 3, 2);
     parts.push(bg, text);
     const container = this.add.container(x, y - height, parts).setDepth(9000).setVisible(false);
-    // `glowTween` is handed back so whoever destroys the plate can stop it
-    // first — a looping tween outlives the object it animates otherwise.
-    return { container, width, height, glowTween };
+    return { container, width, height };
   }
 
   // Every frame: a tag fixed to a cage door is a permanent nameplate, always
