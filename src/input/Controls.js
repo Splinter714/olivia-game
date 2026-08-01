@@ -34,15 +34,16 @@ const JOY = { radius: 60, deadzone: 0.15, curve: 1.3 };
 // carry, cage, act.
 //
 // Issue #58 revision (owner, 2026-07-31): three was one too many. Carry and
-// cage are merged back into a single HANDLE button, and the gamepad mapping is
-// deliberately swapped so the big friendly A button is the one you use on
-// animals. Two buttons now, identical in meaning on all three devices:
+// cage are merged back into a single HANDLE button. Two buttons now,
+// identical in meaning on all three devices:
 //
 //   action   keyboard   gamepad        touch
-//   handle   E          A (button 0)   🤲 button   animals: open a cage, send a
+//   handle   E          X (button 2)   🤲 button   animals: open a cage, send a
 //                                                  pet home, hold to pick up,
 //                                                  put down what you're holding
-//   act      Space      X (button 2)   ✨ button   everything else, incl. the scooper
+//   act      Space      A (button 0)   ✨ button   everything else, incl. the scooper
+//
+// Owner (2026-07-31): swapped A/X back from the #58 mapping above.
 //
 // This is a partial walk-back of #51 for carry-vs-cage only — but not a return
 // to the invisible tie-break that caused the original bugs: the two sets are
@@ -67,7 +68,7 @@ const BTN_DEFS = [
 // above.
 const BUTTON_NAMES = {
   keyboard: { act: 'Space', handle: 'E' },
-  gamepad: { act: 'X', handle: 'A' },
+  gamepad: { act: 'A', handle: 'X' },
   touch: { act: '✨', handle: '🤲' },
 };
 
@@ -367,7 +368,7 @@ export class Controls {
   //
   // Each button resolves its OWN nearest target in the scene over only its own
   // class of actions, so the classes can never out-compete each other.
-  actJustDown() { return this._justDown('act', 2); }
+  actJustDown() { return this._justDown('act', 0); }
 
   // Issue #59: HANDLE is the one button with two meanings, so it reports a
   // TAP or a HOLD instead of a bare "just went down" —
@@ -378,7 +379,7 @@ export class Controls {
   // resolves on RELEASE (that's the only moment it's known not to be a hold);
   // a hold fires the moment the threshold passes, so it feels like the button
   // "catches" rather than waiting for the finger to come off.
-  handleEvent() { return this._pressEvent('handle', 0); }
+  handleEvent() { return this._pressEvent('handle', 2); }
 
   _pressEvent(id, padIndex) {
     const now = this.scene.time.now;
