@@ -20,7 +20,7 @@ import { pickWakeEvent, WAKE_REASON } from '../data/night.js';
 import { createAnimal } from '../data/animal.js';
 import { randomName } from '../data/names.js';
 import { createEconomy, computePayout, upgradeMessage } from '../data/economy.js';
-import { pickWanderInterval, wanderAmplitude } from '../data/wander.js';
+import { pickWanderInterval, wanderAmplitude, wanderSpeed } from '../data/wander.js';
 import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
@@ -3231,8 +3231,23 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         }
         rec.wander.t = pickWanderInterval(stay.animal.species);
       }
-      rec.sprite.x += (rec.wander.tx - rec.sprite.x) * 0.03;
-      rec.sprite.y += (rec.wander.ty - rec.sprite.y) * 0.03;
+      // Owner note 2026-07-30: "the animals are zipping around extremely
+      // fast... slow them down appropriately." This used to be a proportional
+      // lerp (`+= (target - pos) * 0.03`), whose speed scales with DISTANCE —
+      // fine when a target was always ~24px away (the old anchored box), but
+      // once #60 let her target anywhere in the yard, a 500px hop started at
+      // 0.03*500 = 15px/frame ≈ 900px/s. Now she moves at a constant, capped
+      // speed toward the target instead, so distance no longer sets pace.
+      // Also delta-based, so it no longer runs faster on a high-refresh
+      // display the way the per-frame lerp did.
+      const wdx = rec.wander.tx - rec.sprite.x;
+      const wdy = rec.wander.ty - rec.sprite.y;
+      const wdist = Math.hypot(wdx, wdy);
+      if (wdist > 0.5) {
+        const step = Math.min(wdist, wanderSpeed(stay.animal.species) * (delta / 1000));
+        rec.sprite.x += (wdx / wdist) * step;
+        rec.sprite.y += (wdy / wdist) * step;
+      }
       rec.sprite.setDepth(rec.sprite.y);
 
       // Babies: same idea one level down — each drifts around her OWN base

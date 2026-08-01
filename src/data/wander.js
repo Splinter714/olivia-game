@@ -33,3 +33,21 @@ export function wanderAmplitude(speciesKey, inYard) {
   const amp = (WANDER[speciesKey] || WANDER.cat).amp;
   return inYard ? amp * YARD_WANDER_MULT : amp;
 }
+
+// How fast a wandering animal actually MOVES toward her current target, in
+// logical px/sec (owner note 2026-07-30: "the animals are zipping around
+// extremely fast... slow them down appropriately").
+//
+// KennelScene used to drift sprites with a proportional lerp, whose speed
+// scales with how far away the target is. That read fine while targets were
+// always a couple of dozen px away, but once issue #60 let a yard animal
+// target anywhere in the play area, a long hop launched her across it at
+// roughly 900 px/s. Speed is now constant and capped, derived from the same
+// per-species `amp` that already encodes liveliness — a hamster scurries, a
+// turtle plods — and deliberately well under the ~82 px/s a pet walks at
+// when she's actually going somewhere (KennelScene's walker), since
+// wandering should read as pottering about, not commuting.
+export function wanderSpeed(speciesKey) {
+  const amp = (WANDER[speciesKey] || WANDER.cat).amp;
+  return 10 + amp * 2.2; // turtle ~21 px/s, cat ~32, hamster ~39
+}
