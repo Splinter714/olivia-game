@@ -250,7 +250,25 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._promptSig = null;
 
     // ── Roster / arrivals / carrying (issues #4, #5, #20) ──────────────────
-    this.roster = createRoster(this._save ? { stays: this._save.stays, pool: this._save.pool } : null);
+    // Issue #79: loadGame() only guards the JSON shape (stays/pool are
+    // arrays) — it can't know if a save's DEEPER field shape still matches
+    // what today's game logic expects. This project changes that shape
+    // often (e.g. #71 replaced the whole per-species cage bookkeeping), so a
+    // save written a version or two ago can carry fields current code
+    // doesn't know how to read. createRoster() below is the first place that
+    // actually touches those fields, so it's wrapped: any throw here means
+    // "this save doesn't fit anymore" exactly like a JSON parse failure
+    // does, and gets treated the same way — discarded, fresh start, rather
+    // than leaving the player on a permanently black/frozen screen with no
+    // way to recover short of clearing storage by hand.
+    try {
+      this.roster = createRoster(this._save ? { stays: this._save.stays, pool: this._save.pool } : null);
+    } catch (err) {
+      console.error('Saved game no longer matches the current version — starting fresh instead.', err);
+      clearSave();
+      this._save = null;
+      this.roster = createRoster(null);
+    }
     this._staySprites = new Map(); // stay -> { pos, sprite, tag:{container,width,height}, extras:[...], babyLabels:[...], needIcons:{}, wanderBounds }
     this.carrying = null;          // the stay currently in the player's hands, or null
     this._carryOrigin = null;      // where `carrying` was picked up from: 'reception' | sectionKey | LOCATION.YARD
@@ -329,13 +347,34 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (this._save) {
       // Resuming: re-render every restored stay wherever she currently is
       // (reception/section/yard), rather than seeding a brand-new arrival.
-      this._restoreStaySprites();
-      // HudScene/NotificationScene only update on these events firing — emit
-      // once now so the HUD immediately reflects the resumed day/hour/money
-      // instead of showing fresh-boot defaults until the next natural change.
-      this.game.events.emit(EVENTS.HOUR_CHANGE, { hour: this.clock.hour, phase: this.clock.phase, day: this.clock.day, syncOnly: true });
-      this.game.events.emit(EVENTS.PHASE_CHANGE, { phase: this.clock.phase, isNight: this.clock.phase === PHASE.NIGHT, syncOnly: true });
-      this.game.events.emit(EVENTS.MONEY_CHANGE, { total: this.economy.total });
+      // Issue #79: same reasoning as the createRoster try/catch above — this
+      // reads deep per-stay fields (cage identity, location, carry state)
+      // that an older save's shape may not satisfy. Caught the same way.
+      try {
+        this._restoreStaySprites();
+        // HudScene/NotificationScene only update on these events firing — emit
+        // once now so the HUD immediately reflects the resumed day/hour/money
+        // instead of showing fresh-boot defaults until the next natural change.
+        this.game.events.emit(EVENTS.HOUR_CHANGE, { hour: this.clock.hour, phase: this.clock.phase, day: this.clock.day, syncOnly: true });
+        this.game.events.emit(EVENTS.PHASE_CHANGE, { phase: this.clock.phase, isNight: this.clock.phase === PHASE.NIGHT, syncOnly: true });
+        this.game.events.emit(EVENTS.MONEY_CHANGE, { total: this.economy.total });
+      } catch (err) {
+        console.error('Saved game no longer matches the current version — starting fresh instead.', err);
+        clearSave();
+        this._save = null;
+        // Best-effort cleanup of whatever partial sprites got created before
+        // the throw, then reset to the exact same empty state a no-save boot
+        // starts from.
+        this._staySprites.forEach((rec) => {
+          rec.sprite?.destroy?.();
+          rec.tag?.container?.destroy?.();
+          rec.extras?.forEach((e) => e.destroy?.());
+        });
+        this._staySprites.clear();
+        this.roster = createRoster(null);
+        this.economy = createEconomy(0);
+        this._spawnArrival(this.clock.day, this.clock.hour);
+      }
     } else {
       // Don't start with an empty kennel — one arrival is already waiting at
       // reception when the shift begins.
