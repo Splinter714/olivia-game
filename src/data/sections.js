@@ -19,7 +19,18 @@ export const WALL = 24;    // outer wall thickness
 // ROOM.y, and the wing itself sits at y:0..ROOM.y, right where ROOM's top
 // wall used to be. Every rect's width/height/relative layout is unchanged —
 // this is a pure block shift, not a re-layout.
-export const ROOM = { y: 380, w: 1440, h: 1000 }; // the kennel building interior; y == the wing's height (BACK_WING.h below)
+//
+// Issue #71 grew ROOM.h from 1000 to 1220. The owner asked for a horizontal
+// aisle between EVERY row of cages plus a vertical one down the middle, and
+// for those aisles to be genuinely walkable — wide enough for a dog, not just
+// decorative. Six rows of 100px cages plus five 52px aisles is 860px of grid,
+// and the old room only had 726px of clear floor above the reception desk, so
+// it simply did not fit: keeping the cages at the 100x100 the owner asked for
+// (issue #32) meant the building had to grow. Everything below that's
+// expressed as an offset from ROOM.y (the reception cluster) moved down with
+// it; everything expressed in terms of ROOM.h (the walls, the outside fence,
+// the yard) followed automatically.
+export const ROOM = { y: 380, w: 1440, h: 1220 }; // the kennel building interior; y == the wing's height (BACK_WING.h below)
 
 export const OUTSIDE = { x: ROOM.w, w: 700 }; // grass strip east of the building
 
@@ -60,13 +71,18 @@ export const HOUSE_ROOM = {
 
 export const WORLD = { w: ROOM.w + OUTSIDE.w, h: ROOM.y + ROOM.h };
 
-// Fixed capacity of individual cages/tank-slots per species (issue #18) —
-// once a species holds 6 settled stays, it quietly stops arriving
-// (data/roster.js's spawnArrival) until a cage frees up at checkout.
-export const CAGES_PER_SECTION = 6;
+// (Issue #71 removed CAGES_PER_SECTION. Cages were a per-species reservation
+// — six slots nominally belonging to each species — which stopped meaning
+// anything the moment issue #32 let any pet take any open cage, and the owner
+// finished the job here: "we don't need a per-species cap, just random
+// whatever, and yes fewer total guests." Capacity is now simply how many
+// physical cages exist, data/props.js's CAGE_COUNT.)
 
-// Gap in the east wall — the door to the outside grass (dog potty walks, issue #19).
-export const BACK_DOOR = { y0: ROOM.y + 415, y1: ROOM.y + 575 };
+// Gap in the east wall — the door to the outside grass (dog potty walks, issue
+// #19), with a closeable gate across it as of issue #55. Centered on the
+// building's height so it stays put in the middle of the east wall regardless
+// of how tall the room is (issue #71 made it taller).
+export const BACK_DOOR = { y0: ROOM.y + ROOM.h / 2 - 80, y1: ROOM.y + ROOM.h / 2 + 80 };
 
 // Front door on the south wall — visual only for now (the player can't leave
 // through it); owners will arrive here in Phase B. Centered under the
@@ -76,30 +92,23 @@ export const FRONT_DOOR = { x0: 575, x1: 715 };
 // Reception / front-desk area, just inside the front door, in the open
 // central hallway. The computer for baby announcements (Phase C+) sits on
 // this desk.
+// Issue #71: the whole cluster shifted 218px down (750 -> 968 and friends),
+// keeping its internal spacing exactly as it was, to clear the taller cage
+// grid above it — the aisle layout pushed the grid's bottom edge from 1088 to
+// 1288, and the desk used to start at 1130.
 export const RECEPTION = {
-  desk: { x: 555, y: ROOM.y + 750, w: 170, h: 64 },
-  rug:  { x: 520, y: ROOM.y + 830, w: 240, h: 110 },
-  mat:  { x: 600, y: ROOM.y + 936, w: 90,  h: 36 },
+  desk: { x: 555, y: ROOM.y + 968, w: 170, h: 64 },
+  rug:  { x: 520, y: ROOM.y + 1048, w: 240, h: 110 },
+  mat:  { x: 600, y: ROOM.y + 1154, w: 90,  h: 36 },
 };
 
-// Issue #32: species metadata only — the old per-species walled rooms (each
-// with its own floor tint, pen walls, and label) are gone entirely, replaced
-// by one single modular cage grid (data/props.js's CAGES) that any species
-// can occupy in any open slot. `SECTIONS` now exists purely so roster.js
-// (arrival rolls, per-species cage-capacity bookkeeping) and KennelScene
-// (messaging like "{label} is full") have a species key/label list — no
-// geometry left here at all.
-export const SECTIONS = [
-  { key: 'turtle',    label: '🐢 Turtles' },
-  { key: 'guineaPig', label: '🐹 Guinea Pigs' },
-  { key: 'hamster',   label: '🐹 Hamsters' },
-  { key: 'snake',     label: '🐍 Snakes' },
-  { key: 'bunny',     label: '🐰 Bunnies' },
-  { key: 'bird',      label: '🐦 Birds' },
-  { key: 'cat',       label: '🐱 Cats' },
-  { key: 'dog',       label: '🐶 Dogs' },
-  { key: 'lizard',    label: '🦎 Lizards' }, // issue #28
-];
+// (Issue #71 removed SECTIONS entirely. Issue #32 had already stripped it to
+// species metadata — the per-species walled rooms, floor tints and pen walls
+// were long gone — leaving a key/label list that survived only because a
+// cage's bookkeeping identity was still `(species, slot)`. With cages a flat
+// pool that anyone can take, nothing consults it: species rolls read
+// data/species.js's SPECIES_KEYS, which is the real list, and there is no
+// per-species capacity left to message about.)
 
 // Outer building walls; the east wall splits around the back-door gap, the
 // north wall splits around the staff-door gap up into the back wing (issue

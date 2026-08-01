@@ -6,8 +6,16 @@
 // art/animals.js.
 import { gen } from './_gen.js';
 import {
-  LITTER_BOX_SIZE, CAGES, CAGE_W, CAGE_H, OVEN, BED, YARD_DOOR, YARD_DOOR_LEAF,
+  LITTER_BOX_SIZE, CAGE_W, CAGE_H, OVEN, BED, YARD_DOOR, YARD_DOOR_LEAF,
 } from '../data/props.js';
+import { SPECIES_KEYS } from '../data/species.js';
+
+// Issue #71: cage LOOKS are per species, but cages themselves no longer are —
+// a cage is a position in a flat pool that anyone can occupy, so these are
+// keyed off the species list directly rather than off the (previously
+// species-keyed) CAGES structure. `dragon` is the secret bonus guest, who has
+// no place in the regular species rotation but still needs her own cage art.
+const CAGE_ART_KEYS = [...SPECIES_KEYS, 'dragon'];
 
 export const LITTER_BOX_KEY = 'prop-litter-box';
 export const BOWL_KEY = 'prop-bowl';
@@ -111,10 +119,10 @@ export const NEED_KEY = {
 // See KennelScene._cageImgs/_cageFgImgs and _refreshCageArt for the two
 // per-slot images this now produces.
 export const CAGE_KEY = Object.fromEntries(
-  [...Object.keys(CAGES), 'dragon'].map((key) => [key, `prop-cage-${key}`]),
+  CAGE_ART_KEYS.map((key) => [key, `prop-cage-${key}`]),
 );
 export const CAGE_FG_KEY = Object.fromEntries(
-  [...Object.keys(CAGES), 'dragon'].map((key) => [key, `prop-cage-fg-${key}`]),
+  CAGE_ART_KEYS.map((key) => [key, `prop-cage-fg-${key}`]),
 );
 
 // Issue #27 ("generalized cages" toggle) / issue #32: ONE shared neutral/
@@ -676,16 +684,12 @@ export function buildPropTextures(scene) {
   // Issue #43: two textures per species now — a background (floor/fill,
   // stays behind the animal) and a foreground (bars/mesh/glass-rim/turrets,
   // rendered above her — see KennelScene._refreshCageArt).
-  for (const key of Object.keys(CAGES)) {
+  for (const key of CAGE_ART_KEYS) {
     const drawBg = cageBgDrawFn(key);
     const drawFg = cageFgDrawFn(key);
     gen(scene, CAGE_KEY[key], CAGE_W, CAGE_H, (g) => drawBg(g, CAGE_W, CAGE_H));
     gen(scene, CAGE_FG_KEY[key], CAGE_W, CAGE_H, (g) => drawFg(g, CAGE_W, CAGE_H));
   }
-  // The secret bonus dragon's own castle look (issue #32 #5) — same uniform
-  // size, but she has no CAGES entry of her own (no species section).
-  gen(scene, CAGE_KEY.dragon, CAGE_W, CAGE_H, (g) => drawDragonCastleBg(g, CAGE_W, CAGE_H));
-  gen(scene, CAGE_FG_KEY.dragon, CAGE_W, CAGE_H, (g) => drawDragonCastleFg(g, CAGE_W, CAGE_H));
   // One shared empty-slot texture (uniform size) for any unoccupied cage —
   // no foreground split (see EMPTY_CAGE_KEY comment above).
   gen(scene, EMPTY_CAGE_KEY, CAGE_W, CAGE_H, (g) => drawEmptyCageSlot(g, CAGE_W, CAGE_H));

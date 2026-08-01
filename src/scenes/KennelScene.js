@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import {
-  WALL, ROOM, OUTSIDE, WORLD, BACK_DOOR, FRONT_DOOR, RECEPTION, SECTIONS,
+  WALL, ROOM, OUTSIDE, WORLD, BACK_DOOR, FRONT_DOOR, RECEPTION,
   BACK_WING, STAFF_DOOR, WING_DOOR, STORAGE_ROOM, HOUSE_ROOM,
   wallRects, backWingWallRects, outsideFenceRects,
 } from '../data/sections.js';
@@ -48,7 +48,7 @@ import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
 } from '../art/raccoon.js';
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
-import { createRoster, LOCATION, CARRY_KIND, assignCageSlot, isCageSlotOpen, anyOpenCageAnywhere, belongsToSection, findOpenCage } from '../data/roster.js';
+import { createRoster, LOCATION, CARRY_KIND, isCageOpen, anyOpenCageAnywhere, findOpenCage } from '../data/roster.js';
 import { loadGame, saveGame, clearSave, seedGlobalNameState } from '../data/persistence.js';
 import { applyDpr, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
@@ -311,14 +311,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // currently is, instead of the normal one-at-a-time arrival/dropoff flow
   // that builds sprites incrementally as things happen live. Mirrors the
   // exact position math each of those live call sites already uses
-  // (_sectionSlot, _openYardSpot/_dropOffToYard) so a resumed stay ends
+  // (_cageSpotFor, _openYardSpot/_dropOffToYard) so a resumed stay ends
   // up in the same kind of spot a freshly-placed one would.
   //
   // `LOCATION.CARRYING` (mid-carry when the page was closed) has no
   // meaningful visual to resume — DESIGN.md's persistence goal is "the
   // kennel looks the same when you come back", not frame-accurate resume of
   // an in-progress pickup — so she's settled back wherever she last had a
-  // real home: her cage if she had one (`cageSection`), reception otherwise.
+  // real home: her own cage if she had one, reception otherwise.
   //
   // Issue #45: a stay caught mid-WALK (walking herself out to the yard, home
   // to her cage at night, or over to her waiting owner) needs no special
@@ -326,23 +326,33 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // one of the two ends of that walk (see _openCage/_startWalkHome), so she
   // simply settles at whichever end the save recorded.
   _restoreStaySprites() {
-    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
     // Issue #54: a stay saved BEFORE cages were assigned at check-in can have
-    // no cageSection/cageSlot at all (she was waiting at reception or out in
-    // the yard, un-placed). Grant her one now, in the same order a fresh
-    // check-in would use, so she isn't the one guest without a nameplate,
-    // bowls, or a home to walk back to at night. Anyone whose saved cage is
-    // intact keeps it exactly as it was.
+    // no cage at all (she was waiting at reception or out in the yard,
+    // un-placed). Grant her one now, in the same order a fresh check-in would
+    // use, so she isn't the one guest without a nameplate, bowls, or a home to
+    // walk back to at night. Anyone whose saved cage is intact keeps it.
+    //
+    // Issue #71 folded save migration into this same loop rather than adding
+    // versioning machinery the project deliberately doesn't have: a save
+    // written against the old per-species `(cageSection, cageSlot)` identity
+    // simply has no `cageIndex`, so it falls into exactly the branch that was
+    // already here for a pre-#54 save and is handed a real cage from the flat
+    // pool. Her old `location` (a species key) is no longer a cage, so the
+    // location normalization below re-homes her too.
     for (const stay of this.roster.stays) {
-      if (CAGES[stay.cageSection]?.[stay.cageSlot]) continue;
+      if (CAGES[stay.cageIndex]) continue;
       const open = this._findAnyOpenCage(stay);
-      if (!open) break; // nothing left to hand out (shouldn't happen)
-      stay.cageSection = open.key;
-      stay.cageSlot = open.slot;
+      if (open == null) break; // nothing left to hand out (shouldn't happen)
+      stay.cageIndex = open;
     }
     for (const stay of this.roster.stays) {
-      if (stay.location === LOCATION.CARRYING) {
-        stay.location = sectionKeys.has(stay.cageSection) ? stay.cageSection : LOCATION.RECEPTION;
+      // Mid-carry when the page closed, or restored from a save whose
+      // `location` was a species key that means nothing now: settle her back
+      // into her own cage if she has one, reception otherwise.
+      const known = stay.location === LOCATION.RECEPTION || stay.location === LOCATION.YARD
+        || stay.location === LOCATION.CAGE;
+      if (!known || stay.location === LOCATION.CARRYING) {
+        stay.location = CAGES[stay.cageIndex] ? LOCATION.CAGE : LOCATION.RECEPTION;
       }
     }
 
@@ -358,9 +368,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       } else if (stay.location === LOCATION.YARD) {
         const pos = this._gridSlot(YARD_RECT, yardIdx++, 20, 44, 52);
         this._renderStay(stay, pos.x, pos.y);
-      } else if (sectionKeys.has(stay.location)) {
-        const section = SECTIONS.find((s) => s.key === stay.location);
-        const pos = this._sectionSlot(section, stay);
+      } else if (stay.location === LOCATION.CAGE) {
+        const pos = this._cageSpotFor(stay);
         this._renderStay(stay, pos.x, pos.y);
       } else {
         // Unrecognized/corrupt location — safest fallback is reception
@@ -481,14 +490,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // build time, _refreshLitterBoxes creates one only for a cage currently
     // holding a cat. Covers every species key (a cat can settle in any
     // open cage slot), not just 'cat'.
-    this._litterImgs = {};
+    this._litterImgs = CAGES.map(() => null);
     const hallScene = this;
-    for (const key of Object.keys(CAGES)) {
-      this._litterImgs[key] = CAGES[key].map(() => null);
-      CAGES[key].forEach((_, i) => {
-        this._devRegistry.push({ name: `LITTER_SPOTS.${key}.${i}`, get obj() { return hallScene._litterImgs[key][i]; } });
-      });
-    }
+    CAGES.forEach((_, i) => {
+      this._devRegistry.push({ name: `LITTER_SPOTS.${i}`, get obj() { return hallScene._litterImgs[i]; } });
+    });
 
     // Cage-owned nameplates (issue #64) and clutches of eggs (issue #57).
     // Both used to be drawn as part of the ANIMAL — created inside
@@ -497,37 +503,28 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // that record down) and why a mom's eggs travelled out to the play yard
     // with her. They're cage FURNITURE now, on the same occupancy-driven
     // create/destroy pattern as the bowls and litter boxes above: keyed by
-    // (cage key, slot) and refreshed from `belongsToSection`, the same
-    // occupancy rule the rest of the cage furniture already uses — which
+    // cage index and refreshed from _cageOccupant, the same occupancy rule
+    // the rest of the cage furniture already uses — which
     // deliberately still counts a stay who's out in the yard, mid-walk, or in
     // the player's hands as this cage's occupant.
-    this._cagePlates = {};
-    this._cageEggs = {};
-    for (const key of Object.keys(CAGES)) {
-      this._cagePlates[key] = CAGES[key].map(() => null);
-      this._cageEggs[key] = CAGES[key].map(() => null);
-    }
+    this._cagePlates = CAGES.map(() => null);
+    this._cageEggs = CAGES.map(() => null);
 
     // One bowl per individual cage slot (issue #22 #6), refined by owner note
     // 2026-07-29: bowls don't exist until an animal is actually settled in
     // that cage. No sprite is created here — this._bowlImgs just tracks the
     // (initially empty) per-slot sprite so _refreshBowls can create/destroy/
     // re-skin it as occupancy changes (see that method for the full story).
-    // Issue #32 #4: turtles now get one too (BOWL_SPOTS covers every species
-    // key, no exclusions).
-    this._bowlImgs = {};
-    this._waterBowlImgs = {};
+    // Issue #71: one entry per physical cage, no per-species key list.
+    this._bowlImgs = BOWL_SPOTS.map(() => null);
+    this._waterBowlImgs = WATER_BOWL_SPOTS.map(() => null);
     const scopedScene = this;
-    for (const key of Object.keys(BOWL_SPOTS)) {
-      this._bowlImgs[key] = BOWL_SPOTS[key].map(() => null);
-      this._waterBowlImgs[key] = WATER_BOWL_SPOTS[key].map(() => null);
-      BOWL_SPOTS[key].forEach((spot, i) => {
-        // Live getter since the actual sprite is created/destroyed
-        // dynamically, not fixed at build time.
-        this._devRegistry.push({ name: `BOWL_SPOTS.${key}.${i}`, get obj() { return scopedScene._bowlImgs[key][i]; } });
-        this._devRegistry.push({ name: `WATER_BOWL_SPOTS.${key}.${i}`, get obj() { return scopedScene._waterBowlImgs[key][i]; } });
-      });
-    }
+    BOWL_SPOTS.forEach((spot, i) => {
+      // Live getter since the actual sprite is created/destroyed
+      // dynamically, not fixed at build time.
+      this._devRegistry.push({ name: `BOWL_SPOTS.${i}`, get obj() { return scopedScene._bowlImgs[i]; } });
+      this._devRegistry.push({ name: `WATER_BOWL_SPOTS.${i}`, get obj() { return scopedScene._waterBowlImgs[i]; } });
+    });
     // Not calling _refreshBowls() here: this.roster doesn't exist yet at this
     // point in create() — _refreshCageArt() calls _refreshBowls() itself, and
     // that first runs right after the roster is built (see create()'s own
@@ -558,12 +555,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const computer = this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
     this._devRegistry.push({ name: 'COMPUTER_SPOT', obj: computer });
 
-    // Individual cages (issue #18, single grid as of issue #32) — 6 per
-    // species, including turtles/snakes (issue #20 — styled as islands/
-    // perches instead of wire pens) and the secret dragon (issue #32 #5 — a
-    // little stone castle). Keep a handle on each cage's image
-    // (this._cageImgs) so _refreshCageArt can re-texture it per-occupant
-    // without touching its fixed position/size.
+    // Individual cages (issue #18, single grid as of issue #32, a flat pool
+    // of 48 as of issue #71). Keep a handle on each cage's image
+    // (this._cageImgs) so _refreshCageArt can re-texture it per-occupant —
+    // turtles/snakes as islands/perches (issue #20), the secret dragon's
+    // little stone castle (issue #32 #5) — without touching its position.
     //
     // Issue #43 (owner: "z order of cage bars should be above everything
     // else in the cage, including the animal") — TWO images per cage slot
@@ -571,26 +567,28 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // animal), and a foreground half (this._cageFgImgs) at a depth ABOVE the
     // animal, her bowls (whose depth is cage.y + cage.h + 1, see
     // _refreshBowls), and her blanket — see the depth chosen below.
-    this._cageImgs = {};
-    this._cageFgImgs = {};
-    for (const key of Object.keys(CAGES)) {
-      this._cageImgs[key] = [];
-      this._cageFgImgs[key] = [];
-      CAGES[key].forEach((cage, i) => {
-        const img = this.add.image(cage.x, cage.y, CAGE_KEY[key]).setOrigin(0, 0).setDepth(cage.y - 2);
-        this._devRegistry.push({ name: `CAGES.${key}.${i}`, obj: img });
-        this._cageImgs[key].push(img);
-        // Foreground depth: cage.y + cage.h + 5 comfortably clears every
-        // in-cage occupant depth (the animal's own wander-clamped depth tops
-        // out at cage.y + cage.h - 4, her bowls sit at cage.y + cage.h + 1,
-        // her blanket at that bowl-adjacent depth + 0.3) while staying well
-        // below the next grid row's own contents (rows are cage.h + 12px
-        // apart, i.e. +112, so +5 never bleeds into the row below).
-        const fgImg = this.add.image(cage.x, cage.y, CAGE_FG_KEY[key]).setOrigin(0, 0).setDepth(cage.y + cage.h + 5);
-        this._devRegistry.push({ name: `CAGES_FG.${key}.${i}`, obj: fgImg });
-        this._cageFgImgs[key].push(fgImg);
-      });
-    }
+    this._cageImgs = [];
+    this._cageFgImgs = [];
+    CAGES.forEach((cage, i) => {
+      // An empty cage has no occupant to take a look from, so it starts on
+      // the shared empty-slot texture; _refreshCageArt swaps in the
+      // occupant's own species look the moment someone is assigned here.
+      const img = this.add.image(cage.x, cage.y, EMPTY_CAGE_KEY).setOrigin(0, 0).setDepth(cage.y - 2);
+      this._devRegistry.push({ name: `CAGES.${i}`, obj: img });
+      this._cageImgs.push(img);
+      // Foreground depth: cage.y + cage.h + 5 comfortably clears every
+      // in-cage occupant depth (the animal's own wander-clamped depth tops
+      // out at cage.y + cage.h - 4, her bowls sit at cage.y + cage.h + 1,
+      // her blanket at that bowl-adjacent depth + 0.3) while staying well
+      // below the next grid row's own contents (issue #71 put a 52px aisle
+      // between rows, i.e. +152, so +5 never bleeds into the row below).
+      // Starts hidden — an empty cage has no foreground look at all (see
+      // EMPTY_CAGE_KEY's comment in art/props.js).
+      const fgImg = this.add.image(cage.x, cage.y, EMPTY_CAGE_KEY).setOrigin(0, 0)
+        .setDepth(cage.y + cage.h + 5).setVisible(false);
+      this._devRegistry.push({ name: `CAGES_FG.${i}`, obj: fgImg });
+      this._cageFgImgs.push(fgImg);
+    });
 
     // Back wing furniture (issue #13): the kitchen's oven/counter (the one
     // interactive spot — baking lives at _bakeTreat) and the storage room's
@@ -686,35 +684,30 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // image is simply hidden while the slot is unoccupied.
   _refreshCageArt() {
     if (!this._cageImgs) return;
-    for (const key of Object.keys(this._cageImgs)) {
-      this._cageImgs[key].forEach((img, slot) => {
-        // Bug fix (owner note 2026-07-29: "keep it visually occupied if
-        // it's occupied"): this used to check s.location === key, which
-        // misses a stay currently out playing in the yard — her `location`
-        // reads LOCATION.YARD while she's out there, even though the slot
-        // is still hers (belongsToSection/assignCageSlot already treat a
-        // yard trip as still occupying it). The cage visually flipped back
-        // to "empty" the instant she went out to play, even though trying
-        // to drop a new animal there correctly got rejected as full —
-        // confusing since it LOOKED open. belongsToSection is the same
-        // check the actual occupancy bookkeeping already uses.
-        const occupant = this.roster.stays.find((s) => belongsToSection(s, key) && s.cageSlot === slot);
-        const texKey = occupant ? (CAGE_KEY[occupant.animal.species] ?? CAGE_KEY[key]) : EMPTY_CAGE_KEY;
-        const changed = img.texture.key !== texKey;
-        if (changed) img.setTexture(texKey);
-        if (changed) this._snapCagePop(img);
+    this._cageImgs.forEach((img, i) => {
+      // Bug fix (owner note 2026-07-29: "keep it visually occupied if it's
+      // occupied"): occupancy deliberately still counts a stay who's out
+      // playing in the yard, mid-walk, or in the player's hands — the cage is
+      // hers the whole time. It used to flip back to "empty" the instant she
+      // went out to play, even though dropping a new animal there was
+      // correctly rejected as full, which is confusing when it LOOKS open.
+      // _cageOccupant is the one occupancy rule everything here shares.
+      const occupant = this._cageOccupant(i);
+      const texKey = occupant ? (CAGE_KEY[occupant.animal.species] ?? EMPTY_CAGE_KEY) : EMPTY_CAGE_KEY;
+      const changed = img.texture.key !== texKey;
+      if (changed) img.setTexture(texKey);
+      if (changed) this._snapCagePop(img);
 
-        const fgImg = this._cageFgImgs[key][slot];
-        if (occupant) {
-          const fgTexKey = CAGE_FG_KEY[occupant.animal.species] ?? CAGE_FG_KEY[key];
-          const fgChanged = !fgImg.visible || fgImg.texture.key !== fgTexKey;
-          if (fgChanged) fgImg.setTexture(fgTexKey).setVisible(true);
-          if (fgChanged) this._snapCagePop(fgImg);
-        } else if (fgImg.visible) {
-          fgImg.setVisible(false);
-        }
-      });
-    }
+      const fgImg = this._cageFgImgs[i];
+      const fgTexKey = occupant ? CAGE_FG_KEY[occupant.animal.species] : null;
+      if (fgTexKey) {
+        const fgChanged = !fgImg.visible || fgImg.texture.key !== fgTexKey;
+        if (fgChanged) fgImg.setTexture(fgTexKey).setVisible(true);
+        if (fgChanged) this._snapCagePop(fgImg);
+      } else if (fgImg.visible) {
+        fgImg.setVisible(false);
+      }
+    });
     this._refreshCageFurniture();
   }
 
@@ -732,44 +725,42 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // what. Even if they just arrived or if they're currently held").
   //
   // The plate was already anchored to the right place — issue #42 mounts it
-  // top-center on `stay.cageSection`'s cage rather than over her body — but it
-  // was created inside _renderStay and stored on her sprite record, so its
-  // LIFETIME was the animal's, not the cage's: _pickUp calls
-  // _destroyStaySprites, and the plate went with it. Same
-  // occupancy-refresh treatment as the bowls/litter box fixes that at the
-  // root, and `belongsToSection` is what makes it survive every state the
-  // issue names — freshly checked in and still being walked over by her
-  // owner, out playing in the yard, walking somewhere, or held.
+  // top-center on her own cage rather than over her body — but it was created
+  // inside _renderStay and stored on her sprite record, so its LIFETIME was
+  // the animal's, not the cage's: _pickUp calls _destroyStaySprites, and the
+  // plate went with it. Same occupancy-refresh treatment as the bowls/litter
+  // box fixes that at the root, and the occupancy rule (_cageOccupant) is what
+  // makes it survive every state the issue names — freshly checked in and
+  // still being walked over by her owner, out playing in the yard, walking
+  // somewhere, or held.
   _refreshCagePlates() {
     if (!this._cagePlates || !this.roster) return;
-    for (const key of Object.keys(this._cagePlates)) {
-      this._cagePlates[key].forEach((existing, slot) => {
-        const occupant = this._cageOccupant(key, slot);
-        if (!occupant) {
-          existing?.container.destroy();
-          this._cagePlates[key][slot] = null;
-          return;
-        }
-        // Issue #73: the plate of a pet currently in the player's hands is
-        // highlighted, so "which cage does this one live in?" is answerable at
-        // a glance while carrying her across the room.
-        const held = occupant.location === LOCATION.CARRYING;
-        // Names can change under us (a baby named via the reception computer
-        // never owns a cage, but a returning guest's record is reused), so
-        // the plate is rebuilt only when what it shows is actually stale.
-        if (existing && existing.shownName === occupant.animal.name && existing.held === held) return;
+    this._cagePlates.forEach((existing, i) => {
+      const occupant = this._cageOccupant(i);
+      if (!occupant) {
         existing?.container.destroy();
-        const spot = cagePlateSpot(CAGES[key][slot]);
-        const plate = this._addNameTag(spot.x, spot.y, occupant.animal.name, { highlight: held });
-        plate.shownName = occupant.animal.name;
-        plate.held = held;
-        // A door plate is always readable — the proximity gate
-        // (_updateNameTagVisibility) only ever applied to a tag floating
-        // above an animal out in the open.
-        plate.container.setVisible(true);
-        this._cagePlates[key][slot] = plate;
-      });
-    }
+        this._cagePlates[i] = null;
+        return;
+      }
+      // Issue #73: the plate of a pet currently in the player's hands is
+      // highlighted, so "which cage does this one live in?" is answerable at
+      // a glance while carrying her across the room.
+      const held = occupant.location === LOCATION.CARRYING;
+      // Names can change under us (a baby named via the reception computer
+      // never owns a cage, but a returning guest's record is reused), so
+      // the plate is rebuilt only when what it shows is actually stale.
+      if (existing && existing.shownName === occupant.animal.name && existing.held === held) return;
+      existing?.container.destroy();
+      const spot = cagePlateSpot(CAGES[i]);
+      const plate = this._addNameTag(spot.x, spot.y, occupant.animal.name, { highlight: held });
+      plate.shownName = occupant.animal.name;
+      plate.held = held;
+      // A door plate is always readable — the proximity gate
+      // (_updateNameTagVisibility) only ever applied to a tag floating
+      // above an animal out in the open.
+      plate.container.setVisible(true);
+      this._cagePlates[i] = plate;
+    });
   }
 
   // Issue #57 (owner: "mamas with eggs — the eggs should not move with them
@@ -785,33 +776,30 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // clutch, and _resolveAct targets this same spot (see _eggCageSpot).
   _refreshCageEggs() {
     if (!this._cageEggs || !this.roster) return;
-    for (const key of Object.keys(this._cageEggs)) {
-      this._cageEggs[key].forEach((existing, slot) => {
-        const occupant = this._cageOccupant(key, slot);
-        const count = occupant?.animal.hasEggs ? (occupant.animal.eggCount || 0) : 0;
-        const heart = !!(count && occupant.birthReady);
-        if (existing && existing.count === count && existing.heart === heart) return;
-        existing?.objs.forEach((o) => o.destroy());
-        if (!count) {
-          this._cageEggs[key][slot] = null;
-          return;
-        }
-        const cage = CAGES[key][slot];
-        const spot = cageEggSpot(cage);
-        const objs = [];
-        const startX = spot.x - ((count - 1) * CAGE_EGG_SPACING) / 2;
-        for (let i = 0; i < count; i++) {
-          const ex = startX + i * CAGE_EGG_SPACING;
-          const ey = spot.y + (i % 2 ? 3 : -3); // a slightly uneven nest, not a straight line
-          objs.push(this.add.image(ex, ey, EGG_KEY).setOrigin(0.5, 1).setDepth(ey));
-        }
-        if (heart) {
-          objs.push(this.add.image(spot.x, spot.y - 16, NEED_KEY.babies).setOrigin(0.5, 1).setDepth(9002));
-        }
-        this._cageEggs[key][slot] = { count, heart, objs };
-        objs.forEach((o) => this._snapCagePop(o));
-      });
-    }
+    this._cageEggs.forEach((existing, i) => {
+      const occupant = this._cageOccupant(i);
+      const count = occupant?.animal.hasEggs ? (occupant.animal.eggCount || 0) : 0;
+      const heart = !!(count && occupant.birthReady);
+      if (existing && existing.count === count && existing.heart === heart) return;
+      existing?.objs.forEach((o) => o.destroy());
+      if (!count) {
+        this._cageEggs[i] = null;
+        return;
+      }
+      const spot = cageEggSpot(CAGES[i]);
+      const objs = [];
+      const startX = spot.x - ((count - 1) * CAGE_EGG_SPACING) / 2;
+      for (let e = 0; e < count; e++) {
+        const ex = startX + e * CAGE_EGG_SPACING;
+        const ey = spot.y + (e % 2 ? 3 : -3); // a slightly uneven nest, not a straight line
+        objs.push(this.add.image(ex, ey, EGG_KEY).setOrigin(0.5, 1).setDepth(ey));
+      }
+      if (heart) {
+        objs.push(this.add.image(spot.x, spot.y - 16, NEED_KEY.babies).setOrigin(0.5, 1).setDepth(9002));
+      }
+      this._cageEggs[i] = { count, heart, objs };
+      objs.forEach((o) => this._snapCagePop(o));
+    });
   }
 
   // The clutch's world spot for a stay whose eggs live in a cage, or null if
@@ -820,7 +808,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // its heart icon belong — see _resolveAct / _setNeedIcon.
   _eggCageSpot(stay) {
     if (!stay.animal.hasEggs) return null;
-    const cage = CAGES[stay.cageSection]?.[stay.cageSlot];
+    const cage = CAGES[stay.cageIndex];
     return cage ? cageEggSpot(cage) : null;
   }
 
@@ -857,92 +845,77 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   //     instead of the bowl's own spot, always exceeding the max depth her
   //     wander can reach.
   //  2. A COVERAGE bug (this is what was still hiding bird/bunny bowls after
-  //     fix #1 shipped): a stay's `location` is which CAGE SLOT KEY she's
-  //     nominally assigned to, not necessarily her own species — "any pet,
-  //     any open cage" placement could put a bird in what used to be the
-  //     'turtle' key's nominal slot, and the old BOWL_SPOTS/BOWL_ELIGIBLE_KEYS
-  //     list excluded 'turtle' (turtles used to be fed via the shared tank
-  //     instead). Since that key had no bowl bookkeeping AT ALL, whoever
-  //     ended up nominally housed there — regardless of her real species —
-  //     got no bowl sprite, not a mispositioned one. This is why it looked
-  //     "random by species": guinea pig/dog happened to be tested while
-  //     housed under a covered key, bird/bunny happened to land under the
-  //     one uncovered key. Issue #32 folds turtles into the same single cage
-  //     grid with their own regular per-cage bowl (item #4), so every key
-  //     now has full bowl bookkeeping — this coverage gap can't recur.
+  //     fix #1 shipped): bowl bookkeeping was a hand-kept list of species
+  //     keys, and a stay's nominal cage key had nothing to do with her real
+  //     species — "any pet, any open cage" placement could put a bird in what
+  //     used to be the 'turtle' key's slot, and 'turtle' was missing from the
+  //     list (turtles were fed via a shared tank back then). Whoever landed
+  //     there got no bowl sprite AT ALL, which is why it looked random by
+  //     species. Issue #71 removed the per-species cage identity entirely, so
+  //     there is no list left to forget: one bowl per physical cage.
   _refreshBowls() {
     if (!this._bowlImgs || !this.roster) return;
-    const bowlSpots = BOWL_SPOTS;
-    const waterSpots = WATER_BOWL_SPOTS;
-    const cages = CAGES;
-    for (const key of Object.keys(this._bowlImgs)) {
-      this._bowlImgs[key].forEach((existing, slot) => {
-        const occupant = this.roster.stays.find((s) => belongsToSection(s, key) && s.cageSlot === slot);
-        if (!occupant) {
-          existing?.destroy();
-          this._bowlImgs[key][slot] = null;
-          return;
-        }
-        const stocked = !!occupant.bowl?.food;
-        const texKey = stocked
-          ? (BOWL_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_KEY)
-          : (BOWL_EMPTY_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_EMPTY_KEY);
-        const { x, y } = bowlSpots[key][slot];
-        const depth = cages[key][slot].y + cages[key][slot].h + 1;
-        // Skip only if already showing the right bowl in the right place.
-        if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
+    this._bowlImgs.forEach((existing, i) => {
+      const occupant = this._cageOccupant(i);
+      if (!occupant) {
         existing?.destroy();
-        const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
-        this._bowlImgs[key][slot] = bowl;
-        this._snapCagePop(bowl);
-      });
-      this._waterBowlImgs[key].forEach((existing, slot) => {
-        const occupant = this.roster.stays.find((s) => belongsToSection(s, key) && s.cageSlot === slot);
-        if (!occupant) {
-          existing?.destroy();
-          this._waterBowlImgs[key][slot] = null;
-          return;
-        }
-        const stocked = !!occupant.bowl?.water;
-        const texKey = stocked ? WATER_BOWL_KEY : WATER_BOWL_EMPTY_KEY;
-        const { x, y } = waterSpots[key][slot];
-        const depth = cages[key][slot].y + cages[key][slot].h + 1;
-        if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
+        this._bowlImgs[i] = null;
+        return;
+      }
+      const stocked = !!occupant.bowl?.food;
+      const texKey = stocked
+        ? (BOWL_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_KEY)
+        : (BOWL_EMPTY_KEY_BY_SPECIES[occupant.animal.species] ?? BOWL_EMPTY_KEY);
+      const { x, y } = BOWL_SPOTS[i];
+      const depth = CAGES[i].y + CAGES[i].h + 1;
+      // Skip only if already showing the right bowl in the right place.
+      if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
+      existing?.destroy();
+      const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
+      this._bowlImgs[i] = bowl;
+      this._snapCagePop(bowl);
+    });
+    this._waterBowlImgs.forEach((existing, i) => {
+      const occupant = this._cageOccupant(i);
+      if (!occupant) {
         existing?.destroy();
-        const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
-        this._waterBowlImgs[key][slot] = bowl;
-        this._snapCagePop(bowl);
-      });
-    }
+        this._waterBowlImgs[i] = null;
+        return;
+      }
+      const stocked = !!occupant.bowl?.water;
+      const texKey = stocked ? WATER_BOWL_KEY : WATER_BOWL_EMPTY_KEY;
+      const { x, y } = WATER_BOWL_SPOTS[i];
+      const depth = CAGES[i].y + CAGES[i].h + 1;
+      if (existing && existing.texture.key === texKey && existing.x === x && existing.y === y) return;
+      existing?.destroy();
+      const bowl = this.add.image(x, y, texKey).setOrigin(0.5, 1).setDepth(depth);
+      this._waterBowlImgs[i] = bowl;
+      this._snapCagePop(bowl);
+    });
   }
 
   // Per-cage litter box (owner note 2026-07-29: "each cat cage should have a
   // small litter box, not a corner everyone litter box") — mirrors
   // _refreshBowls exactly: exists only while the cage is occupied, and only
-  // when the occupant is specifically a cat (any other species in that slot
-  // means no litter box there). Same species-check-not-key-check reasoning
-  // as bowls: a cat can settle in ANY open cage slot, so every key is
-  // checked, not just 'cat'.
+  // when the occupant is specifically a cat (any other species in that cage
+  // means no litter box there). A cat can settle in ANY cage, so every cage
+  // is checked.
   _refreshLitterBoxes() {
     if (!this._litterImgs || !this.roster) return;
-    const spots = LITTER_SPOTS;
-    for (const key of Object.keys(this._litterImgs)) {
-      this._litterImgs[key].forEach((existing, slot) => {
-        const occupant = this.roster.stays.find((s) => belongsToSection(s, key) && s.cageSlot === slot);
-        const isCat = occupant?.animal.species === 'cat';
-        if (!isCat) {
-          existing?.destroy();
-          this._litterImgs[key][slot] = null;
-          return;
-        }
-        const { x, y } = spots[key][slot];
-        if (existing && existing.x === x && existing.y === y) return;
+    this._litterImgs.forEach((existing, i) => {
+      const occupant = this._cageOccupant(i);
+      if (occupant?.animal.species !== 'cat') {
         existing?.destroy();
-        const box = this.add.image(x, y, LITTER_BOX_KEY).setOrigin(0.5, 1).setDepth(y - 1);
-        this._litterImgs[key][slot] = box;
-        this._snapCagePop(box);
-      });
-    }
+        this._litterImgs[i] = null;
+        return;
+      }
+      const { x, y } = LITTER_SPOTS[i];
+      if (existing && existing.x === x && existing.y === y) return;
+      existing?.destroy();
+      const box = this.add.image(x, y, LITTER_BOX_KEY).setOrigin(0.5, 1).setDepth(y - 1);
+      this._litterImgs[i] = box;
+      this._snapCagePop(box);
+    });
   }
 
   // "Kinda snap to" beat (owner note 2026-07-29): a brief scale-pop when a
@@ -960,9 +933,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
   _buildCollision() {
     // Obstacles that block movement — the outer building walls, big
-    // furniture, and outside fence. Issue #32: no more internal pen walls
-    // (the old per-species walled rooms are gone), so this is the whole
-    // list — nothing left to rebuild live.
+    // furniture, the outside fence, and (since issue #71) the cages
+    // themselves.
+    //
+    // Issue #71 (owner: "I DO want collision and pathfinding for all
+    // characters including player and animals"): this ONE list is both the
+    // arcade-physics wall set the player's body collides with AND the
+    // `collides` callback findPath routes against — which the owner NPCs and
+    // every self-walking animal (issue #45's walker) already share. So adding
+    // the cage rects here is the whole change: everybody gets real collision
+    // and real cage-aware routing at once, and they use the aisles
+    // data/props.js sized for exactly this.
     this._outerObstacleRects = [
       ...wallRects(),
       RECEPTION.desk,
@@ -970,6 +951,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       ...backWingWallRects(),
       OVEN,
       BED,
+      ...CAGES,
     ];
 
     this.physics.world.setBounds(0, 0, WORLD.w, WORLD.h);
@@ -1122,7 +1104,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // from this instant — one refresh makes it read as occupied (her species'
     // cage art, her food/water bowls, her litter box if she's a cat) while
     // her owner is still walking her in. Her nameplate comes with her sprite,
-    // which _renderStay anchors to `cageSection` on its own.
+    // which _refreshCagePlates hangs on her cage on its own.
     this._refreshCageArt();
     this._runOwnerDropOff(stay);
   }
@@ -1197,7 +1179,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // a real cage since check-in (issue #54), so with the gate shut her owner
     // simply walks her to it — which is also the only destination that's
     // actually reachable, since a shut gate blocks routing east.
-    const cage = CAGES[stay.cageSection]?.[stay.cageSlot];
+    const cage = CAGES[stay.cageIndex];
     const toCage = !this.yardDoorOpen && !!cage;
     const spot = toCage ? cageAnimalSpot(cage) : this._openYardSpot(stay);
 
@@ -1210,7 +1192,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         // used to get (issue #21), played right where she's set down.
         if (stay.carryKind !== CARRY_KIND.NONE) this._playUnboxing(spot.x, spot.y, stay.carryKind);
         if (toCage) {
-          this._settleInCage(stay, stay.cageSection, stay.cageSlot);
+          this._settleInCage(stay, stay.cageIndex);
           this._syncTieBreakers();
           this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived — she's settling into her cage!`);
         } else {
@@ -1269,11 +1251,31 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const { speed = ANIMAL_WALK_SPEED, stay = null, onStep = null, onArrive = null } = opts;
     const path = findPath(sprite.x, sprite.y, tx, ty, {
       minX: 0, minY: 0, maxX: WORLD.w, maxY: WORLD.h,
-      collides: this._collides, cell: 20, clearance: 9, planMargin: 5,
+      collides: this._walkCollides(sprite.x, sprite.y, tx, ty), cell: 20, clearance: 9, planMargin: 4,
     }) || [{ x: tx, y: ty }]; // unreachable (shouldn't happen) — go straight there
     const walk = { sprite, path, speed, stay, onStep, onArrive };
     this._walkers.push(walk);
     return walk;
+  }
+
+  // Issue #71 made cages solid, which creates one problem the walls never
+  // had: a walk can legitimately START inside an obstacle (an opened cage's
+  // occupant is standing in her cage) or END inside one (she's walking home
+  // to hers, an owner is delivering a pet into hers). findPath would plan her
+  // as trapped and drop her at the aisle outside — or, worse, refuse the
+  // route and fall back to a straight line through the grid.
+  //
+  // So a walk ignores whichever cages contain its own two endpoints, and
+  // only those: every other cage stays solid, so she still routes down the
+  // aisles rather than over the block. Automatic from the endpoints rather
+  // than a per-caller flag, so no call site can forget it.
+  _walkCollides(fromX, fromY, toX, toY) {
+    const inside = (rect, x, y) => x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+    const ignore = CAGES.filter((c) => inside(c, fromX, fromY) || inside(c, toX, toY));
+    if (!ignore.length) return this._collides;
+    return (x, y, r) => this.obstacleRects.some(
+      (rect) => !ignore.includes(rect) && circleRectOverlap(x, y, r, rect),
+    );
   }
 
   _isWalking(stay) {
@@ -1374,8 +1376,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
 
     // Nobody waiting for her — she lets herself out to the play yard. Her
-    // cage stays hers the whole time (belongsToSection already treats a
-    // yard trip as still occupying the slot), so the nameplate, bowls and
+    // cage stays hers the whole time (a yard trip has always counted as
+    // still occupying it), so the nameplate, bowls and
     // blanket all stay put in it.
     const spot = this._openYardSpot(stay);
     stay.location = LOCATION.YARD;
@@ -1413,36 +1415,33 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (!this.yardDoorOpen && stay.location === LOCATION.YARD) {
       this._setYardDoor(true, { notify: `${stay.animal.name} nudged the gate open to come back inside!` });
     }
-    let sectionKey = stay.cageSection;
-    let slot = stay.cageSlot;
+    let cageIndex = stay.cageIndex;
     // Confirmed edge case (issue #45): a pet with no home to walk to picks
     // any open cage herself rather than being stranded outside all night.
     // Issue #54 made this rare — every arrival is assigned a cage at check-in
     // now — but it still covers a stay restored from an older save.
-    if (slot == null || !CAGES[sectionKey]?.[slot]) {
+    if (!CAGES[cageIndex]) {
       const open = this._findAnyOpenCage(stay);
-      if (!open) {
+      if (open == null) {
         // Genuinely nowhere to put her (shouldn't happen — arrivals stop
         // once every cage is spoken for). She stays out; _checkAllSettled
         // ignores her so bedtime can't deadlock on it.
         stay.noCageAvailable = true;
         return;
       }
-      sectionKey = open.key;
-      slot = open.slot;
+      cageIndex = open;
     }
     stay.noCageAvailable = false;
-    stay.cageSection = sectionKey;
-    stay.cageSlot = slot;
+    stay.cageIndex = cageIndex;
     this._refreshCageArt(); // a newly-claimed cage reads as hers right away
 
-    const spot = cageAnimalSpot(CAGES[sectionKey][slot]);
+    const spot = cageAnimalSpot(CAGES[cageIndex]);
     this._setStayMoving(rec, true);
     this._startWalk(rec.sprite, spot.x, spot.y, {
       stay,
       onArrive: () => {
         this._stopStayMoving(stay);
-        this._settleInCage(stay, sectionKey, slot);
+        this._settleInCage(stay, cageIndex);
       },
     });
   }
@@ -1452,11 +1451,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // what re-derives everything positional in one place — cage-anchored
   // nameplate vs. floating one, wander bounds, her blanket's day/night
   // placement — with no chance of the two paths drifting apart.
-  _settleInCage(stay, sectionKey, slot) {
-    stay.location = sectionKey;
-    stay.cageSection = sectionKey;
-    stay.cageSlot = slot;
-    const spot = cageAnimalSpot(CAGES[sectionKey][slot]);
+  _settleInCage(stay, cageIndex) {
+    stay.location = LOCATION.CAGE;
+    stay.cageIndex = cageIndex;
+    const spot = cageAnimalSpot(CAGES[cageIndex]);
     this._refreshCageArt();
     this._renderStay(stay, spot.x, spot.y);
     // Issue #46: home at night means straight under the blanket.
@@ -1476,8 +1474,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // PHYSICAL order as check-in, instead of the scattered sections-then-slots
   // order this used to walk.
   _findAnyOpenCage(except = null) {
-    const cage = findOpenCage(this.roster.stays, except);
-    return cage ? { key: cage.sectionKey, slot: cage.slot } : null;
+    return findOpenCage(this.roster.stays, except);
   }
 
   // Issue #36 ("owners should actually walk in to pick them up", and no
@@ -1734,20 +1731,20 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // off stay.location on purpose — it's about where she's ACTUALLY
     // physically standing right now (a cage, or the yard), for wander/
     // spread bounds.
-    const cage = CAGES[stay.location]?.[stay.cageSlot];
+    const cage = stay.location === LOCATION.CAGE ? CAGES[stay.cageIndex] : null;
 
     // Nameplate: a stay with a cage of her own doesn't get one here AT ALL
     // anymore — issue #64 moved the door plate out to _refreshCagePlates,
     // where it's owned by the CAGE and lives and dies with the cage's
     // occupancy rather than with this sprite record. (Its position is
-    // unchanged; issue #42 already mounted it top-center on `cageSection`'s
-    // cage. What was wrong was its lifetime: picking her up destroys this
+    // unchanged; issue #42 already mounted it top-center on her own cage.
+    // What was wrong was its lifetime: picking her up destroys this
     // record, and the plate went with it.)
     //
     // A stay with no cage at all — waiting at reception, or restored from a
     // pre-#54 save — still gets the original floating tag just above her, kept
     // on her position by _updateStayVisuals and proximity-gated like before.
-    const homeCage = CAGES[stay.cageSection]?.[stay.cageSlot];
+    const homeCage = CAGES[stay.cageIndex];
     const tag = homeCage ? null : this._addNameTag(x, y - sprite.displayHeight - 6, animal.name);
     // Issue #47: one single undivided yard, so a yard-placed stay's bounds
     // are simply the whole play area — no per-zone lookup to lose track of
@@ -1775,7 +1772,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // that's where the owner asked them to end up) — so the litter is laid
     // out around the cage, not around her, until she gets home to them. The
     // flag clears itself the moment a render puts her back in her own cage.
-    if (stay.babiesAtCage && (!homeCage || stay.location === stay.cageSection)) stay.babiesAtCage = false;
+    if (stay.babiesAtCage && (!homeCage || stay.location === LOCATION.CAGE)) stay.babiesAtCage = false;
     const babiesAtCage = !!stay.babiesAtCage;
     const babyBase = babiesAtCage ? cageAnimalSpot(homeCage) : { x, y };
     let cx = babyBase.x + sprite.displayWidth * (sharesHome ? 0.4 : 0.55);
@@ -2103,8 +2100,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Even if they just arrived or if they're currently held"): her door plate
     // is cage furniture now, so this refresh is what re-asserts it right after
     // _destroyStaySprites above tore her sprite record down — and
-    // belongsToSection still counts her as this cage's occupant while she's in
-    // the player's hands, so the plate simply stays.
+    // the occupancy rule still counts her as this cage's occupant while she's
+    // in the player's hands, so the plate simply stays.
     this._refreshCageFurniture();
     // Arrivals with a carry prop (leash/cage/box/basket) ride in that prop,
     // composed with her own sprite the same "contained" way she showed at
@@ -2185,11 +2182,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // Issue #54: `stay` is passed so the cage she already holds isn't
       // counted against her — she's about to release it by taking this one.
       const found = this._findOpenCageNear(this.player.x, this.player.y, stay);
-      if (!found) return null;
-      const opts = fromReception ? { fromReception: true, cageSlot: found.slot } : { cageSlot: found.slot };
+      if (found == null) return null;
       return {
         label: `Put ${name} in this cage`,
-        run: () => { if (this._dropOff(stay, found.section, opts)) this._carryOrigin = null; },
+        run: () => { this._dropOff(stay, found, { fromReception }); this._carryOrigin = null; },
       };
     };
 
@@ -2219,54 +2215,27 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   }
 
 
-  // Returns true if the drop-off happened, false if it was declined (section
-  // full — see below), so _resolveDropoff knows whether to keep carrying her.
+  // Settles the carried stay into cage `cageIndex`, which the caller has
+  // already established is free and within reach (_findOpenCageNear).
   //
-  // Issue #27: `opts.cageSlot`, when given (generalized-mode reception
-  // drop-off — see _findOpenCageNear), assigns her to THAT exact slot
-  // instead of auto-picking the first open one in the section — she was
-  // targeted at a specific empty cage, not "the section" in general.
-  _dropOff(stay, section, opts = {}) {
-    // Issue #18/#20: don't accept the drop if every one of this section's 6
-    // cages is already taken by another stay — that used to fall through to
-    // assignCageSlot returning null and _sectionSlot's generic grid fallback,
-    // which doesn't know the section's actual cage/tank layout and could
-    // place her overlapping another animal or the cage/tank furniture. This
-    // can happen even though arrivals stop once a section is full, because
-    // the player can still manually carry an already-settled animal back
-    // in from the yard (or, rarely, a fresh reception arrival) into a
-    // section that filled up in the meantime. Treat it like walking into
-    // any other non-accepting spot: nothing happens, she stays in the
-    // player's hands, and a light notification explains why.
-    // Issue #54: `stay` is excluded from the occupancy count — she already
-    // holds a cage of her own (assigned at check-in), and she's about to
-    // release it by taking this one.
-    const cageSlot = opts.cageSlot != null ? opts.cageSlot : assignCageSlot(this.roster.stays, section.key, stay);
-    if (cageSlot == null) {
-      const now = this.time.now;
-      if (now - (this._fullSectionNotifyAt || 0) > 1500) {
-        this._fullSectionNotifyAt = now;
-        this.game.events.emit(EVENTS.NOTIFY, `${section.label} is full right now!`);
-      }
-      return false;
-    }
+  // Issue #71 simplified this a great deal. It used to take a SECTION and
+  // either an explicit slot within it or an auto-picked one, and had to
+  // handle "that section's six cages are all taken" as a declined drop — a
+  // whole failure path that existed only because a cage's identity was a
+  // (species, slot) pair. A cage is a single free-or-not index now, checked
+  // before this is ever called, so the drop always succeeds.
+  _dropOff(stay, cageIndex, opts = {}) {
     this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
     this._carryVisual = null;
     this.carrying = null;
-    stay.location = section.key;
+    stay.location = LOCATION.CAGE;
     // A late dropoff during the night (rare — only if the player was still
     // mid-carry when night fell): she gets under her cage's blanket the same
     // automatic way as everyone else (issue #46) — see the _tuckIn below.
-    // Issue #18: assign her into the open individual cage found above
-    // (companions/babies share it, same as today's "near mom" render).
-    stay.cageSlot = cageSlot;
-    // Issue #27: remember which section her cage is actually in, so a later
-    // yard trip (belongsToSection/_startWalkHome/_resolveDropoff's yard
-    // branch) still finds the right "home" section even if it doesn't match
-    // her species — in normal mode this always equals her species anyway.
-    stay.cageSection = section.key;
+    // Her companions/babies share the cage, same "near mom" render as always.
+    stay.cageIndex = cageIndex;
     this._refreshCageArt();
-    const pos = this._sectionSlot(section, stay);
+    const pos = this._cageSpotFor(stay);
     // Issue #21: a fresh arrival (not a yard-return) resolves out of her
     // carry container right here — a quick fade+shrink "let out of the box/
     // carrier" beat — before _renderStay draws her bare-in-cage look (which
@@ -2277,7 +2246,6 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._renderStay(stay, pos.x, pos.y);
     // Issue #46: carried home after nightfall — straight under the blanket.
     if (this.night.active) this._tuckIn(stay);
-    return true;
   }
 
   // The container art fades and shrinks away at the drop-off spot — a small,
@@ -2314,32 +2282,29 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._refreshCageFurniture();
   }
 
-  // Placement spot for a stay settling into `section` — her assigned
-  // individual cage (issue #18), including turtles/snakes as of issue #20
-  // (their "cage" is a small island/perch) and the dragon (issue #32 #5, her
-  // own little castle). Falls back to a plain grid spot near reception if
-  // every cage is somehow taken — every call site above already checks
-  // assignCageSlot/_findOpenCageNear before assigning a stay to a section,
-  // so this should never actually trigger; it's just a safety net against a
-  // crash instead of a misplacement.
-  _sectionSlot(section, stay) {
-    const cage = CAGES[section.key]?.[stay?.cageSlot];
+  // Where a stay settled in her own cage physically stands — including
+  // turtles/snakes, whose "cage" is a small island/perch (issue #20), and the
+  // dragon's little castle (issue #32 #5). Falls back to a plain grid spot
+  // near reception if she somehow holds no cage at all; every call site has
+  // already established she does, so this is a safety net against a crash
+  // rather than a real placement.
+  _cageSpotFor(stay) {
+    const cage = CAGES[stay?.cageIndex];
     if (cage) return cageAnimalSpot(cage);
-    const already = this.roster.stays.filter((s) => s !== stay && s.location === section.key).length;
+    const already = this.roster.stays.filter((s) => s !== stay && s.location === LOCATION.CAGE).length;
     return this._gridSlot(RECEPTION.rug, already, 20, 30, 40);
   }
 
-  // The closest currently-EMPTY cage slot, anywhere in the whole kennel (not
-  // just the carried animal's own species), within pickup range of (px, py)
-  // — or null if nothing open is close enough. Used by _resolveDropoff so
-  // walking up to any specific open cage targets THAT exact cage — any pet
-  // can go in any open cage, no species clustering.
+  // The closest currently-EMPTY cage anywhere in the kennel, within pickup
+  // range of (px, py), as a CAGES index — or null if nothing open is close
+  // enough. Used by _resolveDropoff so walking up to any specific open cage
+  // targets THAT exact cage; any pet can go in any cage, no clustering.
   //
   // Owner note 2026-07-29 ("interact... should accept the placement anywhere
   // within the cage, not just towards the bottom"): the acceptance test
   // covers the WHOLE cage rect (plus a small outward buffer), not just
   // proximity to cageAnimalSpot's bottom-anchored point — that point still
-  // decides where she visually stands once placed (_sectionSlot), it just
+  // decides where she visually stands once placed (_cageSpotFor), it just
   // shouldn't gate whether the placement itself is accepted.
   //
   // Issue #54: `except` is the stay being carried — she holds a cage from
@@ -2347,19 +2312,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // walking her up to it wouldn't accept the drop.
   _findOpenCageNear(px, py, except = null) {
     let best = null, bestD = PICKUP_RADIUS;
-    const cages = CAGES;
-    for (const key of Object.keys(cages)) {
-      cages[key].forEach((cage, slot) => {
-        if (!isCageSlotOpen(this.roster.stays, key, slot, except)) return;
-        const nx = Phaser.Math.Clamp(px, cage.x, cage.x + cage.w);
-        const ny = Phaser.Math.Clamp(py, cage.y, cage.y + cage.h);
-        const d = Phaser.Math.Distance.Between(px, py, nx, ny);
-        if (d < bestD) {
-          bestD = d;
-          best = { section: SECTIONS.find((s) => s.key === key), slot };
-        }
-      });
-    }
+    CAGES.forEach((cage, i) => {
+      if (!isCageOpen(this.roster.stays, i, except)) return;
+      const nx = Phaser.Math.Clamp(px, cage.x, cage.x + cage.w);
+      const ny = Phaser.Math.Clamp(py, cage.y, cage.y + cage.h);
+      const d = Phaser.Math.Distance.Between(px, py, nx, ny);
+      if (d < bestD) { bestD = d; best = i; }
+    });
     return best;
   }
 
@@ -2394,11 +2353,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // full, instead of the background tick immediately draining it again a
   // frame later. The pre-stock ordering is untouched, which is what keeps
   // filling ahead of time worthwhile.
-  _fillBowl(sectionKey, cageSlot, kind) {
-    // belongsToSection, not location: the bowl is part of HER cage, so it's
-    // still fillable while she's off playing in the yard (issue #45 makes
-    // that common) — she'll eat from it when she gets back.
-    const stay = this.roster.stays.find((s) => belongsToSection(s, sectionKey) && s.cageSlot === cageSlot);
+  _fillBowl(cageIndex, kind) {
+    // Whoever the cage BELONGS to, not who's standing in it: the bowl is part
+    // of her cage, so it's still fillable while she's off playing in the yard
+    // (issue #45 makes that common) — she'll eat from it when she gets back.
+    const stay = this._cageOccupant(cageIndex);
     if (!stay || !stay.bowl) return false;
     // Owner note 2026-07-29: "we really only want notifications for animal
     // needs, not for actions we've taken" — filling (whether it worked or the
@@ -2409,7 +2368,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // Issue #49: she's here and she's hungry — she tucks straight in, and
     // the bowl she was just given stays full. (Not while she's out in the
     // yard: she isn't at the bowl to eat from it.)
-    if (stay.location === sectionKey && stay.needs[kind]) {
+    if (stay.location === LOCATION.CAGE && stay.needs[kind]) {
       clearNeed(stay, kind);
       this._setNeedIcon(stay, kind, false);
     }
@@ -2500,8 +2459,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // in a section OR out playing in the yard (issue #20); only reception and
   // mid-carry stays are excluded.
   _settledStays() {
-    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
-    return this.roster.stays.filter((s) => sectionKeys.has(s.location) || s.location === LOCATION.YARD);
+    return this.roster.stays.filter((s) => s.location === LOCATION.CAGE || s.location === LOCATION.YARD);
   }
 
   _updateBirths(delta) {
@@ -2551,7 +2509,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // wherever she happens to be standing. `babiesAtCage` is what tells
       // _renderStay/_updateBabies to keep the new litter at the cage; it
       // clears itself the moment she's back in it.
-      hatchedAway = !!(CAGES[stay.cageSection]?.[stay.cageSlot] && stay.location !== stay.cageSection);
+      hatchedAway = !!(CAGES[stay.cageIndex] && stay.location !== LOCATION.CAGE);
       stay.babiesAtCage = hatchedAway;
       stay.animal.hasEggs = false;
       stay.animal.eggCount = 0;
@@ -2944,8 +2902,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // handle, or a fade back to a fast-forwarded morning if nothing wakes her.
 
   _presentStays() {
-    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
-    return this.roster.stays.filter((s) => sectionKeys.has(s.location));
+    return this.roster.stays.filter((s) => s.location === LOCATION.CAGE);
   }
 
   // Issue #58: the phase is now AUTHORITATIVE in both directions, on a real
@@ -3049,7 +3006,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _refreshBlanket(stay) {
     const rec = this._staySprites.get(stay);
     if (!rec) return;
-    const cage = CAGES[stay.cageSection]?.[stay.cageSlot];
+    const cage = CAGES[stay.cageIndex];
     if (!cage) { // no cage of her own yet (fresh arrival out in the yard)
       rec.blanket?.destroy();
       rec.blanket = null;
@@ -3057,7 +3014,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
     if (!rec.blanket) rec.blanket = this.add.image(0, 0, BLANKET_KEY).setOrigin(0.5, 0.5);
     const img = rec.blanket;
-    if (stay.tuckedIn && stay.location === stay.cageSection) {
+    if (stay.tuckedIn && stay.location === LOCATION.CAGE) {
       // Draped over her, wherever in her cage she actually settled — she
       // stops wandering the instant she's under it (_updateWander's tuckedIn
       // check), so this position stays right all night. One blanket covers
@@ -3324,12 +3281,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._catLitterTimer -= delta;
     if (this._catLitterTimer <= 0) {
       this._catLitterTimer = CAT_LITTER_INTERVAL();
-      const sectionKeys = new Set(SECTIONS.map((s) => s.key));
+      // Only a cat actually IN her cage: a yard-playing cat has no cage
+      // position to put a mess at while she's out.
       // Issue #27: a cat's litter box need is about her SPECIES, not which
       // cage she's actually in — in generalized mode she may be settled
       // somewhere other than the 'cat' section. Yard-playing cats are
       // skipped: she has no cage position to place a mess at while she's out.
-      const cats = this._settledStays().filter((s) => s.animal.species === 'cat' && sectionKeys.has(s.location));
+      const cats = this._settledStays().filter((s) => s.animal.species === 'cat' && s.location === LOCATION.CAGE);
       if (!cats.length) return;
       const cat = cats[Math.floor(Math.random() * cats.length)];
       const alreadyDirty = this.messes.some((m) => m.kind === 'cat' && m.stay === cat);
@@ -3337,7 +3295,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         this.game.events.emit(EVENTS.NOTIFY, `${cat.animal.name}'s litter box needs cleaning!`);
         return;
       }
-      const spot = LITTER_SPOTS[cat.location]?.[cat.cageSlot];
+      const spot = LITTER_SPOTS[cat.cageIndex];
       if (spot) this._spawnMess('cat', spot, cat);
     }
   }
@@ -3390,6 +3348,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // are resolved independently and can never out-compete each other.
   _resolver() {
     const px = this.player.x, py = this.player.y;
+    const reach = (x, y) => this._cageReach(x, y);
     let best = null, bestD = PICKUP_RADIUS;
     return {
       // `label` is the kid-facing sentence for the prompt ("Fill Biscuit's
@@ -3397,23 +3356,48 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // carry a secondary `hold` action and the `hint` line describing it
       // (issue #59's hold-to-pick-up).
       consider(x, y, label, action, extra) {
-        const d = Phaser.Math.Distance.Between(px, py, x, y);
+        const at = reach(x, y);
+        const d = Phaser.Math.Distance.Between(px, py, at.x, at.y);
         if (d < bestD) { bestD = d; best = { label, run: action, ...extra }; }
       },
       get best() { return best; },
     };
   }
 
-  // True if (x, y) is close enough to interact with — same radius the resolver
-  // uses, for the couple of places that need the test without a competition.
-  _inRange(x, y) {
-    return Phaser.Math.Distance.Between(this.player.x, this.player.y, x, y) < PICKUP_RADIUS;
+  // Issue #71 made cages solid, and that quietly broke reaching INTO one. The
+  // player used to be able to stand on top of a cage, so measuring to a thing's
+  // exact position was fine; now she stands in the aisle, up to a whole cage
+  // height away from an animal who's wandered to the back of hers, from a
+  // clutch of eggs, or from a dirty litter box — all comfortably outside
+  // PICKUP_RADIUS. Anything inside a cage is therefore measured to the nearest
+  // point of that CAGE, not to itself: walk up to the cage and you can reach
+  // everything in it, which is the same rule the owner already asked for when
+  // placing a pet ("interact should accept the placement anywhere within the
+  // cage, not just towards the bottom", 2026-07-29). A no-op for anything not
+  // in a cage, so it's applied to every target rather than a chosen few.
+  _cageReach(x, y) {
+    const cage = CAGES.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
+    if (!cage) return { x, y };
+    return {
+      x: Phaser.Math.Clamp(this.player.x, cage.x, cage.x + cage.w),
+      y: Phaser.Math.Clamp(this.player.y, cage.y, cage.y + cage.h),
+    };
   }
 
-  // Whoever's cage this (sectionKey, slot) is — used only for labelling, so a
-  // prompt can say "Fill Biscuit's food bowl" instead of "Fill the food bowl".
-  _cageOccupant(sectionKey, cageSlot) {
-    return this.roster.stays.find((s) => belongsToSection(s, sectionKey) && s.cageSlot === cageSlot) || null;
+  // True if (x, y) is close enough to interact with — same radius and same
+  // reach-into-a-cage rule the resolver uses, for the couple of places that
+  // need the test without a competition.
+  _inRange(x, y) {
+    const at = this._cageReach(x, y);
+    return Phaser.Math.Distance.Between(this.player.x, this.player.y, at.x, at.y) < PICKUP_RADIUS;
+  }
+
+  // Whose cage this is — the single occupancy rule every piece of cage
+  // furniture and every cage-targeted interaction shares. Deliberately counts
+  // her while she's out in the yard, mid-walk, or in the player's hands: the
+  // cage is hers for the whole stay, not just while she's standing in it.
+  _cageOccupant(cageIndex) {
+    return this.roster.stays.find((s) => s.cageIndex === cageIndex) || null;
   }
 
   // HANDLE — the one "hands on an animal" button (issue #58 merged #51's
@@ -3440,9 +3424,8 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // also how a dog who needs the bathroom gets outside (issue #38 — she does
   // her business out there on her own; no separate leash minigame).
   _considerCages(r) {
-    const sectionKeys = new Set(SECTIONS.map((s) => s.key));
     for (const stay of this.roster.stays) {
-      if (!sectionKeys.has(stay.location)) continue;
+      if (stay.location !== LOCATION.CAGE) continue;
       if (this._isWalking(stay)) continue;
       // Cage-opening is skipped at night — everyone should be home asleep —
       // EXCEPT for a dog who currently needs the bathroom, the same exemption
@@ -3507,8 +3490,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // always the first clause; _startWalkHome's claim-any-free-cage fallback
       // (and so this second, pricier check) only matters for a pre-#54 save,
       // and short-circuits away in the normal case.
-      const hasHome = !!(stay.cageSlot != null && CAGES[stay.cageSection]?.[stay.cageSlot])
-        || !!this._findAnyOpenCage(stay);
+      const hasHome = !!CAGES[stay.cageIndex] || this._findAnyOpenCage(stay) != null;
       if (hasHome) {
         r.consider(rec.sprite.x, rec.sprite.y, `Send ${stay.animal.name} back to her cage`, () => this._startWalkHome(stay), {
           hint: 'hold to pick her up instead',
@@ -3566,18 +3548,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // is exactly the "I pressed the button and nothing happened" the prompt
     // exists to eliminate. Skipping them also frees the press for whatever
     // else is nearby instead of swallowing it.
-    for (const key of Object.keys(BOWL_SPOTS)) {
-      BOWL_SPOTS[key].forEach((spot, slot) => {
-        const who = this._cageOccupant(key, slot);
-        if (!who?.bowl || who.bowl.food) return;
-        consider(spot.x, spot.y, `Fill ${who.animal.name}'s food bowl`, () => this._fillBowl(key, slot, 'food'));
-      });
-      WATER_BOWL_SPOTS[key].forEach((spot, slot) => {
-        const who = this._cageOccupant(key, slot);
-        if (!who?.bowl || who.bowl.water) return;
-        consider(spot.x, spot.y, `Fill ${who.animal.name}'s water bowl`, () => this._fillBowl(key, slot, 'water'));
-      });
-    }
+    BOWL_SPOTS.forEach((spot, i) => {
+      const who = this._cageOccupant(i);
+      if (!who?.bowl || who.bowl.food) return;
+      consider(spot.x, spot.y, `Fill ${who.animal.name}'s food bowl`, () => this._fillBowl(i, 'food'));
+    });
+    WATER_BOWL_SPOTS.forEach((spot, i) => {
+      const who = this._cageOccupant(i);
+      if (!who?.bowl || who.bowl.water) return;
+      consider(spot.x, spot.y, `Fill ${who.animal.name}'s water bowl`, () => this._fillBowl(i, 'water'));
+    });
 
     // Issue #32 follow-up, one pair as of issue #47: the outside yard's
     // shared food/water bowls — filling works the same way as a cage bowl
@@ -3968,9 +3948,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // A fresh tap/click redirects (or starts) the walk, even mid-path.
       const target = this.controls.consumeTapTarget();
       if (target) {
+        // planMargin trimmed from 6 to 4 by issue #71: the planner refuses a
+        // corridor narrower than 2*(clearance + planMargin) plus its own 20px
+        // sampling step, and the cage aisles are sized against exactly this
+        // number (see data/props.js). At 6 the player would have planned the
+        // aisles as solid and walked all the way around the block, which is
+        // the decorative-aisle outcome #71 exists to avoid. Her actual body is
+        // 14x12, so 4 is still generous padding.
         this.navPath = findPath(this.player.x, this.player.y, target.x, target.y, {
           minX: 0, minY: 0, maxX: WORLD.w, maxY: WORLD.h,
-          collides: this._collides, cell: 20, clearance: 10, planMargin: 6,
+          collides: this._collides, cell: 20, clearance: 10, planMargin: 4,
         });
       }
 

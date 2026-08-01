@@ -3,87 +3,103 @@
 // rects that both KennelScene's rendering and its interaction/collision code
 // can share, so the numbers only live in one place.
 import {
-  RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE, SECTIONS, WALL,
+  RECEPTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE, WALL,
   BACK_DOOR,
 } from './sections.js';
 
-// ── The cage grid (issue #18, reworked into one single grid by issue #32) ──
-// Every species gets a fixed CAGES_PER_SECTION (6) individual cages — "a
-// cage to sleep" for every animal, auto-assigned on drop-off, one per stay
-// (her babies/eggs share it, same as today's "near mom" rendering).
+// ── The cage grid (issue #18, one single grid since issue #32, rebuilt with
+// real aisles and a flat pool by issue #71) ────────────────────────────────
 //
-// Issue #32 ("get rid of the south room and the main room floor tile areas...
-// move the modular cages to a clean consistent set of rows and columns just
-// north of the check-in desk"): the old 8 separate walled per-species rooms,
-// and later the separate south "Cage Hall" room, are both gone — there's
-// only ONE cage grid now, laid out directly in the main room, and any pet
-// can go in any open cage regardless of species (no clustering). Same
-// (sectionKey, slot) identity/bookkeeping data/roster.js already used for
-// both of those — a stay's `location`/`cageSlot` still just means "species
-// key s's Nth nominal cage" — only the physical (x, y) position changes.
+// Owner (2026-07-31): "As part of NPC pathfinding, I'm realizing I think I DO
+// want collision and pathfinding for all characters including player and
+// animals. I'm thinking a horizontal aisle between every row of cages, and one
+// vertical aisle between the left 4 and right 4 cages, removing the middle 1
+// column of cages." Asked how to cover the 6 cages/species the old model
+// reserved once a column is gone: "We don't need a per-species cap, just
+// random whatever, and yes fewer total guests."
 //
-// SECTIONS.length species x CAGES_PER_SECTION(6) = one cage per (species,
-// slot) pair, laid out as a flat grid of exactly that many cells, each cell a
-// clean uniform 100x100 (owner: "the kennels themselves need to be smaller...
-// like 100x100"), with a consistent gap between cells, centered in the room's
-// open floor north of the reception desk, spanning roughly the same overall
-// area the old per-species sections used to occupy.
+// So two things changed together, and neither works without the other:
 //
-// Issue #28 (adding lizards as a 9th species): these used to be the hardcoded
-// literals 8 and 6, which exactly covered the then-8 species' 48 cages — a 9th
-// species' extra 6 cages would have silently overflowed past the last row the
-// arithmetic allocated. They're derived from the real species list now — one
-// column per SPECIES, one row per CAGE SLOT — so COLS*ROWS always equals
-// SECTIONS.length * CAGES_PER_SECTION exactly, for any species count, and
-// nobody's cages can fall off the end. (The flat index below still fills the
-// grid row-major, so a given species' six cages are NOT a single column and
-// aren't clustered — issue #32 made any pet placeable in any open cage, so
-// where a slot physically sits carries no species meaning.)
+//  1. LAYOUT. Cages are real obstacles now (KennelScene._buildCollision puts
+//     them in the one obstacleRects list that drives BOTH physics and
+//     findPath), so the gaps between them stopped being cosmetic and had to
+//     become corridors people actually fit down. 8 columns in two blocks of 4
+//     with an aisle between them, and an aisle between every row.
 //
-// Room fit, 9 species (checked explicitly rather than eyeballed):
-//   interior width  = ROOM.w - 2*WALL = 1440 - 48 = 1392
-//   grid width      = 9*100 + 8*12 = 996  ->  198px clear on each side
-//   grid height     = 6*100 + 5*12 = 660  (unchanged by the extra column)
-//   grid top        = ROOM.y + 48 = 428   (24px below the north wall's inner
-//                                          face at ROOM.y + WALL = 404)
-//   grid bottom     = 428 + 660 = 1088    (42px above the reception desk's top
-//                                          edge at ROOM.y + 750 = 1130; the rug
-//                                          starts at 1210, the mat at 1316)
-// So the 9x6 grid clears the north wall, both side walls and the whole
-// reception cluster. Headroom for later species: a 13th column would need
-// 1444 > 1392 and would have to shrink CAGE_GAP or CAGE_W instead.
-const CAGE_COLS = SECTIONS.length;
-const CAGE_ROWS = CAGES_PER_SECTION;
+//  2. IDENTITY. A cage is just a number now — index 0..CAGE_COUNT-1 into this
+//     flat array. The old shape was `CAGES[speciesKey][slot]`, six slots
+//     nominally reserved per species, which had already stopped meaning
+//     anything when issue #32 made every cage open to every species: a stay's
+//     (cageSection, slot) pair described no species and no position, just a
+//     bookkeeping coordinate that had to be inverted (see the old
+//     CAGE_ASSIGN_ORDER) to find out where the cage physically was. Dropping
+//     it costs six cage cells (54 -> 48) and buys back the whole indirection.
+//     Cage ART was already chosen from whoever is actually settled there
+//     rather than from the slot's nominal species (issue #32), so nothing
+//     visual depended on the old identity.
+//
+// AISLE WIDTH is a real constraint, not a look: findPath plans on a 20px grid
+// and marks a cell blocked if anything is within `clearance + planMargin` of
+// it (13 for a walking animal or owner, 14 for the player's tap-to-move). A
+// corridor is only usable if at least one 20px-spaced sample lands in its
+// free middle band, so the band has to be wider than the sampling step:
+//   aisle 52  ->  free band 52 - 2*14 = 24 > 20  ✓ (player, the tighter case)
+//                 free band 52 - 2*13 = 26 > 20  ✓ (animals and owner NPCs)
+// A narrower aisle would plan as solid and everyone would route around the
+// whole block — a decorative aisle, which is exactly what issue #71 replaced.
+// (Checked against the widest walker rather than eyeballed, as the issue asks:
+// the binding number is the PLANNER's radius, which is larger than any sprite
+// body — the player's is 14x12 — so anything that plans through fits through.)
+//
+// Room fit, checked explicitly rather than eyeballed:
+//   interior     = ROOM.w - 2*WALL = 1392 wide, ROOM.y+WALL .. ROOM.y+ROOM.h-WALL
+//   grid width   = 8*100 + 6*12 (within-block gaps) + 52 (aisle) = 924
+//                  -> 234px clear on each side
+//   grid height  = 6*100 + 5*52 = 860,  top 428  ->  bottom 1288
+//   below it     = 60px clear before the reception desk at ROOM.y+968 = 1348
+// The room grew (ROOM.h 1000 -> 1220, see data/sections.js) to make that fit
+// without shrinking the 100x100 cages the owner asked for in issue #32.
+export const CAGE_COLS = 8;
+export const CAGE_ROWS = 6;
 export const CAGE_W = 100;
 export const CAGE_H = 100;
-const CAGE_GAP = 12;
-const CAGE_GRID_W = CAGE_COLS * CAGE_W + (CAGE_COLS - 1) * CAGE_GAP;
-const CAGE_GRID_H = CAGE_ROWS * CAGE_H + (CAGE_ROWS - 1) * CAGE_GAP;
+// Real walkable corridors: one between every row, one down the middle between
+// the left and right blocks of four. See the width reasoning above.
+export const CAGE_AISLE = 52;
+// Cages inside a block of four still sit shoulder to shoulder — this gap is
+// cosmetic, deliberately too narrow to walk down, which is what makes the
+// aisles read as the way through.
+const CAGE_BLOCK_GAP = 12;
+const CAGE_BLOCK_COLS = 4;
+const CAGE_BLOCK_W = CAGE_BLOCK_COLS * CAGE_W + (CAGE_BLOCK_COLS - 1) * CAGE_BLOCK_GAP;
+const CAGE_GRID_W = CAGE_BLOCK_W * 2 + CAGE_AISLE;
+const CAGE_GRID_H = CAGE_ROWS * CAGE_H + (CAGE_ROWS - 1) * CAGE_AISLE;
 // Centered horizontally in the room's interior; vertically just below the
-// north wall, ending well clear of the reception desk/rug below it. The
-// max() is a floor, not a layout choice: at today's 9 columns the centered
-// origin (222) is far clear of the west wall's inner face (WALL = 24), but if
-// a future species count ever pushed the grid wider than the interior, this
-// keeps its left edge out of the wall instead of drawing cages inside it.
+// north wall. The max() is a floor, not a layout choice: it keeps the grid's
+// left edge out of the west wall if a future change ever made it wider than
+// the interior, instead of drawing cages inside the wall.
 const CAGE_ORIGIN_X = Math.max(WALL + 4, ROOM.w / 2 - CAGE_GRID_W / 2);
 const CAGE_ORIGIN_Y = ROOM.y + 48;
 
-export const CAGES = Object.fromEntries(
-  SECTIONS.map((s, si) => [
-    s.key,
-    Array.from({ length: CAGES_PER_SECTION }, (_, slot) => {
-      const idx = si * CAGES_PER_SECTION + slot;
-      const col = idx % CAGE_COLS;
-      const row = Math.floor(idx / CAGE_COLS);
-      return {
-        x: CAGE_ORIGIN_X + col * (CAGE_W + CAGE_GAP),
-        y: CAGE_ORIGIN_Y + row * (CAGE_H + CAGE_GAP),
-        w: CAGE_W,
-        h: CAGE_H,
-      };
-    }),
-  ]),
-);
+// Every cage in the kennel, as a flat row-major list (index 0 is the top-left
+// cage). A stay's `cageIndex` is an index into exactly this.
+export const CAGES = Array.from({ length: CAGE_COLS * CAGE_ROWS }, (_, i) => {
+  const col = i % CAGE_COLS;
+  const row = Math.floor(i / CAGE_COLS);
+  const block = col < CAGE_BLOCK_COLS ? 0 : 1;
+  const inBlock = col - block * CAGE_BLOCK_COLS;
+  return {
+    x: CAGE_ORIGIN_X + block * (CAGE_BLOCK_W + CAGE_AISLE) + inBlock * (CAGE_W + CAGE_BLOCK_GAP),
+    y: CAGE_ORIGIN_Y + row * (CAGE_H + CAGE_AISLE),
+    w: CAGE_W,
+    h: CAGE_H,
+  };
+});
+
+// How many guests the kennel can hold at once — arrivals stop when every cage
+// is spoken for (data/roster.js's anyOpenCageAnywhere). 48 since issue #71,
+// down from 54, which is the "yes fewer total guests" the owner accepted.
+export const CAGE_COUNT = CAGES.length;
 
 // Where an animal sprite stands inside a cage rect (origin 0.5, 1 — feet on
 // the ground, matching every other placed sprite).
@@ -116,32 +132,18 @@ export function cagePlateSpot(cage) {
 }
 
 // Issue #54 (owner: "assignment order should be bottom row first, left to
-// right"): the order cages get handed out in, as a flat list of
-// `{ sectionKey, slot }` identities — the BOTTOM row of the grid (the one
-// nearest the reception desk, i.e. visually lowest / highest y) first, filled
-// left to right, then the row above it, and so on upward.
+// right"): the order cages get handed out in, as a list of CAGES indices —
+// the BOTTOM row of the grid (nearest the reception desk) first, filled left
+// to right, then the row above it, and so on upward.
 //
-// This has to live here, next to the layout it inverts. A cage's bookkeeping
-// identity is still the `(sectionKey, slot)` pair data/roster.js and
-// KennelScene use everywhere else, but that pair says NOTHING about where the
-// cage physically sits: CAGES above flattens (speciesIndex, slot) to
-// `idx = speciesIndex * CAGES_PER_SECTION + slot` and then lays idx out
-// row-major, so a single species' six cages are scattered across the grid and
-// iterating sections-then-slots visits physical positions in a jumbled order.
-// Inverting that flattening (`si = floor(idx / CAGES_PER_SECTION)`,
-// `slot = idx % CAGES_PER_SECTION`) is exact for any species count, since
-// CAGE_COLS * CAGE_ROWS === SECTIONS.length * CAGES_PER_SECTION by
-// construction — nothing here assumes today's 9x6.
+// Issue #71 made this trivial. It used to have to invert the old
+// (speciesIndex, slot) flattening to recover a physical position, because the
+// bookkeeping identity said nothing about where a cage actually sat; now the
+// identity IS the physical position, so this is just the row order reversed.
 export const CAGE_ASSIGN_ORDER = (() => {
   const order = [];
   for (let row = CAGE_ROWS - 1; row >= 0; row--) {
-    for (let col = 0; col < CAGE_COLS; col++) {
-      const idx = row * CAGE_COLS + col;
-      order.push({
-        sectionKey: SECTIONS[Math.floor(idx / CAGES_PER_SECTION)].key,
-        slot: idx % CAGES_PER_SECTION,
-      });
-    }
+    for (let col = 0; col < CAGE_COLS; col++) order.push(row * CAGE_COLS + col);
   }
   return order;
 })();
@@ -149,19 +151,15 @@ export const CAGE_ASSIGN_ORDER = (() => {
 // Small per-cage litter box (owner note 2026-07-29: "each cat cage should
 // have a small litter box, not a corner everyone litter box") — same
 // occupancy-driven create/destroy/reskin pattern as bowlSpotForCage/
-// BOWL_SPOTS below, just gated on species === 'cat' (KennelScene
-// ._refreshLitterBoxes) rather than the whole bowl-eligible list, and one
-// spot per cage instead of two (no separate water variant). Computed for
-// every species key (not just 'cat') because a cat can end up settled in
-// ANY cage slot — mirrors exactly how BOWL_SPOTS covers every key regardless
-// of who's actually placed there.
+// BOWL_SPOTS below, just gated on the occupant actually being a cat
+// (KennelScene._refreshLitterBoxes). One per cage, since a cat can settle in
+// ANY of them — as of issue #71 that's simply "all of them", with no
+// per-species key list to keep in step.
 export const LITTER_BOX_SIZE = { w: 40, h: 24 };
 function litterBoxSpotForCage(cage) {
   return { x: cage.x + cage.w * 0.26, y: cage.y + cage.h * 0.46 };
 }
-export const LITTER_SPOTS = Object.fromEntries(
-  Object.keys(CAGES).map((key) => [key, CAGES[key].map(litterBoxSpotForCage)]),
-);
+export const LITTER_SPOTS = CAGES.map(litterBoxSpotForCage);
 
 // One food/water bowl SPRITE spot per individual cage slot (issue #22 #6,
 // refined by owner note 2026-07-29: "the interact point should be the cage,
@@ -174,7 +172,7 @@ export const LITTER_SPOTS = Object.fromEntries(
 //
 // Issue #32 #4: turtles now get the exact same per-cage bowl as everyone
 // else (the old shared-tank/lettuce-drop mechanic is gone — see
-// BOWL_ELIGIBLE_KEYS below).
+// every other cage does).
 //
 // Issue #32 #6: recentered from a corner to bottom-center (owner note
 // 2026-07-29: "food water bowls should be more centered on each cage") —
@@ -184,28 +182,25 @@ export const LITTER_SPOTS = Object.fromEntries(
 function bowlSpotForCage(cage) {
   return { x: cage.x + cage.w / 2 - 12, y: cage.y + cage.h - 8 };
 }
-// Every cage-slot key gets bowl bookkeeping — a stay's slot key is only her
-// NOMINAL cage, not her species (issue #32: any pet, any open cage), so a key
-// missing from this list means whoever lands there gets no bowl sprite at all
-// (the coverage bug written up in KennelScene._refreshBowls). Issue #28's
-// lizard is here for exactly that reason as much as for lizards themselves.
-const BOWL_ELIGIBLE_KEYS = ['turtle', 'guineaPig', 'hamster', 'bunny', 'snake', 'cat', 'dog', 'bird', 'lizard'];
-export const BOWL_SPOTS = Object.fromEntries(
-  BOWL_ELIGIBLE_KEYS.map((key) => [key, CAGES[key].map(bowlSpotForCage)]),
-);
+// Every cage gets bowl bookkeeping, full stop. This used to be a hand-kept
+// list of species keys, and a key missing from it meant whoever landed in that
+// nominal slot got no bowl sprite at all regardless of her real species — the
+// coverage bug written up in KennelScene._refreshBowls, which cost two rounds
+// of "why are only some animals' bowls showing?". Issue #71 removed the
+// per-species slot identity entirely, so there is no list left to forget to
+// update: one bowl spot per physical cage.
+export const BOWL_SPOTS = CAGES.map(bowlSpotForCage);
 
 // Water bowl SPRITE spot (owner note 2026-07-29: "same with water bowls" —
 // filling/drinking should work identically to food, as its own separate
 // interactable). Issue #32 #6: sits just right of bottom-center, right next
 // to the (also recentered) food bowl at cage.w/2 - 12 — same y, mirrored
 // x-offset, so the two sit side by side near the cage's bottom-center
-// without overlapping. Same species list as BOWL_SPOTS.
+// without overlapping.
 function waterBowlSpotForCage(cage) {
   return { x: cage.x + cage.w / 2 + 12, y: cage.y + cage.h - 8 };
 }
-export const WATER_BOWL_SPOTS = Object.fromEntries(
-  BOWL_ELIGIBLE_KEYS.map((key) => [key, CAGES[key].map(waterBowlSpotForCage)]),
-);
+export const WATER_BOWL_SPOTS = CAGES.map(waterBowlSpotForCage);
 
 // ── Outside yard (issue #20, yard bowls added by issue #32's follow-up) ────
 // The outside grass strip (data/sections.js's OUTSIDE/WORLD) is the real play
