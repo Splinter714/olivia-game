@@ -427,7 +427,7 @@ export function createRoster(saved = null) {
   // reception exactly like any other guest, and KennelScene's issue #27
   // "any open cage anywhere" placement path (normally generalized-mode-only)
   // also applies to her specifically regardless of mode, since she has no
-  // species-matching section to walk into — see KennelScene._checkDropoff.
+  // species-matching section to walk into — see KennelScene._resolveDropoff.
   // Issue #54: she's assigned her `cageSection`/`cageSlot` at check-in
   // exactly like any other stay, so belongsToSection/findOpenCage above need
   // no special case for her.

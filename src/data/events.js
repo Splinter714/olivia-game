@@ -19,4 +19,13 @@ export const EVENTS = {
   // { total }. HudScene's coin readout listens for this the same way it
   // listens for HOUR_CHANGE.
   MONEY_CHANGE: 'money-change',
+
+  // Issue #58: what each action button would do RIGHT NOW. Payload: an array
+  // (possibly empty) of { action, button, label, hint, disabled } in a stable
+  // act → handle order, emitted by KennelScene only when the set actually
+  // changes, and rendered by HudScene under the clock. An action missing from
+  // the array means "that button has nothing in range" — the difference
+  // between "nothing here" and "you pressed the wrong button" is the whole
+  // point, so never pad the list with placeholder entries.
+  PROMPTS: 'prompts',
 };
