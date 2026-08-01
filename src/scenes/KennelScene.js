@@ -3168,12 +3168,27 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       }
       rec.wander.t -= delta;
       if (rec.wander.t <= 0) {
-        // Around her own placement anchor, NOT the middle of the bounds —
-        // see _renderStay: in one big undivided yard (issue #47) a shared
-        // center would slowly gather every animal out there into one pile.
-        const a = rec.wanderAnchor;
-        rec.wander.tx = Phaser.Math.Clamp(a.x + (Math.random() * 2 - 1) * amp, b.x + 4, b.x + b.w - 4);
-        rec.wander.ty = Phaser.Math.Clamp(a.y + (Math.random() * 2 - 1) * amp, b.y + 4, b.y + b.h - 4);
+        if (inYard) {
+          // Owner note 2026-07-30: "Animals aren't wandering in the full play
+          // area, they should." Out in the yard she roams the WHOLE space —
+          // a fresh target anywhere in it, not a small box around wherever
+          // she happened to be set down. (Her old anchored behavior kept her
+          // within roughly amp*2 px of her drop-off spot: ~48px for a cat, in
+          // a yard hundreds of px across.)
+          //
+          // Picking uniformly across the bounds is also what avoids the pile-
+          // up the anchored version was guarding against: a shared CENTER
+          // anchor with a big amplitude would gather everyone into the middle,
+          // but a uniform random point has no center bias at all.
+          rec.wander.tx = b.x + 4 + Math.random() * Math.max(1, b.w - 8);
+          rec.wander.ty = b.y + 4 + Math.random() * Math.max(1, b.h - 8);
+        } else {
+          // In her cage: unchanged — a small drift around her own placement
+          // anchor, NOT the middle of the bounds (see _renderStay).
+          const a = rec.wanderAnchor;
+          rec.wander.tx = Phaser.Math.Clamp(a.x + (Math.random() * 2 - 1) * amp, b.x + 4, b.x + b.w - 4);
+          rec.wander.ty = Phaser.Math.Clamp(a.y + (Math.random() * 2 - 1) * amp, b.y + 4, b.y + b.h - 4);
+        }
         rec.wander.t = pickWanderInterval(stay.animal.species);
       }
       rec.sprite.x += (rec.wander.tx - rec.sprite.x) * 0.03;
