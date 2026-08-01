@@ -381,13 +381,30 @@ function drawWaterBowl(g, w, h, filled = true) {
   g.fillStyle(0xbfe6f2, 0.7).fillEllipse(w * 0.42, h * 0.44, w * 0.2, h * 0.1); // water sheen
 }
 
-// Small brown "mess" blob — used for litter-box messes (the sandy background
-// already tells it apart from anything else).
-function drawMess(g, w, h) {
+// The classic soft-serve poop swirl — three stacked, tapering brown ellipses
+// with a little curl on top and a highlight down the left for a 3-D read.
+// Shared by the "needs to poop" bubble (NEED_KEY.bathroom, issue #50) and,
+// per owner note 2026-07-30 ("The poop on the ground and in the cat box
+// should be the same icon as the needs to poop icon. The needs to poop icon
+// is the better looking one."), the actual ground/litter-box mess sprite
+// below — one shape, drawn once, instead of two different blobs.
+function drawPoopSwirl(g, w, h) {
   g.fillStyle(0x6b4a2c, 1);
-  g.fillEllipse(w * 0.5, h * 0.6, w * 0.7, h * 0.5);
-  g.fillEllipse(w * 0.32, h * 0.42, w * 0.4, h * 0.32);
-  g.fillEllipse(w * 0.65, h * 0.38, w * 0.36, h * 0.3);
+  g.fillEllipse(w * 0.5, h * 0.68, w * 0.62, h * 0.2);  // wide base
+  g.fillEllipse(w * 0.5, h * 0.53, w * 0.46, h * 0.18); // middle
+  g.fillEllipse(w * 0.5, h * 0.4, w * 0.3, h * 0.15);   // top
+  g.fillStyle(0x8a5f38, 1);
+  g.fillEllipse(w * 0.5, h * 0.31, w * 0.13, h * 0.1);  // little curl tip
+  g.fillStyle(0x8f6540, 0.85);
+  g.fillEllipse(w * 0.36, h * 0.66, w * 0.16, h * 0.09);
+  g.fillEllipse(w * 0.4, h * 0.51, w * 0.12, h * 0.08);
+}
+
+// The ground/litter-box mess sprite — same swirl as the "needs to poop"
+// bubble, just without its white speech-bubble backing (this one sits
+// directly on the floor/sand, not floating as an indicator).
+function drawMess(g, w, h) {
+  drawPoopSwirl(g, w, h);
 }
 
 // A tiny floating "needs attention" bubble — a bowl icon, a paw print, a
@@ -401,20 +418,10 @@ function drawNeedBubble(g, w, h, icon) {
     g.fillStyle(0xe8c68f, 1).fillEllipse(w / 2, h * 0.48, w * 0.36, h * 0.22);
   } else if (icon === 'bathroom') {
     // Issue #50 (owner: "the 'dog needs to poop' icon should be a poop icon
-    // instead of whatever it is now") — this used to be a blue three-circle
-    // cluster that read as water droplets, right next to the actual water
-    // need bubble. Now the classic soft-serve swirl: three stacked, tapering
-    // brown ellipses with a little curl on top, flat and kid-legible.
-    g.fillStyle(0x6b4a2c, 1);
-    g.fillEllipse(w * 0.5, h * 0.68, w * 0.62, h * 0.2);  // wide base
-    g.fillEllipse(w * 0.5, h * 0.53, w * 0.46, h * 0.18); // middle
-    g.fillEllipse(w * 0.5, h * 0.4, w * 0.3, h * 0.15);   // top
-    g.fillStyle(0x8a5f38, 1);
-    g.fillEllipse(w * 0.5, h * 0.31, w * 0.13, h * 0.1);  // little curl tip
-    // Soft highlight down the left of the swirl so the stack reads as 3-D.
-    g.fillStyle(0x8f6540, 0.85);
-    g.fillEllipse(w * 0.36, h * 0.66, w * 0.16, h * 0.09);
-    g.fillEllipse(w * 0.4, h * 0.51, w * 0.12, h * 0.08);
+    // instead of whatever it is now") — the classic soft-serve swirl, shared
+    // with the actual ground/litter-box mess sprite (drawMess) since issue
+    // #68 made them the same icon; see drawPoopSwirl above.
+    drawPoopSwirl(g, w, h);
   } else if (icon === 'mail') {
     // A tiny envelope — the reception computer's "needs attention" icon
     // (issue #10: an un-announced birth waiting to be sent to the owner).
