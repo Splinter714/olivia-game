@@ -30,6 +30,8 @@ import { Controls } from '../input/Controls.js';
 import { buildKennelTextures, buildFloorTile } from '../art/kennel.js';
 import { buildPlayerTexture, PLAYER_W, PLAYER_H } from '../art/player.js';
 import { buildOwnerTexture, OWNER_W } from '../art/owner.js';
+import { buildHelperTexture } from '../art/helper.js';
+import { HELPER_NAMES } from '../data/helpers.js';
 import {
   buildAnimalTextures, ensureAnimalTextures, ANIMAL_DISPLAY_SCALE, EGG_KEY,
 } from '../art/animals.js';
@@ -134,6 +136,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     buildFloorTile(this, 'floor-house', 0xf5ecd8, 0xe8dfc8);
     buildPlayerTexture(this);
     buildOwnerTexture(this);
+    HELPER_NAMES.forEach((_, i) => buildHelperTexture(this, `helper-${i}`, i));
     buildAnimalTextures(this);
     buildCarryTextures(this);
     buildPropTextures(this);
@@ -151,6 +154,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // the obstacle list _setYardDoor rewrites.
     this._setYardDoor(this._save?.yardDoorOpen !== false);
     this._buildPlayer();
+    this._buildHelpers();
 
     this.cameras.main.setBounds(0, 0, WORLD.w, WORLD.h);
     this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
@@ -1063,6 +1067,38 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.physics.add.collider(this.player, this.walls);
   }
 
+  // ── NPC helpers (issue #52) ──────────────────────────────────────────────
+  // Owner: "NPC helper that help with chores (make 3 of them, and they can
+  // then be controlled by local multiplayer once we implement that)." Built
+  // structurally like the player (physics sprite, same body size/collision)
+  // so issue #53 has as little to retrofit as possible when a real player
+  // takes control of one — but nothing beyond that here; no control-takeover
+  // logic lives in this file yet.
+  //
+  // They're present from create() (not earned), roam under their own steam,
+  // and handle bowls + messes ONLY — see _resolveHelperTarget/_forEachChore.
+  // They never touch births, photos, the computer, carrying, or opening a
+  // cage: those are all decisions the player makes, not upkeep, and a helper
+  // doing them unprompted would fight the player (owner's own reasoning for
+  // excluding cage-opening applies to the same degree to the rest of that
+  // list).
+  _buildHelpers() {
+    const startX = RECEPTION.desk.x + 40;
+    const startY = RECEPTION.desk.y + RECEPTION.desk.h + 40;
+    this._claimedChores = new Set(); // chore keys currently walked-toward by a helper — see _resolveHelperTarget
+    this.helpers = HELPER_NAMES.map((name, i) => {
+      const key = `helper-${i}`;
+      // Fanned out a little around the player's own start spot so the three
+      // of them don't spawn stacked directly on top of her.
+      const sprite = this.physics.add.sprite(startX + 26 + i * 22, startY + 10 - i * 8, key).setOrigin(0.5, 1);
+      sprite.body.setSize(14, 12).setOffset((PLAYER_W - 14) / 2, PLAYER_H - 14);
+      sprite.setCollideWorldBounds(true);
+      sprite.setDepth(sprite.y);
+      this.physics.add.collider(sprite, this.walls);
+      return { name, sprite, walking: false, roamTimer: 0 };
+    });
+  }
+
   // ── Roster rendering (issues #4 arrivals, #5 carrying) ──────────────────────
   //
   // A "stay" (data/roster.js) is the source of truth for where an animal is;
@@ -1310,6 +1346,103 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       if (!walk.path.length) {
         this._walkers = this._walkers.filter((w) => w !== walk);
         walk.onArrive?.();
+      }
+    }
+  }
+
+  // ── Helper chore-picking + roaming (issue #52) ───────────────────────────
+  // Helpers only ever do routine upkeep — bowls and messes. Reuses
+  // _forEachChore's exact candidate list (so there's one definition of "what
+  // counts as a chore", shared with the player's ACT button) but picks
+  // nearest to the HELPER's own position rather than the player's, and skips
+  // anything another helper has already claimed (see _updateHelpers) so two
+  // helpers don't both set off for the same empty bowl. A target that
+  // becomes stale before she arrives (the player beat her to it) is handled
+  // by _forEachChore's own run() guards, not here — worst case she walks up
+  // to an already-clean spot and simply looks for something else next.
+  _resolveHelperTarget(hx, hy) {
+    let best = null, bestD = Infinity;
+    this._forEachChore((key, x, y, label, run) => {
+      if (this._claimedChores.has(key)) return;
+      const d = Phaser.Math.Distance.Between(hx, hy, x, y);
+      if (d < bestD) { bestD = d; best = { key, x, y, run }; }
+    });
+    return best;
+  }
+
+  // A random reachable point to roam to when a helper has no chore — same
+  // "periodic random target" idea _updateWander uses for animals, but
+  // walked to with _startWalk/findPath (like everything else self-moving)
+  // rather than an un-pathed drift, so she still respects walls/cages.
+  // Split roughly 50/50 between the building floor and the play yard
+  // (yard only offered while its gate is open, since a shut gate blocks
+  // routing there same as for anyone else). Retries a handful of times
+  // against a random point landing inside an obstacle (a cage, the desk,
+  // the oven/bed) before giving up and just standing pat.
+  _randomRoamPoint() {
+    for (let i = 0; i < 12; i++) {
+      const useYard = this.yardDoorOpen && Math.random() < 0.5;
+      let x, y;
+      if (useYard) {
+        x = YARD_RECT.x + 20 + Math.random() * Math.max(1, YARD_RECT.w - 40);
+        y = YARD_RECT.y + 20 + Math.random() * Math.max(1, YARD_RECT.h - 40);
+      } else {
+        x = WALL + 24 + Math.random() * Math.max(1, ROOM.w - 2 * (WALL + 24));
+        y = ROOM.y + WALL + 24 + Math.random() * Math.max(1, ROOM.h - 2 * (WALL + 24));
+      }
+      if (!this._collides(x, y, 10)) return { x, y };
+    }
+    // Fallback: reception, an always-clear spot (shouldn't be reached in
+    // practice — the floor is mostly open aisles).
+    return { x: RECEPTION.desk.x + 40, y: RECEPTION.desk.y + RECEPTION.desk.h + 40 };
+  }
+
+  // Kicks off a walk for a helper (as opposed to an animal/owner, which go
+  // through the bare _startWalk directly) — tracks her own `walking` flag so
+  // _updateHelpers knows not to re-target her mid-journey, released the
+  // instant she arrives (before `onArrive` runs) so a chore whose target
+  // vanished mid-walk still frees her up to pick something else next frame.
+  _startHelperWalk(helper, tx, ty, onArrive) {
+    helper.walking = true;
+    this._startWalk(helper.sprite, tx, ty, {
+      speed: SPEED, // issue #52: normal walking pace, same as the player's own — not the slower ANIMAL_WALK_SPEED/OWNER_WALK_SPEED
+      onArrive: () => {
+        helper.walking = false;
+        onArrive?.();
+      },
+    });
+  }
+
+  // Per-frame helper AI: each idle helper prefers the nearest unclaimed
+  // chore, walks to it, and does it on arrival; with nothing to do, she
+  // roams. Deliberately excludes births, photos, the computer, carrying,
+  // and cage-opening — none of those go through _forEachChore, so a helper
+  // structurally can't reach them.
+  _updateHelpers(delta) {
+    if (!this.helpers) return;
+    for (const helper of this.helpers) {
+      if (helper.walking) continue; // _updateWalkers is already moving her toward her current target
+      const { sprite } = helper;
+
+      const target = this._resolveHelperTarget(sprite.x, sprite.y);
+      if (target) {
+        this._claimedChores.add(target.key);
+        this._startHelperWalk(helper, target.x, target.y, () => {
+          this._claimedChores.delete(target.key);
+          target.run();
+        });
+        continue;
+      }
+
+      // Nothing to do — roam, on the same periodic timer idea _updateWander
+      // uses (pick a fresh point every several seconds, otherwise just
+      // stand). Runs down only while she's genuinely idle (paused above
+      // while she's mid-walk), so this fires once right when she settles.
+      helper.roamTimer -= delta;
+      if (helper.roamTimer <= 0) {
+        helper.roamTimer = 4000 + Math.random() * 4000;
+        const p = this._randomRoamPoint();
+        this._startHelperWalk(helper, p.x, p.y, null);
       }
     }
   }
@@ -3528,35 +3661,38 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     else target.run();
   }
 
-  // ACT — everything that isn't handling an animal (issues #5, #6,
-  // #7, #8, #13, #20, #22, #37): feeding, cleaning, births, photos, the
-  // reception computer, treats, the raccoon, and turning in for the night.
-  _resolveAct() {
-    const r = this._resolver();
-    const consider = r.consider;
-
-    // Owner note 2026-07-29 (bowl decoupling): filling food vs. water now
-    // resolves to whichever specific bowl sprite is closer — same
-    // nearest-target `consider()` pattern as everything else here — rather
-    // than the cage's own rect. Filling works regardless of hunger/thirst
-    // (see _fillBowl); actually eating/drinking happens on its own
-    // background tick (_autoResolveBowlNeeds), not through this interaction.
-    //
-    // Issue #58: only an occupied cage whose bowl is actually EMPTY is a
-    // target now. An empty cage's bowl spot, or one that's already full,
-    // used to be considered too — _fillBowl then quietly did nothing, which
-    // is exactly the "I pressed the button and nothing happened" the prompt
-    // exists to eliminate. Skipping them also frees the press for whatever
-    // else is nearby instead of swallowing it.
+  // Shared "what upkeep chores are outstanding right now" enumerator (issue
+  // #52) — the bowl/mess portion of _resolveAct's candidate list, factored
+  // out so the helpers' chore-picker (_resolveHelperTarget) can run the
+  // exact same candidate logic from a DIFFERENT position without
+  // duplicating the BOWL_SPOTS/WATER_BOWL_SPOTS/yardBowls/messes iteration
+  // verbatim in two places. `consider` is called once per outstanding chore
+  // as (key, x, y, label, run); `key` exists purely so a caller can
+  // dedupe/claim a target (see _resolveHelperTarget) — _resolveAct itself
+  // ignores it.
+  //
+  // Owner note 2026-07-29 (bowl decoupling): filling food vs. water resolves
+  // to whichever specific bowl sprite is closer rather than the cage's own
+  // rect. Filling works regardless of hunger/thirst (see _fillBowl);
+  // actually eating/drinking happens on its own background tick
+  // (_autoResolveBowlNeeds), not through this interaction.
+  //
+  // Issue #58: only an occupied cage whose bowl is actually EMPTY is a
+  // target. An empty cage's bowl spot, or one that's already full, used to
+  // be considered too — _fillBowl then quietly did nothing, which is
+  // exactly the "I pressed the button and nothing happened" the prompt
+  // exists to eliminate. Skipping them also frees the press (or a helper's
+  // pick) for whatever else is nearby instead of swallowing it.
+  _forEachChore(consider) {
     BOWL_SPOTS.forEach((spot, i) => {
       const who = this._cageOccupant(i);
       if (!who?.bowl || who.bowl.food) return;
-      consider(spot.x, spot.y, `Fill ${who.animal.name}'s food bowl`, () => this._fillBowl(i, 'food'));
+      consider(`bowl-food-${i}`, spot.x, spot.y, `Fill ${who.animal.name}'s food bowl`, () => this._fillBowl(i, 'food'));
     });
     WATER_BOWL_SPOTS.forEach((spot, i) => {
       const who = this._cageOccupant(i);
       if (!who?.bowl || who.bowl.water) return;
-      consider(spot.x, spot.y, `Fill ${who.animal.name}'s water bowl`, () => this._fillBowl(i, 'water'));
+      consider(`bowl-water-${i}`, spot.x, spot.y, `Fill ${who.animal.name}'s water bowl`, () => this._fillBowl(i, 'water'));
     });
 
     // Issue #32 follow-up, one pair as of issue #47: the outside yard's
@@ -3564,15 +3700,32 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // (any time, regardless of who's hungry); see _fillYardBowl. Same
     // already-full skip as the cage bowls above (issue #58).
     if (!this.yardBowls.food) {
-      consider(YARD_BOWL_SPOTS.food.x, YARD_BOWL_SPOTS.food.y, 'Fill the playground food bowl', () => this._fillYardBowl('food'));
+      consider('yard-food', YARD_BOWL_SPOTS.food.x, YARD_BOWL_SPOTS.food.y, 'Fill the playground food bowl', () => this._fillYardBowl('food'));
     }
     if (!this.yardBowls.water) {
-      consider(YARD_BOWL_SPOTS.water.x, YARD_BOWL_SPOTS.water.y, 'Fill the playground water bowl', () => this._fillYardBowl('water'));
+      consider('yard-water', YARD_BOWL_SPOTS.water.x, YARD_BOWL_SPOTS.water.y, 'Fill the playground water bowl', () => this._fillYardBowl('water'));
     }
 
+    // `mess` itself is a stable object reference, so it doubles as its own
+    // dedupe key. Guarded against running twice (a helper walking toward a
+    // mess the player — or another helper — already cleaned): _cleanMess
+    // assumes the mess is still live, so re-check membership rather than
+    // relying on it to no-op.
     for (const mess of this.messes) {
-      consider(mess.x, mess.y, 'Clean up the mess', () => this._cleanMess(mess));
+      consider(mess, mess.x, mess.y, 'Clean up the mess', () => {
+        if (this.messes.includes(mess)) this._cleanMess(mess);
+      });
     }
+  }
+
+  // ACT — everything that isn't handling an animal (issues #5, #6,
+  // #7, #8, #13, #20, #22, #37): feeding, cleaning, births, photos, the
+  // reception computer, treats, the raccoon, and turning in for the night.
+  _resolveAct() {
+    const r = this._resolver();
+    const consider = r.consider;
+
+    this._forEachChore((key, x, y, label, run) => consider(x, y, label, run));
 
     // Issue #55: the gate to the play yard. It's a world object rather than an
     // animal, so it belongs on ACT alongside the other walk-up-and-use things,
@@ -3742,6 +3895,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._updateComputerIcon();
     this._updateRaccoon(delta);
     this._updateWalkers(delta);      // issue #45: animals/owners walking themselves around
+    this._updateHelpers(delta);      // issue #52: helper NPCs picking/walking to/doing chores
     this._updateWander(delta);
     this._updateBabies(delta);       // issue #62: babies wander on their own, loosely tethered to mom
     this._updateStayVisuals();       // issue #48: bubbles/labels/babies follow their animal
