@@ -7,13 +7,17 @@ import { applyDpr, logicalW, logicalH } from '../uiUtils.js';
 // own buttons stay clickable (same "always-on-top overlay scene" pattern as
 // HudScene/NotificationScene/PauseScene).
 //
-// Task categories are unchanged from #52's automatic behavior — fill bowls
-// (cage + yard) and clean messes — just multi-select and per-helper now
-// instead of always-on. Opening cages, carrying, births/photos/the computer
-// are deliberately NOT here; those are issue #81, which depends on this one.
+// Task categories: #80's original two (fill bowls, clean messes) — unchanged
+// from #52's automatic behavior, just multi-select and per-helper now — plus
+// #81's three-category expansion: opening cages (sending pets out to play or
+// home), carrying animals (reception arrivals, checkout hand-offs), and
+// births/baby photos/the computer.
 const TASK_CATEGORIES = [
   { key: 'bowls', label: 'Fill bowls' },
   { key: 'cleaning', label: 'Clean up messes' },
+  { key: 'cages', label: 'Open cages / send home' },
+  { key: 'carrying', label: 'Carry animals' },
+  { key: 'births', label: 'Births, photos & computer' },
 ];
 
 export default class HelperMenuScene extends Phaser.Scene {

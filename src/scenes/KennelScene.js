@@ -1229,11 +1229,12 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // toggled on for her (walk up, interact, multi-select in her own menu — see
   // _openHelperMenu/_toggleHelperTask). With nothing toggled on she just
   // roams/idles. `tasks` is per-helper and independent, so one can be filling
-  // bowls while another does nothing and a third does cleaning only. Still
-  // handles bowls + messes ONLY — see _resolveHelperTarget/_forEachChore.
-  // They never touch births, photos, the computer, carrying, or opening a
-  // cage: those are all decisions the player makes, not upkeep, and are
-  // deliberately deferred to issue #81 (which depends on this one).
+  // bowls while another does nothing and a third does cleaning only. Issue
+  // #81 expanded the assignable categories to five: bowls, cleaning, cages
+  // (opening/sending pets out or home), carrying (reception arrivals,
+  // stranded checkout hand-offs), and births (birth-ready moms, baby photos,
+  // the computer) — see _resolveHelperTarget/_forEachChore/
+  // _forEachHelperCageTask/_forEachHelperBirthTask/_tryStartHelperCarry.
   _buildHelpers() {
     const startX = RECEPTION.desk.x + 40;
     const startY = RECEPTION.desk.y + RECEPTION.desk.h + 40;
@@ -1258,15 +1259,27 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // empty) — never two of these at once.
       //
       // Issue #80: `tasks` is the player-assigned set of category strings
-      // she's currently allowed to work ('bowls', 'cleaning') — starts empty,
-      // toggled via her own menu (_openHelperMenu). `choreCategory` mirrors
-      // `choreKey` but records WHICH category the in-progress chore belongs
-      // to, so toggling that category off mid-walk can interrupt her
-      // immediately (_stopHelperWalk) instead of letting her finish it.
+      // she's currently allowed to work ('bowls', 'cleaning', and — issue
+      // #81 — 'cages', 'carrying', 'births') — starts empty, toggled via her
+      // own menu (_openHelperMenu). `choreCategory` mirrors `choreKey` but
+      // records WHICH category the in-progress chore belongs to, so toggling
+      // that category off mid-walk can interrupt her immediately
+      // (_stopHelperWalk) instead of letting her finish it.
+      //
+      // Issue #81: `carrying`/`carryOrigin`/`carryVisual` give a helper the
+      // exact same shape `_pickUp`/`_dropOff`/`_dropOffToYard`/`_followCarry`
+      // already expect from any actor (Player 1, a claimed helper) — so the
+      // 'carrying' task can hand a helper an animal by calling those same
+      // methods with the helper herself as the actor, no parallel carry
+      // system needed. Only ever set while she's AI-driving her own
+      // 'carrying' task (see _tryStartHelperCarry) — a claimed helper (issue
+      // #53) carries through her own `actor` entry in activePlayers instead,
+      // same as before.
       return {
         name, sprite, walking: false, roamTimer: 0,
         playerControlled: false, choreKey: null, choreCategory: null, actor: null,
         tasks: new Set(),
+        carrying: null, carryOrigin: null, carryVisual: null,
       };
     });
   }
@@ -1522,27 +1535,218 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     }
   }
 
-  // ── Helper chore-picking + roaming (issue #52, gated per #80) ────────────
-  // Helpers only ever do routine upkeep — bowls and messes. Reuses
-  // _forEachChore's exact candidate list (so there's one definition of "what
-  // counts as a chore", shared with the player's ACT button) but picks
-  // nearest to the HELPER's own position rather than the player's, skips
-  // anything another helper has already claimed (see _updateHelpers) so two
-  // helpers don't both set off for the same empty bowl, AND — issue #80 —
-  // skips any chore whose category isn't currently toggled on for THIS
-  // helper (`helper.tasks`). A target that becomes stale before she arrives
-  // (the player beat her to it) is handled by _forEachChore's own run()
-  // guards, not here — worst case she walks up to an already-clean spot and
-  // simply looks for something else next.
+  // ── Helper chore-picking + roaming (issue #52, gated per #80, expanded #81) ─
+  // Helpers do routine upkeep (bowls, messes) plus, per #81, cage-opening and
+  // births/photos/the computer — every one of these is a single-leg "walk to
+  // a spot, then run a no-actor-needed function" job, so they all share this
+  // one nearest-unclaimed-candidate picker. (Carrying is the one #81 category
+  // that ISN'T single-leg — fetch her, THEN deliver her — so it's driven by
+  // its own small state machine instead: see _tryStartHelperCarry.)
+  //
+  // Reuses _forEachChore's exact bowls/cleaning candidate list (so there's
+  // one definition of "what counts as a chore", shared with the player's ACT
+  // button), plus two #81 enumerators of the same shape for cages and
+  // births — picks nearest to the HELPER's own position rather than the
+  // player's, skips anything another helper has already claimed (see
+  // _updateHelpers) so two helpers don't both set off for the same target,
+  // AND skips any candidate whose category isn't currently toggled on for
+  // THIS helper (`helper.tasks`). A target that becomes stale before she
+  // arrives (the player, or another helper, beat her to it) is handled by
+  // each run()'s own guards, not here — worst case she walks up to an
+  // already-resolved spot and simply looks for something else next.
   _resolveHelperTarget(helper) {
     let best = null, bestD = Infinity;
-    this._forEachChore((key, x, y, label, run, category) => {
+    const consider = (key, x, y, run, category) => {
       if (!helper.tasks.has(category)) return;
       if (this._claimedChores.has(key)) return;
       const d = Phaser.Math.Distance.Between(helper.sprite.x, helper.sprite.y, x, y);
       if (d < bestD) { bestD = d; best = { key, x, y, run, category }; }
-    });
+    };
+    this._forEachChore((key, x, y, label, run, category) => consider(key, x, y, run, category));
+    this._forEachHelperCageTask(consider);
+    this._forEachHelperBirthTask(consider);
     return best;
+  }
+
+  // Issue #81, "open cages / send pets out or home" — mirrors the player's
+  // own HANDLE-button cage actions (_considerCages's plain "let herself out
+  // to play" branch — including the walk-to-her-waiting-owner outcome that
+  // same _openCage call already produces for a checkout-ready pet — and
+  // _considerLoosePets's "send her back to her cage" action), run
+  // autonomously for a helper with 'cages' toggled on.
+  //
+  // Judgment call (flagged per the issue): skipped entirely at night, rather
+  // than replicating the player's own "asleep, except a dog who needs the
+  // bathroom" exception — waking a sleeping pet is exactly the kind of
+  // judgment call the issue said was fine to leave out rather than force.
+  _forEachHelperCageTask(consider) {
+    if (this.night.active) return;
+    for (const stay of this.roster.stays) {
+      if (stay.location !== LOCATION.CAGE) continue;
+      if (this._isWalking(stay)) continue;
+      const rec = this._staySprites.get(stay);
+      if (!rec) continue;
+      const toOwner = stay.checkoutReady && this._checkoutOwners.get(stay)?.arrived;
+      if (!toOwner && !this.yardDoorOpen) continue; // nowhere honest to send her — same guard _openCage itself has
+      consider(stay, rec.sprite.x, rec.sprite.y, () => this._openCage(stay), 'cages');
+    }
+    for (const stay of this.roster.stays) {
+      if (stay.location !== LOCATION.YARD) continue;
+      if (this._isWalking(stay)) continue;
+      // A checkout-ready yard pet already sent herself home the instant she
+      // was flagged (_flagCheckoutsReady's own _startWalkHome call) — nothing
+      // left here for a helper to do.
+      if (stay.checkoutReady) continue;
+      const rec = this._staySprites.get(stay);
+      if (!rec) continue;
+      const hasHome = !!CAGES[stay.cageIndex] || this._findAnyOpenCage(stay) != null;
+      if (!hasHome) continue;
+      // `reversible: true` — same tap-to-turn-around from issue #69 applies
+      // whether it's the player or a helper who started this yard→cage trip;
+      // no reason the player should lose the ability to redirect her mid-walk
+      // just because a helper was the one who sent her home.
+      consider(stay, rec.sprite.x, rec.sprite.y, () => this._startWalkHome(stay, { reversible: true }), 'cages');
+    }
+  }
+
+  // Issue #81, "births / baby photos / computer" — the exact same three
+  // player interactions _resolveAct already offers (help a birth-ready mom,
+  // photograph un-announced babies, send the computer announcement), run
+  // autonomously for a helper with 'births' toggled on. All three already
+  // run with no player judgment/typing involved (the computer flow auto-
+  // picks names from data/names.js, same as any other arrival) — so unlike
+  // the issue's worry about "composing the announcement message" needing a
+  // person, there's nothing here that doesn't translate directly.
+  _forEachHelperBirthTask(consider) {
+    for (const stay of this.roster.stays) {
+      if (!stay.birthReady) continue;
+      const eggs = this._eggCageSpot(stay);
+      const rec = this._staySprites.get(stay);
+      const at = eggs || (rec ? { x: rec.sprite.x, y: rec.sprite.y } : null);
+      if (!at) continue;
+      consider(`helper-birth-${stay.animal.id}`, at.x, at.y, () => this._triggerBirth(stay), 'births');
+    }
+    for (const stay of this.roster.stays) {
+      if (!stay.needsAnnouncement || stay.photoTaken) continue;
+      const rec = this._staySprites.get(stay);
+      if (!rec) continue;
+      consider(`helper-photo-${stay.animal.id}`, rec.sprite.x, rec.sprite.y, () => this._takePhoto(stay), 'births');
+    }
+    if (!this._computerBusy && this.roster.stays.some((s) => s.needsAnnouncement && s.photoTaken)) {
+      consider('helper-computer', COMPUTER_SPOT.x, COMPUTER_SPOT.y, () => this._useComputer(), 'births');
+    }
+  }
+
+  // Issue #81, "carry animals" — the one new category that isn't a single
+  // walk-then-run job: a helper has to reach the animal, pick her up
+  // (_pickUp, same as the player's own HANDLE button — the helper herself is
+  // the `actor`, see _buildHelpers), then walk her to wherever she's going
+  // before setting her down. Two concrete, always-safe triggers (deliberately
+  // narrower than every carry the player herself can do — flagged in the
+  // report):
+  //
+  //  - A stay waiting at RECEPTION (only reachable today via a restored
+  //    pre-#54 save with no cage assigned, or a kennel that was completely
+  //    full at some point — every fresh arrival's own owner already delivers
+  //    her straight to a cage or the yard, issue #54/#45) gets carried to an
+  //    open cage if one exists, the yard otherwise.
+  //  - A checkout-ready stay whose owner has arrived but who ISN'T in her
+  //    cage (the rare case _resolveDropoff's own fallback comment describes:
+  //    she was picked up/relocated after her checkout was flagged, so the
+  //    normal "open her cage and she walks over" path can't reach her) gets
+  //    carried directly to her waiting owner.
+  //
+  // The ordinary checkout hand-off — a checkout-ready CAGED pet walking
+  // herself over once her cage is opened — doesn't need carrying at all
+  // (that's the 'cages' category, above); this only covers the stranded
+  // fallback.
+  _findHelperCarryCandidate(helper) {
+    let best = null, bestD = Infinity;
+    for (const stay of this.roster.stays) {
+      if (this._claimedChores.has(stay)) continue;
+      if (this._isWalking(stay)) continue;
+      const isReceptionArrival = stay.location === LOCATION.RECEPTION;
+      const isCheckoutStranded = stay.checkoutReady && stay.location !== LOCATION.CAGE
+        && !!this._checkoutOwners.get(stay)?.arrived;
+      if (!isReceptionArrival && !isCheckoutStranded) continue;
+      const rec = this._staySprites.get(stay);
+      if (!rec) continue;
+      const d = Phaser.Math.Distance.Between(helper.sprite.x, helper.sprite.y, rec.sprite.x, rec.sprite.y);
+      if (d < bestD) { bestD = d; best = stay; }
+    }
+    return best;
+  }
+
+  // Starts the two-leg carry job: walk to the candidate, pick her up, then
+  // hand off to _beginHelperCarryDelivery for leg two. Claims `stay` in
+  // `_claimedChores` (freed the instant she's reached — see below) and sets
+  // `helper.choreKey`/`choreCategory` for the WHOLE job (both legs), so
+  // toggling 'carrying' off mid-trip interrupts her immediately via the
+  // normal _stopHelperWalk path, same "stops immediately" guarantee as every
+  // other task category (issue #80) — _stopHelperWalk settles whoever she's
+  // holding into a cage/the yard if it catches her mid-carry.
+  _tryStartHelperCarry(helper) {
+    const stay = this._findHelperCarryCandidate(helper);
+    if (!stay) return false;
+    this._claimedChores.add(stay);
+    helper.choreKey = stay;
+    helper.choreCategory = 'carrying';
+    const rec = this._staySprites.get(stay);
+    const tx = rec ? rec.sprite.x : helper.sprite.x;
+    const ty = rec ? rec.sprite.y : helper.sprite.y;
+    this._startHelperWalk(helper, tx, ty, () => {
+      // She's reached the animal's spot — free the "go fetch her" claim
+      // (nobody else needs to route here once she's arrived), but keep
+      // choreKey/choreCategory alive through leg two below.
+      this._claimedChores.delete(stay);
+      // Stale by the time she arrived — claimed by the player, already
+      // walking somewhere, or gone entirely. Bail cleanly.
+      const stillValid = this._staySprites.has(stay) && !this._isWalking(stay) && (
+        stay.location === LOCATION.RECEPTION
+        || (stay.checkoutReady && stay.location !== LOCATION.CAGE && this._checkoutOwners.get(stay)?.arrived)
+      );
+      if (!stillValid) {
+        helper.choreKey = null;
+        helper.choreCategory = null;
+        return;
+      }
+      this._pickUp(helper, stay);
+      this._beginHelperCarryDelivery(helper, stay);
+    });
+    return true;
+  }
+
+  // Leg two of a helper carry: walk the animal to her destination and set
+  // her down there, reusing the exact same drop calls the player's own
+  // HANDLE button uses (_dropOff/_dropOffToYard/_completeCheckout) with the
+  // helper as the actor.
+  _beginHelperCarryDelivery(helper, stay) {
+    const finish = () => { helper.choreKey = null; helper.choreCategory = null; };
+    const co = stay.checkoutReady ? this._checkoutOwners.get(stay) : null;
+    if (co) {
+      this._startHelperWalk(helper, co.waitX, co.waitY + 14, () => {
+        if (helper.carrying === stay) {
+          if (this._checkoutOwners.has(stay)) this._completeCheckout(stay);
+          else this._dropOffToYard(helper, stay); // her owner left in the meantime — settle her rather than strand her mid-air
+        }
+        finish();
+      });
+      return;
+    }
+    const cageIndex = this._findAnyOpenCage(stay);
+    if (cageIndex != null) {
+      const spot = cageAnimalSpot(CAGES[cageIndex]);
+      this._startHelperWalk(helper, spot.x, spot.y, () => {
+        this._dropOff(helper, stay, cageIndex, { fromReception: helper.carryOrigin === LOCATION.RECEPTION });
+        finish();
+      });
+    } else {
+      const spot = this._openYardSpot(stay);
+      this._startHelperWalk(helper, spot.x, spot.y, () => {
+        this._dropOffToYard(helper, stay);
+        finish();
+      });
+    }
   }
 
   // A random reachable point to roam to when a helper has no chore — same
@@ -1591,15 +1795,19 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // Per-frame helper AI: each idle helper prefers the nearest unclaimed
   // chore from a category the player has toggled on for her (issue #80 —
   // with nothing toggled on, `_resolveHelperTarget` never returns a target
-  // and she just roams); with nothing to do, she roams. Deliberately
-  // excludes births, photos, the computer, carrying, and cage-opening —
-  // none of those go through _forEachChore, so a helper structurally can't
-  // reach them.
+  // and she just roams); with nothing to do, she roams. Issue #81 added
+  // cage-opening and births/photos/the computer to that same single-leg
+  // resolver, plus 'carrying' as its own two-leg job (_tryStartHelperCarry),
+  // tried first so a helper already mid-carry (still `walking`, so skipped by
+  // the guard below) never gets double-booked onto a second task.
   _updateHelpers(delta) {
     if (!this.helpers) return;
     for (const helper of this.helpers) {
       if (helper.playerControlled) continue; // issue #53: a claimed helper is driven by her own player actor, not AI
+      if (helper.carrying) this._followCarry(helper); // issue #81: keep the animal in her arms glued to her while she's walking
       if (helper.walking) continue; // _updateWalkers is already moving her toward her current target
+
+      if (helper.tasks.has('carrying') && this._tryStartHelperCarry(helper)) continue;
 
       const target = this._resolveHelperTarget(helper);
       if (target) {
@@ -1714,12 +1922,24 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // (issue #53, a human taking over) and _toggleHelperTask (issue #80, the
   // player un-toggling the category she's actively working — "stops
   // immediately" per the owner, not "finishes this one first").
+  //
+  // Issue #81: if this catches her mid-carry (task toggled off, or a human
+  // claiming her, while she's holding an animal from her own 'carrying'
+  // task), settle whoever she's holding into her own cage — or the yard, if
+  // she has none — rather than leaving her frozen holding an animal nobody
+  // can reach anymore. Same fallback _releaseHelper already uses for a
+  // gamepad takeover mid-carry.
   _stopHelperWalk(helper) {
     helper.walking = false;
     this._walkers = this._walkers.filter((w) => w.sprite !== helper.sprite);
     if (helper.choreKey != null) { this._claimedChores.delete(helper.choreKey); helper.choreKey = null; }
     helper.choreCategory = null;
     helper.sprite.body.setVelocity(0, 0);
+    if (helper.carrying) {
+      const stay = helper.carrying;
+      if (CAGES[stay.cageIndex]) this._dropOff(helper, stay, stay.cageIndex, {});
+      else this._dropOffToYard(helper, stay);
+    }
   }
 
   // ── Player-commanded helper tasks (issue #80) ────────────────────────────
@@ -2135,8 +2355,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // does nothing if nobody currently is. Factored out so call sites that
   // don't know/care who's carrying — an automatic arrival, a checkout — don't
   // have to hunt through this.activePlayers themselves.
+  //
+  // Issue #81: an AI helper working her own 'carrying' task holds `carrying`/
+  // `carryVisual` directly on her own helper object (not through an
+  // activePlayers actor — see _buildHelpers) whenever she's not currently
+  // player-controlled, so she has to be checked here too, or a checkout
+  // completed while she's mid-hand-off would leave her stuck holding a
+  // carryVisual pointing at now-destroyed sprites.
   _clearCarryingFor(stay) {
-    for (const actor of this.activePlayers) {
+    const holders = this.helpers ? [...this.activePlayers, ...this.helpers] : this.activePlayers;
+    for (const actor of holders) {
       if (actor.carrying !== stay) continue;
       actor.carryVisual?.parts.forEach(({ obj }) => obj.destroy());
       actor.carryVisual = null;
