@@ -4,6 +4,7 @@
 // can share, so the numbers only live in one place.
 import {
   RECEPTION, CAGES_PER_SECTION, STORAGE_ROOM, HOUSE_ROOM, ROOM, OUTSIDE, SECTIONS, WALL,
+  BACK_DOOR,
 } from './sections.js';
 
 // ── The cage grid (issue #18, reworked into one single grid by issue #32) ──
@@ -211,17 +212,65 @@ export const YARD_RECT = {
   h: ROOM.h - 28,
 };
 
+// ── The yard's gate (issue #61) ───────────────────────────────────────────
+// Owner: "owners should drop off their pets right at the opening of the
+// playpen, not weirdly/unnecessarily top left."
+//
+// The yard's one and only entrance is the BACK_DOOR gap in the building's
+// east wall (data/sections.js), so that's where a pet is actually let go when
+// she's brought out — by her arriving owner (KennelScene._runOwnerDropOff),
+// or by letting herself out of an opened cage (_openCage). The old behavior
+// filled a placement grid over YARD_RECT in index order, which put the first
+// arrivals in the yard's far TOP-LEFT corner regardless of where the door is:
+// the owner visibly walked past the gate and trudged up to a corner.
+//
+// `index` fans simultaneous arrivals out over a handful of offsets around the
+// gate so two pets delivered at the same moment don't stack on one another.
+// Once she's down she wanders the whole yard on her own anyway (issue #60),
+// so this only has to read as "let go just outside the gate".
+const YARD_GATE_Y = (BACK_DOOR.y0 + BACK_DOOR.y1) / 2;
+const YARD_GATE_FAN = [
+  { dx: 8, dy: 0 },
+  { dx: 34, dy: -36 },
+  { dx: 34, dy: 36 },
+  { dx: 66, dy: -12 },
+  { dx: 66, dy: 18 },
+  { dx: 14, dy: -68 },
+  { dx: 14, dy: 68 },
+  { dx: 98, dy: -44 },
+  { dx: 98, dy: 44 },
+];
+
+export function yardGateSpot(index = 0) {
+  const fan = YARD_GATE_FAN[index % YARD_GATE_FAN.length];
+  const wrap = Math.floor(index / YARD_GATE_FAN.length) * 30;
+  return clampToYard(
+    YARD_RECT.x + fan.dx + wrap + (Math.random() - 0.5) * 10,
+    YARD_GATE_Y + fan.dy + (Math.random() - 0.5) * 10,
+  );
+}
+
+// Keeps any yard placement (a gate drop, or the player setting a pet down
+// wherever she's standing) inside the fenced play area.
+export function clampToYard(x, y) {
+  return {
+    x: Math.min(Math.max(x, YARD_RECT.x + 6), YARD_RECT.x + YARD_RECT.w - 6),
+    y: Math.min(Math.max(y, YARD_RECT.y + 6), YARD_RECT.y + YARD_RECT.h - 6),
+  };
+}
+
 // Issue #32 follow-up ("in the outdoor play area, there should be food and
 // water bowls available for general animal use"), collapsed to ONE pair by
 // issue #47 now that there are no zones: a single high-capacity food+water
 // pair for the whole yard, keeping the "one fill satisfies every hungry
 // animal out there" behavior (KennelScene._autoResolveYardBowls).
 //
-// Parked down at the yard's bottom-left (where the old "bottom zone" pair
-// used to sit) rather than up top: animals are placed into the yard from the
-// TOP row down (KennelScene._openYardSpot's grid), and a bowl sitting inside
-// that first row would sit within interact range of the animals themselves,
-// making "fill the bowl" and "pick her up" fight over the same button press.
+// Parked down at the yard's bottom-left corner, well clear of the gate
+// (YARD_GATE_Y, roughly the yard's vertical middle) where pets are set down
+// — a bowl within interact range of a just-delivered animal would make "fill
+// the bowl" and "pick her up" fight over the same button press. (Issue #61
+// moved the drop point from the yard's top row to the gate; this pair stays
+// where it was, which is still the furthest corner from it.)
 export const YARD_BOWL_SPOTS = {
   food:  { x: YARD_X0 + 40, y: ROOM.y + ROOM.h - 60 },
   water: { x: YARD_X0 + 70, y: ROOM.y + ROOM.h - 60 },

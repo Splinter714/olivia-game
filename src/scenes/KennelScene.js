@@ -8,7 +8,7 @@ import {
   SCOOPER_SPOT, BOWL_SPOTS, WATER_BOWL_SPOTS, COMPUTER_SPOT,
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, STORAGE_PROPS, BED, BED_SPOT,
   CAGES, LITTER_SPOTS, YARD_BOWL_SPOTS, YARD_RECT,
-  cageAnimalSpot,
+  cageAnimalSpot, yardGateSpot, clampToYard,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
@@ -1011,16 +1011,23 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     });
   }
 
-  // The next free placement spot in the single play yard (issue #47 — one
-  // undivided area now), laid out as a simple grid so simultaneous
-  // occupants don't stack. A pet still being walked out by her owner
-  // (`_lingeringOwners`) counts as already out there even though her
-  // `location` still reads RECEPTION, so two arrivals mid-delivery at the
-  // same time can't be handed the identical spot.
+  // Where a pet is set down when she's brought out to play.
+  //
+  // Issue #61 (owner: "owners should drop off their pets right at the opening
+  // of the playpen, not weirdly/unnecessarily top left"): just inside the
+  // yard's gate — the BACK_DOOR gap in the building's east wall — instead of
+  // the top-left corner of a placement grid laid over the whole yard, which
+  // is what the old `_gridSlot(YARD_RECT, ...)` handed out. The count of who's
+  // already out there is now only used to FAN simultaneous drops apart around
+  // the gate (data/props.js's yardGateSpot), not to walk a grid.
+  //
+  // A pet still being walked out by her owner (`_lingeringOwners`) counts as
+  // already out there even though her `location` still reads RECEPTION, so two
+  // arrivals mid-delivery at the same time can't be handed the identical spot.
   _openYardSpot(stay = null) {
     const already = this.roster.stays.filter((s) => s !== stay
       && (s.location === LOCATION.YARD || this._lingeringOwners.has(s))).length;
-    return this._gridSlot(YARD_RECT, already, 20, 44, 52);
+    return yardGateSpot(already);
   }
 
   // Issue #25/#45: her delivering owner walks back out through the front
@@ -1974,15 +1981,20 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   }
 
   // Places a carried stay out in the yard to play (issue #20). Issue #47:
-  // one single undivided play area now, so there's no zone to pick — she
-  // just takes the next free spot in the yard's placement grid, and multiple
-  // occupants spread out rather than stacking.
+  // one single undivided play area now, so there's no zone to pick.
+  //
+  // Issue #61 ("same applies to the player setting a pet down in the yard:
+  // near where it makes sense, not a fixed corner slot"): she's set down right
+  // where the PLAYER is standing, just nudged clear of her so they don't
+  // overlap and clamped inside the fence — the player walked her here, so here
+  // is where she goes. (An owner NPC's delivery drops at the gate instead —
+  // _openYardSpot — because the owner isn't the one choosing the spot.)
   _dropOffToYard(stay) {
     this._carryVisual?.parts.forEach(({ obj }) => obj.destroy());
     this._carryVisual = null;
     this.carrying = null;
     stay.location = LOCATION.YARD;
-    const pos = this._openYardSpot(stay);
+    const pos = clampToYard(this.player.x + 26, this.player.y + 6);
     this._renderStay(stay, pos.x, pos.y);
   }
 
