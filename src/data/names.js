@@ -189,12 +189,23 @@ export function registerName(name, core = name) {
   usedCoreNames.add(core);
 }
 
-// Synthesizes a fresh, never-used name once a pool is drained: tries
-// "<prefix> <base>" combos drawn from that species/stage's own pool, using
-// only a base whose core word isn't already spoken for (bare or under a
-// different prefix), then falls back to a synthetic "<base> <counter>" core
-// if every base in the pool is somehow already taken (astronomically
-// unlikely, but keeps this provably terminating).
+// Every base word across every species' pools, deduped — the overflow tier
+// synthesizeName() reaches for once a single species' own pool is fully
+// spoken for. Computed once; NAME_POOLS never changes at runtime.
+const ALL_WORDS = [...new Set(
+  Object.values(NAME_POOLS).flatMap((entry) => [...entry.girl, ...entry.boy]),
+)];
+
+// Synthesizes a fresh, never-used name once a pool is drained. Never uses a
+// number — owner's rule (2026-08-01): "remove the possibility of having
+// numbered pets." Three tiers, each strictly harder to exhaust than the last:
+//   1. "<prefix> <base>" from this species/stage's own pool, base's core unused.
+//   2. Same, but drawing `base` from EVERY species' pool combined (still one
+//      word, just not necessarily this species' own flavor of word).
+//   3. A compound core made of two already-used words ("Marbles Biscuit") —
+//      only reachable once literally every word in the game has backed an
+//      animal, at which point the ~150-word pool's pairs still give
+//      thousands of fresh compounds.
 function synthesizeName(speciesKey, stage, rng) {
   const basePool = poolFor(speciesKey, stage);
   for (let attempt = 0; attempt < 200; attempt++) {
@@ -204,13 +215,19 @@ function synthesizeName(speciesKey, stage, rng) {
     const candidate = `${prefix} ${base}`;
     if (!usedNames.has(candidate)) return { name: candidate, core: base };
   }
-  const base = basePool[Math.floor(rng() * basePool.length)];
-  let counter = 2;
-  let core = `${base} ${counter}`;
-  while (usedCoreNames.has(core)) {
-    counter += 1;
-    core = `${base} ${counter}`;
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const prefix = PREFIXES[Math.floor(rng() * PREFIXES.length)];
+    const base = ALL_WORDS[Math.floor(rng() * ALL_WORDS.length)];
+    if (usedCoreNames.has(base)) continue;
+    const candidate = `${prefix} ${base}`;
+    if (!usedNames.has(candidate)) return { name: candidate, core: base };
   }
+  let core;
+  do {
+    const a = ALL_WORDS[Math.floor(rng() * ALL_WORDS.length)];
+    const b = ALL_WORDS[Math.floor(rng() * ALL_WORDS.length)];
+    core = `${a} ${b}`;
+  } while (usedCoreNames.has(core));
   const prefix = PREFIXES[Math.floor(rng() * PREFIXES.length)];
   return { name: `${prefix} ${core}`, core };
 }
