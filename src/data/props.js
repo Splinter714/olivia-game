@@ -229,6 +229,30 @@ export const YARD_RECT = {
   h: ROOM.h - 28,
 };
 
+// ── The gate itself (issue #55) ────────────────────────────────────────────
+// Owner: "there should be a closeable door to the outside play area, and if
+// it is closed when someone drops off their pet, they instead drop their pet
+// off at the pet's assigned cage." Asked what happens if you then open a
+// pet's cage: "she stays in her cage" — so this is a real gate on yard
+// access, not just a check-in routing flag.
+//
+// The leaf exactly fills the BACK_DOOR gap in the east wall when it's shut,
+// which is what lets KennelScene drop it straight into the collision/routing
+// obstacle list alongside the wall segments either side of it.
+export const YARD_DOOR = {
+  x: ROOM.w - WALL,
+  y: BACK_DOOR.y0,
+  w: WALL,
+  h: BACK_DOOR.y1 - BACK_DOOR.y0,
+};
+
+// Where the leaf sits once it's swung open: hinged on the gap's north post
+// and standing out into the grass, so "open" reads at a glance from across
+// the room rather than being the mere absence of a door. Decorative only —
+// nothing collides with it.
+export const YARD_DOOR_LEAF = { w: 60, h: 16 };
+export const YARD_DOOR_OPEN_POS = { x: ROOM.w + 1, y: BACK_DOOR.y0 - 1 };
+
 // ── The yard's gate (issue #61) ───────────────────────────────────────────
 // Owner: "owners should drop off their pets right at the opening of the
 // playpen, not weirdly/unnecessarily top left."

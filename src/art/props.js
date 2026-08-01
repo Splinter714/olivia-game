@@ -6,7 +6,7 @@
 // art/animals.js.
 import { gen } from './_gen.js';
 import {
-  LITTER_BOX_SIZE, CAGES, CAGE_W, CAGE_H, OVEN, BED,
+  LITTER_BOX_SIZE, CAGES, CAGE_W, CAGE_H, OVEN, BED, YARD_DOOR, YARD_DOOR_LEAF,
 } from '../data/props.js';
 
 export const LITTER_BOX_KEY = 'prop-litter-box';
@@ -73,6 +73,12 @@ export const BLANKET_KEY = 'prop-blanket';
 export const UPGRADE_KEY = 'prop-upgrade-star';
 export const OVEN_KEY = 'prop-oven';
 export const BED_KEY = 'prop-bed';
+// Issue #55: the closeable gate to the outside play area. Two looks, because
+// its state has to read at a glance from across the room — shut, it's a
+// planked leaf filling the whole doorway in the east wall; open, the same
+// leaf is swung out into the grass off its north hinge.
+export const YARD_DOOR_CLOSED_KEY = 'prop-yard-door-closed';
+export const YARD_DOOR_OPEN_KEY = 'prop-yard-door-open';
 export const TREAT_TRAY_KEY = 'prop-treat-tray';
 export const SHELF_KEY = 'prop-shelf';
 export const BOX_KEY = 'prop-boxes';
@@ -547,6 +553,35 @@ function drawBed(g, w, h) {
   g.fillStyle(0xffffff, 1).fillRoundedRect(w * 0.14, h * 0.32, w * 0.28, h * 0.22, 4); // pillow
 }
 
+// Issue #55's yard gate, shut: a tall planked garden gate filling the
+// doorway, hinged at the top (north) post, with a little latch on the
+// kennel-side edge. Drawn "as seen from inside", i.e. the same top-down-ish
+// flat-on treatment the walls use.
+function drawYardDoorClosed(g, w, h) {
+  g.fillStyle(0x8a5a34, 1).fillRect(0, 0, w, h);                 // leaf
+  g.fillStyle(0x6d4526, 1);
+  for (let y = 6; y < h - 4; y += 14) g.fillRect(1, y, w - 2, 2); // plank seams
+  g.fillStyle(0xa9743f, 1).fillRect(0, 0, 2, h);                 // lit outer edge
+  g.fillStyle(0x5c3620, 1).fillRect(w - 2, 0, 2, h);             // shaded inner edge
+  // Hinges top and bottom, latch in the middle of the kennel-side edge.
+  g.fillStyle(0x9aa0ab, 1);
+  g.fillRect(1, 5, w - 2, 3);
+  g.fillRect(1, h - 8, w - 2, 3);
+  g.fillStyle(0xd8c26a, 1).fillRect(w - 6, h / 2 - 4, 5, 8);
+}
+
+// ...and swung open, standing out into the grass off its north hinge: the
+// same planked leaf seen end-on, plus the hinge post it pivots around.
+function drawYardDoorOpen(g, w, h) {
+  g.fillStyle(0x8a5a34, 1).fillRoundedRect(0, 0, w, h, 2);
+  g.fillStyle(0x6d4526, 1);
+  for (let x = 8; x < w - 4; x += 13) g.fillRect(x, 1, 2, h - 2); // plank seams
+  g.fillStyle(0xa9743f, 1).fillRect(0, 0, w, 2);                  // lit top edge
+  g.fillStyle(0x5c3620, 1).fillRect(0, h - 2, w, 2);              // shaded bottom
+  g.fillStyle(0x9aa0ab, 1).fillCircle(3, h / 2, 3);               // hinge pin
+  g.fillStyle(0xd8c26a, 1).fillCircle(w - 4, h / 2, 2);           // latch
+}
+
 // A tray of whatever just got baked — one silhouette covers cookies, cake, or
 // cupcakes alike (the flavor is only in the notification text). Appears on
 // the counter after baking; disappears again if the raccoon steals it.
@@ -630,6 +665,8 @@ export function buildPropTextures(scene) {
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));
   gen(scene, OVEN_KEY, OVEN.w, OVEN.h, (g) => drawOven(g, OVEN.w, OVEN.h));
   gen(scene, BED_KEY, BED.w, BED.h, (g) => drawBed(g, BED.w, BED.h));
+  gen(scene, YARD_DOOR_CLOSED_KEY, YARD_DOOR.w, YARD_DOOR.h, (g) => drawYardDoorClosed(g, YARD_DOOR.w, YARD_DOOR.h));
+  gen(scene, YARD_DOOR_OPEN_KEY, YARD_DOOR_LEAF.w, YARD_DOOR_LEAF.h, (g) => drawYardDoorOpen(g, YARD_DOOR_LEAF.w, YARD_DOOR_LEAF.h));
   gen(scene, TREAT_TRAY_KEY, 26, 16, (g) => drawTreatTray(g, 26, 16));
   gen(scene, SHELF_KEY, 40, 70, (g) => drawShelf(g, 40, 70));
   gen(scene, BOX_KEY, 34, 30, (g) => drawBoxStack(g, 34, 30));

@@ -10,6 +10,7 @@ import {
   CAGES, LITTER_SPOTS, YARD_BOWL_SPOTS, YARD_RECT,
   cageAnimalSpot, yardGateSpot, clampToYard,
   cageEggSpot, cagePlateSpot, CAGE_EGG_SPACING,
+  YARD_DOOR, YARD_DOOR_OPEN_POS,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
@@ -41,6 +42,7 @@ import {
   WATER_BOWL_KEY, WATER_BOWL_EMPTY_KEY,
   MESS_KEY, NEED_KEY, COMPUTER_KEY, BLANKET_KEY, UPGRADE_KEY, CAGE_KEY, CAGE_FG_KEY, EMPTY_CAGE_KEY,
   OVEN_KEY, TREAT_TRAY_KEY, SHELF_KEY, BOX_KEY, BAG_KEY, BED_KEY,
+  YARD_DOOR_OPEN_KEY, YARD_DOOR_CLOSED_KEY,
 } from '../art/props.js';
 import {
   buildRaccoonTextures, RACCOON_KEYS, RACCOON_SCARED_KEY, CRUMB_KEY, HELD_TREAT_KEY, RACCOON_DISPLAY_SCALE,
@@ -143,6 +145,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this._drawWorld();
     this._buildProps();
     this._buildCollision();
+    // Issue #55: the yard gate starts however the player left it (an older
+    // save, or a fresh game, starts open — the pre-#55 behavior). This has to
+    // run after _buildCollision, which is what creates the gate's zone and
+    // the obstacle list _setYardDoor rewrites.
+    this._setYardDoor(this._save?.yardDoorOpen !== false);
     this._buildPlayer();
 
     this.cameras.main.setBounds(0, 0, WORLD.w, WORLD.h);
@@ -280,6 +287,10 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       economyTotal: this.economy.total,
       clockDay: this.clock.day,
       clockHourFloat: this.clock.hourFloat,
+      // Issue #55: the yard gate is a thing the player deliberately set, so
+      // it should still be how she left it after a reload. An older save has
+      // no field here and comes back open, which is the pre-#55 behavior.
+      yardDoorOpen: this.yardDoorOpen,
     });
   }
 
@@ -534,6 +545,14 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     };
     this._devRegistry.push({ name: 'YARD_BOWL_SPOTS.food', obj: this._yardBowlImgs.food });
     this._devRegistry.push({ name: 'YARD_BOWL_SPOTS.water', obj: this._yardBowlImgs.water });
+
+    // Issue #55: the gate in the east wall's BACK_DOOR gap. One image whose
+    // texture/position/depth are swapped by _setYardDoor (called from create()
+    // once the saved state is known), so its open/closed state reads at a
+    // glance without a second sprite to keep in sync.
+    this._yardDoorImg = this.add.image(YARD_DOOR.x, YARD_DOOR.y, YARD_DOOR_CLOSED_KEY)
+      .setOrigin(0, 0).setDepth(YARD_DOOR.y + YARD_DOOR.h + 4);
+    this._devRegistry.push({ name: 'YARD_DOOR', obj: this._yardDoorImg });
 
     // Reception computer (issue #10) — baby-announcement messages to owners.
     const computer = this.add.image(COMPUTER_SPOT.x, COMPUTER_SPOT.y, COMPUTER_KEY).setOrigin(0.5, 1).setDepth(COMPUTER_SPOT.y);
@@ -952,10 +971,87 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     this.walls = this.physics.add.staticGroup();
     for (const r of this._outerObstacleRects) this._addWallZone(r, this.walls);
 
+    // Issue #55: the yard gate is the one obstacle that comes and goes. Its
+    // zone is built once and its body simply enabled/disabled by
+    // _setYardDoor, alongside adding/removing its rect from the routing list
+    // below — a shut gate has to block BOTH the player's body and everyone's
+    // pathfinding, or an owner NPC would happily route straight through it.
+    this._yardDoorZone = this._addWallZone(YARD_DOOR, this.walls);
+
     // Shared "what blocks a body" list used by both arcade physics and
     // findPath's routing.
     this.obstacleRects = [...this._outerObstacleRects];
     this._collides = (x, y, r) => this.obstacleRects.some((rect) => circleRectOverlap(x, y, r, rect));
+  }
+
+  // ── The gate to the play yard (issue #55) ────────────────────────────────
+  // Owner: "there should be a closeable door to the outside play area, and if
+  // it is closed when someone drops off their pet, they instead drop their pet
+  // off at the pet's assigned cage" — and, on what an opened cage does while
+  // it's shut: "she stays in her cage." So it gates yard access for real:
+  //
+  //  - shut, it's a solid obstacle in the east wall for the player, the
+  //    animals and the owner NPCs alike (routing AND physics);
+  //  - a delivering owner takes her pet to its assigned cage instead of out
+  //    to the grass (_runOwnerDropOff);
+  //  - opening a cage doesn't send anyone outside (_considerCages).
+  //
+  // The one thing it must never do is strand a pet who was already out when
+  // it shut. Rather than special-casing paths, anyone who needs to come back
+  // IN nudges it open on her way (see _startWalkHome) — so nightfall's
+  // walk-home works regardless of what state the player left it in, which is
+  // the outcome the issue actually asks for.
+  _setYardDoor(open, opts = {}) {
+    const changed = this.yardDoorOpen !== open;
+    this.yardDoorOpen = open;
+
+    if (this._yardDoorZone?.body) this._yardDoorZone.body.enable = !open;
+    this.obstacleRects = open
+      ? [...this._outerObstacleRects]
+      : [...this._outerObstacleRects, YARD_DOOR];
+
+    if (this._yardDoorImg) {
+      if (open) {
+        // Swung out into the grass: an ordinary y-sorted world object, so a
+        // pet standing south of it passes in front and one north of it behind.
+        this._yardDoorImg.setTexture(YARD_DOOR_OPEN_KEY)
+          .setOrigin(0, 0)
+          .setPosition(YARD_DOOR_OPEN_POS.x, YARD_DOOR_OPEN_POS.y)
+          .setDepth(YARD_DOOR_OPEN_POS.y + 16);
+      } else {
+        // Shut, it's part of the WALL — flat-on, drawn just above the wall
+        // tiles and the doorway threshold beneath it (depths 0 and 1 in
+        // _drawWorld) and below everyone who walks up to it. Sorting it by y
+        // like a free-standing object would hide the player behind it while
+        // she stood at the door.
+        this._yardDoorImg.setTexture(YARD_DOOR_CLOSED_KEY)
+          .setOrigin(0, 0)
+          .setPosition(YARD_DOOR.x, YARD_DOOR.y)
+          .setDepth(3);
+      }
+    }
+    if (changed && opts.notify) this.game.events.emit(EVENTS.NOTIFY, opts.notify);
+  }
+
+  // Opening/closing it is a player ACTION, so it gets no notification of its
+  // own (owner note 2026-07-29: "we really only want notifications for animal
+  // needs, not for actions we've taken") — the gate's own open/closed art is
+  // the feedback, same convention as a filled bowl.
+  _toggleYardDoor() {
+    this._setYardDoor(!this.yardDoorOpen);
+  }
+
+  // The point on the gate nearest the player, so it's interactable from
+  // anywhere along its height (and from either side) rather than only from
+  // dead-center — same clamp-to-rect trick _findOpenCageNear uses.
+  _yardDoorTarget() {
+    const rect = this.yardDoorOpen
+      ? { x: YARD_DOOR.x, y: YARD_DOOR.y, w: YARD_DOOR.w + 8, h: YARD_DOOR.h }
+      : YARD_DOOR;
+    return {
+      x: Phaser.Math.Clamp(this.player.x, rect.x, rect.x + rect.w),
+      y: Phaser.Math.Clamp(this.player.y, rect.y, rect.y + rect.h),
+    };
   }
 
   _addWallZone(r, group) {
@@ -1091,7 +1187,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     };
     followOwner();
 
-    const spot = this._openYardSpot(stay);
+    // Issue #55 (owner: "if it is closed when someone drops off their pet,
+    // they instead drop their pet off at the pet's assigned cage"). She's had
+    // a real cage since check-in (issue #54), so with the gate shut her owner
+    // simply walks her to it — which is also the only destination that's
+    // actually reachable, since a shut gate blocks routing east.
+    const cage = CAGES[stay.cageSection]?.[stay.cageSlot];
+    const toCage = !this.yardDoorOpen && !!cage;
+    const spot = toCage ? cageAnimalSpot(cage) : this._openYardSpot(stay);
+
     this._startWalk(owner, spot.x, spot.y, {
       speed: OWNER_WALK_SPEED,
       onStep: followOwner,
@@ -1100,10 +1204,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         // Same "she's out of the box and settled now" beat a cage drop-off
         // used to get (issue #21), played right where she's set down.
         if (stay.carryKind !== CARRY_KIND.NONE) this._playUnboxing(spot.x, spot.y, stay.carryKind);
-        stay.location = LOCATION.YARD;
-        this._renderStay(stay, spot.x, spot.y);
-        this._syncTieBreakers(); // a new guest may now match someone already here
-        this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived — she's out playing in the yard!`);
+        if (toCage) {
+          this._settleInCage(stay, stay.cageSection, stay.cageSlot);
+          this._syncTieBreakers();
+          this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived — she's settling into her cage!`);
+        } else {
+          stay.location = LOCATION.YARD;
+          this._renderStay(stay, spot.x, spot.y);
+          this._syncTieBreakers(); // a new guest may now match someone already here
+          this.game.events.emit(EVENTS.NOTIFY, `${stay.animal.name} arrived — she's out playing in the yard!`);
+        }
         this._walkOwnerOut(stay);
       },
     });
@@ -1248,6 +1358,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       return;
     }
 
+    // Issue #55 (owner, asked what an opened cage does with the gate shut:
+    // "she stays in her cage"). Belt and braces with _considerCages, which
+    // doesn't offer the action at all in that state — but _openCage is
+    // reachable from elsewhere, and sending her to a yard she can't route to
+    // would walk her straight through a closed gate.
+    if (!this.yardDoorOpen) {
+      this.game.events.emit(EVENTS.NOTIFY, `The gate to the play yard is closed — ${stay.animal.name} stays in her cage.`);
+      return;
+    }
+
     // Nobody waiting for her — she lets herself out to the play yard. Her
     // cage stays hers the whole time (belongsToSection already treats a
     // yard trip as still occupying the slot), so the nameplate, bowls and
@@ -1278,6 +1398,16 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   _startWalkHome(stay) {
     const rec = this._staySprites.get(stay);
     if (!rec || this._isWalking(stay)) return;
+    // Issue #55: "pets already outside when the door closes must still be
+    // able to get back in — don't strand anyone; nightfall walk-home must
+    // work regardless of door state." Coming IN through a shut gate nudges it
+    // open, rather than the alternative of routing her through solid wood or
+    // leaving her out in the grass all night. It stays open afterwards — she
+    // has no hands to close it behind her, and leaving it swinging is the
+    // honest, visible outcome.
+    if (!this.yardDoorOpen && stay.location === LOCATION.YARD) {
+      this._setYardDoor(true, { notify: `${stay.animal.name} nudged the gate open to come back inside!` });
+    }
     let sectionKey = stay.cageSection;
     let slot = stay.cageSlot;
     // Confirmed edge case (issue #45): a pet with no home to walk to picks
@@ -3302,12 +3432,25 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
       if (this.night.active && !bathroomDog) continue;
       const rec = this._staySprites.get(stay);
+      if (!rec) continue;
       // Say where she's headed — a checkout-ready pet walks to her owner, a
       // dog who needs to go (and everyone else) heads out to the yard.
-      const where = stay.checkoutReady && this._checkoutOwners.get(stay)?.arrived
+      const toOwner = stay.checkoutReady && this._checkoutOwners.get(stay)?.arrived;
+      // Issue #55: with the gate shut she stays in her cage ("she stays in
+      // her cage" — owner), so the only honest thing the button can say is
+      // why. Shown greyed rather than hidden: a silent dead press at her cage
+      // is exactly what issue #58's prompts exist to prevent, and the reason
+      // is a thing the player can go and fix.
+      if (!toOwner && !this.yardDoorOpen) {
+        r.consider(rec.sprite.x, rec.sprite.y,
+          `${stay.animal.name} can't go out — the gate to the play yard is closed`,
+          () => {}, { disabled: true });
+        continue;
+      }
+      const where = toOwner
         ? `Open ${stay.animal.name}'s cage — she'll go to her owner`
         : `Open ${stay.animal.name}'s cage — she'll go out to play`;
-      if (rec) r.consider(rec.sprite.x, rec.sprite.y, where, () => this._openCage(stay));
+      r.consider(rec.sprite.x, rec.sprite.y, where, () => this._openCage(stay));
     }
   }
 
@@ -3431,6 +3574,19 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
 
     for (const mess of this.messes) {
       consider(mess.x, mess.y, 'Clean up the mess', () => this._cleanMess(mess));
+    }
+
+    // Issue #55: the gate to the play yard. It's a world object rather than an
+    // animal, so it belongs on ACT alongside the other walk-up-and-use things,
+    // not on the handle button. Targeted at the nearest point along its whole
+    // height (_yardDoorTarget), so it works from anywhere in the doorway and
+    // from either side of the wall — including from the grass, which is what
+    // stops the player shutting herself out.
+    {
+      const at = this._yardDoorTarget();
+      consider(at.x, at.y,
+        this.yardDoorOpen ? 'Close the gate to the play yard' : 'Open the gate to the play yard',
+        () => this._toggleYardDoor());
     }
 
     // Issue #37: the computer's only for SENDING now — she needs her photo
