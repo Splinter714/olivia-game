@@ -3861,17 +3861,32 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
   // out to play and carrying a checkout-ready pet over to her owner, and it's
   // also how a dog who needs the bathroom gets outside (issue #38 — she does
   // her business out there on her own; no separate leash minigame).
-  _considerCages(r) {
+  // Issue #82 ("long-press a cage to grab her straight out, same as the
+  // yard's tap-sends-home/hold-picks-up-directly pattern in
+  // _considerLoosePets"): `actor` is threaded through here now purely to
+  // hand off to _pickUp — she's the one whose hands end up full.
+  _considerCages(actor, r) {
     for (const stay of this.roster.stays) {
       if (stay.location !== LOCATION.CAGE) continue;
       if (this._isWalking(stay)) continue;
-      // Cage-opening is skipped at night — everyone should be home asleep —
-      // EXCEPT for a dog who currently needs the bathroom, the same exemption
-      // the old leash flow had. (Real game logic, not a tie-break workaround.)
-      const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
-      if (this.night.active && !bathroomDog) continue;
       const rec = this._staySprites.get(stay);
       if (!rec) continue;
+      // Cage-opening (i.e. SENDING her outside) is skipped at night —
+      // everyone should be home asleep — EXCEPT for a dog who currently
+      // needs the bathroom, the same exemption the old leash flow had. (Real
+      // game logic, not a tie-break workaround.) That's specifically about
+      // sending her out though: picking her straight up isn't "sending her
+      // anywhere", so issue #82 keeps that available even while she's
+      // asleep — same as a yard pet already stays handle-able at night
+      // (_considerLoosePets). Tap still does nothing at night (there's
+      // nowhere honest to send her), so it's shown disabled with the reason.
+      const bathroomDog = stay.animal.species === 'dog' && stay.needs.bathroom;
+      if (this.night.active && !bathroomDog) {
+        r.consider(rec.sprite.x, rec.sprite.y,
+          `${stay.animal.name} is asleep for the night`,
+          () => {}, { disabled: true, hint: 'hold to pick her up instead', hold: () => this._pickUp(actor, stay) });
+        continue;
+      }
       // Say where she's headed — a checkout-ready pet walks to her owner, a
       // dog who needs to go (and everyone else) heads out to the yard.
       const toOwner = stay.checkoutReady && this._checkoutOwners.get(stay)?.arrived;
@@ -3879,17 +3894,27 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // her cage" — owner), so the only honest thing the button can say is
       // why. Shown greyed rather than hidden: a silent dead press at her cage
       // is exactly what issue #58's prompts exist to prevent, and the reason
-      // is a thing the player can go and fix.
+      // is a thing the player can go and fix. That's about SENDING her
+      // outside though — a long-press pickup still works here (issue #82),
+      // so `hold` rides along on this disabled branch instead of being
+      // skipped alongside the disabled tap.
       if (!toOwner && !this.yardDoorOpen) {
         r.consider(rec.sprite.x, rec.sprite.y,
           `${stay.animal.name} can't go out — the gate to the play yard is closed`,
-          () => {}, { disabled: true });
+          () => {}, {
+            disabled: true,
+            hint: 'hold to pick her up instead',
+            hold: () => this._pickUp(actor, stay),
+          });
         continue;
       }
       const where = toOwner
         ? `Open ${stay.animal.name}'s cage — she'll go to her owner`
         : `Open ${stay.animal.name}'s cage — she'll go out to play`;
-      r.consider(rec.sprite.x, rec.sprite.y, where, () => this._openCage(stay));
+      r.consider(rec.sprite.x, rec.sprite.y, where, () => this._openCage(stay), {
+        hint: 'hold to pick her up instead',
+        hold: () => this._pickUp(actor, stay),
+      });
     }
   }
 
@@ -3949,7 +3974,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     if (actor.carrying) return this._resolveDropoff(actor);
 
     const r = this._resolver(actor);
-    this._considerCages(r);
+    this._considerCages(actor, r);
     this._considerLoosePets(actor, r);
     return r.best;
   }
