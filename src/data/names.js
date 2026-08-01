@@ -140,6 +140,15 @@ const PREFIXES = ['Little', 'Baby', 'Sir', 'Lady', 'Mini', 'Sweet', 'Fancy', 'Wi
 // species — names must be globally unique, not just unique per species.
 const usedNames = new Set();
 
+// The CORE name (the bare pool word, e.g. "Cupcake") behind every name ever
+// handed out, whether it was given bare or under a synthesized adjective
+// prefix ("Little Cupcake"). Adjective variants are fine and intentional —
+// but the same core word must never back two different animals at once,
+// bare or under different prefixes ("Cupcake" + "Little Cupcake", or
+// "Little Cupcake" + "Sir Cupcake", are both forbidden). See randomName()/
+// synthesizeName() below for how this is checked and reserved.
+const usedCoreNames = new Set();
+
 // Per-species-per-stage shuffled queue, drained WITHOUT refilling — once a
 // pool is exhausted, randomName() falls through to synthesizing new names
 // instead of repeating it. Adults draw only from `girl`; babies draw from
@@ -171,31 +180,39 @@ function queueFor(speciesKey, stage, rng) {
 
 // Marks `name` as taken so it can never be handed out again — call this for
 // any explicitly-supplied name (e.g. data/animal.js's opts.name) so manual
-// names can't collide with a later random pick.
-export function registerName(name) {
+// names can't collide with a later random pick. `core` is the bare word
+// backing it (defaults to `name` itself, i.e. a plain unprefixed name) —
+// reserving it means no OTHER name, bare or under a different adjective,
+// can reuse that same core word either.
+export function registerName(name, core = name) {
   usedNames.add(name);
+  usedCoreNames.add(core);
 }
 
 // Synthesizes a fresh, never-used name once a pool is drained: tries
-// "<prefix> <base>" combos drawn from that species/stage's own pool, then
-// falls back to "<base> <counter>" if every combo is somehow already taken
-// (astronomically unlikely, but keeps this provably terminating).
+// "<prefix> <base>" combos drawn from that species/stage's own pool, using
+// only a base whose core word isn't already spoken for (bare or under a
+// different prefix), then falls back to a synthetic "<base> <counter>" core
+// if every base in the pool is somehow already taken (astronomically
+// unlikely, but keeps this provably terminating).
 function synthesizeName(speciesKey, stage, rng) {
   const basePool = poolFor(speciesKey, stage);
   for (let attempt = 0; attempt < 200; attempt++) {
     const prefix = PREFIXES[Math.floor(rng() * PREFIXES.length)];
     const base = basePool[Math.floor(rng() * basePool.length)];
+    if (usedCoreNames.has(base)) continue;
     const candidate = `${prefix} ${base}`;
-    if (!usedNames.has(candidate)) return candidate;
+    if (!usedNames.has(candidate)) return { name: candidate, core: base };
   }
   const base = basePool[Math.floor(rng() * basePool.length)];
   let counter = 2;
-  let candidate = `${base} ${counter}`;
-  while (usedNames.has(candidate)) {
+  let core = `${base} ${counter}`;
+  while (usedCoreNames.has(core)) {
     counter += 1;
-    candidate = `${base} ${counter}`;
+    core = `${base} ${counter}`;
   }
-  return candidate;
+  const prefix = PREFIXES[Math.floor(rng() * PREFIXES.length)];
+  return { name: `${prefix} ${core}`, core };
 }
 
 // Picks a never-before-used name for `speciesKey` (falls back to a generic
@@ -210,14 +227,15 @@ export function randomName(speciesKey, rng = Math.random, stage = 'adult') {
   const queue = queueFor(speciesKey, stage, rng);
   while (queue.length) {
     const candidate = queue.pop();
-    if (!usedNames.has(candidate)) {
+    if (!usedNames.has(candidate) && !usedCoreNames.has(candidate)) {
       registerName(candidate);
       return candidate;
     }
-    // else: this exact string was already registered (e.g. by the other
-    // stage's queue, or manually via opts.name) — skip it and keep draining.
+    // else: this exact string (or its core word) was already registered —
+    // e.g. by the other stage's queue, manually via opts.name, or as the
+    // base of a synthesized prefixed name — skip it and keep draining.
   }
-  const name = synthesizeName(speciesKey, stage, rng);
-  registerName(name);
+  const { name, core } = synthesizeName(speciesKey, stage, rng);
+  registerName(name, core);
   return name;
 }

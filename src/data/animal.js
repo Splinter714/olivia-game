@@ -67,7 +67,9 @@ export function createAnimal(speciesKey, opts = {}) {
   // Adults are always girl names (every grown-up is a potential mom, per
   // DESIGN.md's family system); babies can be a girl or boy name.
   const name = opts.name ?? randomName(speciesKey, undefined, stage);
-  registerName(name);
+  // randomName() already registers/reserves names it generates itself —
+  // only an explicitly-supplied opts.name still needs registering here.
+  if (opts.name) registerName(name);
 
   return {
     id: opts.id ?? nextId(speciesKey),
