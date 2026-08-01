@@ -312,6 +312,54 @@ export const YARD_BOWL_SPOTS = {
   water: { x: YARD_X0 + 70, y: ROOM.y + ROOM.h - 60 },
 };
 
+// ── The shared pond (issue #77) ─────────────────────────────────────────────
+// Owner: "when you want it to go outside, you use the travel tank and take
+// it to a pond in the play pen." One pond for every fish (an explicit,
+// flagged assumption in the confirmed plan — mirrors the earlier "one play
+// yard" consolidation, issue #47), not one per fish. Parked over on the
+// yard's far (east) side, well clear of both the gate (west edge, mid-height
+// — YARD_GATE_Y below) and the food/water bowls (bottom-left) so a fish
+// delivered to either doesn't visually collide with this.
+export const POND_SIZE = { w: 130, h: 90 };
+export const POND_SPOT = { x: YARD_X1 - 130, y: YARD_RECT.y + 130 };
+export const POND_RECT = {
+  x: POND_SPOT.x - POND_SIZE.w / 2,
+  y: POND_SPOT.y - POND_SIZE.h / 2,
+  w: POND_SIZE.w,
+  h: POND_SIZE.h,
+};
+
+// Small fan so more than one fish swimming at the pond (or resting travel
+// tanks parked at its edge) don't all stack on the exact same point — same
+// "fan simultaneous arrivals" idea as YARD_GATE_FAN above, just smaller since
+// the pond itself is small.
+const POND_SWIM_FAN = [
+  { dx: 0, dy: 0 }, { dx: 22, dy: -12 }, { dx: -22, dy: 12 },
+  { dx: 28, dy: 14 }, { dx: -28, dy: -10 }, { dx: 10, dy: 22 },
+];
+export function pondSwimSpot(index = 0) {
+  const fan = POND_SWIM_FAN[index % POND_SWIM_FAN.length];
+  return { x: POND_SPOT.x + fan.dx, y: POND_SPOT.y + fan.dy };
+}
+
+// Resting travel tanks sit at the pond's edge (not out in the water) —
+// fanned along the near side so a handful of them read as a little row of
+// carriers left by the water rather than a single stacked prop.
+export function travelTankPondRestSpot(index = 0) {
+  return {
+    x: POND_SPOT.x - POND_SIZE.w / 2 - 18 - (index % 3) * 22,
+    y: POND_SPOT.y + POND_SIZE.h / 2 - 6 + Math.floor(index / 3) * 20,
+  };
+}
+
+// Where a fish's OWN travel tank rests by default — "next to her home tank"
+// (owner) — tucked in the cage's bottom-right corner, clear of her bowls
+// (bottom-center) and where a litter box would sit (mid-left, not that a
+// fish ever gets one — issue #77 excludes her from that system entirely).
+export function travelTankHomeSpot(cage) {
+  return { x: cage.x + cage.w * 0.86, y: cage.y + cage.h * 0.9 };
+}
+
 // The reception computer (issue #10) — "the player has a computer... to send
 // a message with a picture of the babies to the owners" (DESIGN.md). Sits on
 // the right side of the reception desk, clear of the desk's own graphics.

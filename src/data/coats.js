@@ -291,6 +291,36 @@ const LIZARD_COATS = {
   },
 };
 
+// ── Fish (issue #77) ─────────────────────────────────────────────────────────
+// No fur or scale pattern to speak of on a little pet fish, so the variation
+// lives entirely in body colour plus one baked-in spotted "koi" look, same
+// convention as the leopard-gecko lizard/speckled-sparrow bird coats above
+// (`patterns: ['spotted']` locks koi to always show her spots rather than
+// rolling the plain axis).
+const FISH_COATS = {
+  goldfish: {
+    label: 'Goldfish',
+    body: { hi: 0xffb15c, mid: 0xf2823a, lo: 0xc25f22 },
+    belly: 0xffe1b0, eye: 0x1c1410, mark: 0xffffff,
+  },
+  blue: {
+    label: 'Blue',
+    body: { hi: 0x8fd0f2, mid: 0x4fa8dc, lo: 0x2e77a8 },
+    belly: 0xdff4ff, eye: 0x1c1410, mark: 0x1c4a66,
+  },
+  silver: {
+    label: 'Silver',
+    body: { hi: 0xf0f2f5, mid: 0xc9ced6, lo: 0x9aa0aa },
+    belly: 0xffffff, eye: 0x1c1410, mark: 0x6f7580,
+  },
+  koi: {
+    label: 'Koi',
+    body: { hi: 0xffffff, mid: 0xf2eee7, lo: 0xd6cfc3 },
+    belly: 0xffffff, eye: 0x1c1410, mark: 0xe8622a,
+    patterns: ['spotted'],
+  },
+};
+
 // ── Dragon (secret bonus guest) ─────────────────────────────────────────────
 // A small, fun set for a hidden extra, not a fully-fleshed 9th species: four
 // storybook-dragon colours plus a light 'scaled'/'smooth' pattern axis (a
@@ -374,6 +404,7 @@ export const COATS = {
   snake: SNAKE_COATS,
   bird: BIRD_COATS,
   lizard: LIZARD_COATS,
+  fish: FISH_COATS,
   dragon: DRAGON_COATS,
 };
 
@@ -390,6 +421,7 @@ export const PATTERNS = {
   snake: ['solid', 'banded'],
   bird: ['solid', 'speckled'],
   lizard: ['solid', 'striped', 'speckled'], // issue #28
+  fish: ['solid', 'spotted'], // issue #77
   dragon: ['smooth', 'scaled'],
 };
 

@@ -117,6 +117,19 @@ export const NAME_POOLS = {
       'Rango', 'Pancake', 'Mochi', 'Dash', 'Sprig',
     ],
   },
+  // Issue #77: fish — splashy, watery, kid-friendly names in the same
+  // register as everyone else's.
+  fish: {
+    girl: [
+      'Bubbles', 'Splash', 'Marina', 'Pearl', 'Goldie', 'Coral',
+      'Finley', 'Guppy', 'Misty', 'Shimmer', 'Aqua', 'Dot',
+      'Eenie Beanie', 'Jelly Bean', 'Billie', 'Jeanstew',
+    ],
+    boy: [
+      'Bubba', 'Nemo', 'Finn', 'Bloop', 'Splashy', 'Puddles',
+      'Squirt', 'Gil', 'Ripple', 'Flipper',
+    ],
+  },
   // Secret bonus guest (src/dev/secretDragon.js) — playful storybook-dragon
   // names, same girl/boy shape as every other species.
   dragon: {

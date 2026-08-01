@@ -18,6 +18,11 @@ export const WANDER = {
   bird:       { interval: [900, 2000], amp: 10 },  // quick hops around the nest
   lizard:     { interval: [1100, 3400], amp: 12 }, // darts, then basks a while
   dragon:     { interval: [2400, 4800], amp: 9 },  // secret bonus guest — a calm little waddle
+  // Issue #77: a fish never wanders far — she's confined to her home tank or
+  // the shared pond either way (KennelScene forces her into the small
+  // anchored-drift branch even while "in the yard" — see _updateWander),
+  // so a gentle in-place swim reads better than a big roam.
+  fish:       { interval: [2000, 4200], amp: 5 },
 };
 
 // Yard play reads more energetic/larger-range than in-cage wander (DESIGN.md

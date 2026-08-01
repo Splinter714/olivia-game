@@ -37,6 +37,11 @@ export const CARRY_KIND = {
   BOX: 'box',
   BASKET: 'basket',
   NONE: 'none', // guinea pig / hamster / bunny — just gently picked up
+  // Issue #77: fish — not just an arrival container, this is the ONLY way a
+  // fish ever moves anywhere (no self-walk at all — see KennelScene's
+  // travel-tank plumbing). A persistent per-fish prop, unlike every other
+  // CARRY_KIND here which is a one-time reception hand-off container.
+  TANK: 'tank',
 };
 
 const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
@@ -98,12 +103,15 @@ export function anyOpenCageAnywhere(stays) {
 // How many named individuals live in the "returning guest" pool per species —
 // small on purpose so the same names come back around within a single session
 // ("every animal always comes back again someday").
-const RETURNING_POOL_SIZE = { turtle: 3, guineaPig: 2, hamster: 2, bunny: 2, cat: 3, dog: 3, snake: 2, bird: 2, lizard: 2 };
+const RETURNING_POOL_SIZE = { turtle: 3, guineaPig: 2, hamster: 2, bunny: 2, cat: 3, dog: 3, snake: 2, bird: 2, lizard: 2, fish: 2 };
 
 function carryKindForSpecies(speciesKey) {
   if (speciesKey === 'dog') return CARRY_KIND.LEASH;
   if (speciesKey === 'cat') return CARRY_KIND.CAGE;
   if (speciesKey === 'turtle') return CARRY_KIND.BOX;
+  // Issue #77: always her travel tank, never the generic eggs-basket — see
+  // the hasEggs override in spawnArrival below.
+  if (speciesKey === 'fish') return CARRY_KIND.TANK;
   return CARRY_KIND.NONE;
 }
 
@@ -290,7 +298,10 @@ export function createRoster(saved = null) {
       // (different) cage later just overwrites these two fields, same as it
       // always set them.
       cageIndex: cage,
-      carryKind: primary.hasEggs ? CARRY_KIND.BASKET : carryKindForSpecies(speciesKey),
+      // Issue #77: a fish with eggs still arrives in her own travel tank, not
+      // the generic eggs-basket every other egg-layer gets — the tank is her
+      // ONLY hand-off object, eggs or not (she has no other way to move).
+      carryKind: (primary.hasEggs && speciesKey !== 'fish') ? CARRY_KIND.BASKET : carryKindForSpecies(speciesKey),
       // Feeding/potty chores (issues #6/#7) — see data/needs.js for the shape.
       // Timers only actually count down once the stay has settled into its
       // section; KennelScene ticks them.

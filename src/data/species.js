@@ -101,6 +101,26 @@ export const SPECIES = {
     size: { w: 26, h: 12 },
     babyScale: 0.6,
   },
+  // Issue #77: fish — the 10th kennel species, and a genuinely different
+  // interaction model from every other one: she has no legs, so she never
+  // walks herself anywhere (no self-walk to the yard, no nightfall walk
+  // home, no self-walk to a waiting owner at checkout). The player carries
+  // her everywhere in her travel tank instead (see data/roster.js's
+  // CARRY_KIND.TANK and KennelScene's travel-tank plumbing) — her home is a
+  // fish-tank-styled cage (art/props.js's drawFishTankBg/Fg, extending the
+  // turtle tank treatment) and her one destination out is the single shared
+  // pond in the play yard (data/props.js's POND_SPOT/POND_RECT). Same
+  // eggs-or-babies family pattern as turtle/snake/bird/lizard ("Eggs, like
+  // turtles/snakes/birds/lizards" — owner). No bathroom need/mess at all
+  // (excluded entirely, not just unlucky — see data/needs.js), and her cage
+  // gets a fitted waterproof cover at night instead of the ordinary blanket.
+  fish: {
+    key: 'fish',
+    label: '🐟 Fish',
+    family: FAMILY.EGGS_OR_BABIES,
+    size: { w: 14, h: 10 },
+    babyScale: 0.6,
+  },
   // Secret bonus guest (src/dev/secretDragon.js's "DRAGON" cheat code) — a
   // SMALL baby dragon, not an imposing full-size one. Uses the same
   // eggs-or-babies family pattern as turtle/snake/bird (reuses data/births.js'
