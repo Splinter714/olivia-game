@@ -237,8 +237,27 @@ export function createRoster(saved = null) {
     }
   }
 
+  // Owner note 2026-07-31: "Every new guest should be weighted random with
+  // weighting based on current guests of that type to try to even it out
+  // while keeping randomization." Plain uniform picking let the kennel drift
+  // lopsided (e.g. six dogs and zero lizards) purely by chance. Inverse-count
+  // weighting biases toward whichever species currently has the fewest guests
+  // — a species with 0 stays is `SPECIES_KEYS.length` times likelier than one
+  // already at 5+ — while every species keeps SOME chance regardless of how
+  // crowded it already is, so it still reads as random, not a strict
+  // round-robin.
   function pickSpecies(rng) {
-    return SPECIES_KEYS[Math.floor(rng() * SPECIES_KEYS.length)];
+    const weights = SPECIES_KEYS.map((key) => {
+      const count = stays.filter((s) => s.animal.species === key).length;
+      return 1 / (count + 1);
+    });
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    let r = rng() * total;
+    for (let i = 0; i < SPECIES_KEYS.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return SPECIES_KEYS[i];
+    }
+    return SPECIES_KEYS[SPECIES_KEYS.length - 1]; // floating-point rounding fallback
   }
 
   // Builds the group of animal instances that arrive together for `speciesKey`,
