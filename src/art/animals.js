@@ -1104,6 +1104,107 @@ function drawLizard(g, bob, [lhf, lhn, lff, lfn], look, G) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// FISH (issue #77) — design grid 14x10 (fry 9x6). No legs at all, closest in
+// spirit to the snake above: instead of a leg cycle, "walking" is a little
+// tail-fin swish plus a slight body bob — a swim-in-place animation, since
+// KennelScene never actually paths a fish anywhere (she's carried the whole
+// way in her travel tank; see data/roster.js's CARRY_KIND.TANK). The frame
+// sheet still exists and still gets swapped idle/walk like everyone else's
+// (art/animals.js has no idea KennelScene never plays her walk frames in
+// anger) — cheap to keep and one less special case elsewhere.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const FISH_GEO = {
+  adult: {
+    W: 14, H: 10,
+    body: { cx: 6.6, cy: 5.2, w: 9.6, h: 5.6 },
+    tail: { baseX: 2, len: 3.4, h: 4.6 },
+    dorsal: { x: 6.2, y: 1.6, w: 3, h: 2.2 },
+    pectoral: { x: 8.4, y: 6.6, w: 2.6, h: 1.6 },
+    eye: { x: 10.4, y: 4.4, r: 0.85 },
+    gill: { x: 9.2, y: 4.9, r: 0.9 },
+    dot: { x: 6.6, y: 6.6, rad: 1 },
+    tattoo: { x: 3.6, y: 6.8 },
+  },
+  baby: {
+    W: 9, H: 6,
+    body: { cx: 4.2, cy: 3.2, w: 6, h: 3.5 },
+    tail: { baseX: 1.1, len: 2.1, h: 2.7 },
+    dorsal: { x: 3.9, y: 0.8, w: 1.9, h: 1.3 },
+    pectoral: { x: 5.4, y: 3.9, w: 1.6, h: 1 },
+    eye: { x: 6.6, y: 2.7, r: 0.5 },
+    gill: { x: 5.9, y: 3.0, r: 0.55 },
+    dot: { x: 4.2, y: 4, rad: 0.6 },
+    tattoo: { x: 2.2, y: 4.2 },
+  },
+};
+
+// `pose` is { swish, bob } — `swish` sweeps the tail fin side to side (a
+// swim stroke); `bob` nudges the whole body up/down a touch on the frames
+// that pair with a strong tail stroke, same "reads as alive" idea the
+// snake's phase/bob gets.
+function drawFish(g, pose, look, G) {
+  const c = coatDef('fish', look);
+  const { hi, mid, lo } = c.body;
+  const pat = look?.pattern || 'solid';
+  const swish = pose.swish || 0;
+  const bob = pose.bob || 0;
+  const b = G.body;
+  const cy = b.cy + bob;
+
+  // ── Tail fin ── a fanned triangle trailing off the back of the body,
+  // swishing side to side as she swims.
+  const tb = G.tail;
+  g.fillStyle(lo, 1);
+  g.fillTriangle(
+    tb.baseX, cy - tb.h / 2,
+    tb.baseX, cy + tb.h / 2,
+    tb.baseX - tb.len + swish, cy + swish * 0.35,
+  );
+
+  // ── Body ── one plump ellipse, shaded top-to-bottom.
+  g.fillStyle(mid, 1); g.fillEllipse(b.cx, cy, b.w, b.h);
+  g.fillStyle(hi, 1);  g.fillEllipse(b.cx - b.w * 0.06, cy - b.h * 0.28, b.w * 0.62, b.h * 0.38);
+  g.fillStyle(c.belly ?? lo, 1); g.fillEllipse(b.cx, cy + b.h * 0.3, b.w * 0.7, b.h * 0.3);
+
+  // ── Pattern overlay ── koi-style spots.
+  if (pat === 'spotted') {
+    g.fillStyle(c.mark, 0.9);
+    g.fillCircle(b.cx - b.w * 0.14, cy - b.h * 0.06, b.h * 0.16);
+    g.fillCircle(b.cx + b.w * 0.16, cy + b.h * 0.12, b.h * 0.13);
+    g.fillCircle(b.cx - b.w * 0.02, cy + b.h * 0.24, b.h * 0.11);
+  }
+
+  drawTattoo(g, G.tattoo.x, G.tattoo.y + bob, look?.tattoo, c.body);
+  // Fish don't wear collars in a tank — a dab of coloured paint on the flank
+  // does the same tie-breaking job (same trick the turtle/snake/bird/lizard
+  // dot does).
+  drawShellDot(g, { x: G.dot.x, y: G.dot.y + bob, rad: G.dot.rad }, look?.collar);
+
+  // ── Dorsal fin ── a small fanned triangle riding the back.
+  const d = G.dorsal;
+  g.fillStyle(lo, 1);
+  g.fillTriangle(d.x - d.w / 2, d.y + d.h + bob, d.x + d.w / 2, d.y + d.h + bob, d.x, d.y + bob);
+
+  // ── Pectoral fin ── a small side fin just behind the gill, fluttering
+  // faintly with the tail's swish.
+  const p = G.pectoral;
+  g.fillStyle(mid, 1);
+  g.fillTriangle(
+    p.x, p.y + bob,
+    p.x + p.w, p.y + bob + swish * 0.15,
+    p.x + p.w * 0.3, p.y + p.h + bob,
+  );
+
+  // ── Gill mark ──
+  g.fillStyle(lo, 0.55); g.fillCircle(G.gill.x, cy + (G.gill.y - b.cy), G.gill.r);
+
+  // ── Eye ──
+  g.fillStyle(0xffffff, 1); g.fillCircle(G.eye.x, cy + (G.eye.y - b.cy), G.eye.r);
+  g.fillStyle(c.eye, 1);    g.fillCircle(G.eye.x, cy + (G.eye.y - b.cy), G.eye.r * 0.55);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // DRAGON (secret bonus guest, src/dev/secretDragon.js) — design grid 20x16
 // (hatchling 12x10). A small reptilian quadruped, closest to the turtle's
 // waddling gait (low-lift legs, no proper walk cycle needed), plus a pair of
@@ -1340,6 +1441,20 @@ const BUILDERS = {
     geo: DRAGON_GEO, walkFps: 6, // slow, low-lift waddle, same tempo family as the turtle
     build: (scene, key, G, look) =>
       buildFrames(scene, key, G.W, G.H, (g, bob, legs) => drawDragon(g, bob, legs, look, G), idleWalkLegs(1.2)),
+  },
+  fish: {
+    geo: FISH_GEO, walkFps: 6, // gentle swim-in-place stroke
+    build: (scene, key, G, look) => {
+      const poses = [
+        { swish: 0, bob: 0 },
+        { swish: 0.7, bob: 0 },        // idle fin flutter
+        { swish: 0, bob: 0 },
+        { swish: -1.6, bob: 0.3 },
+        { swish: 0, bob: 0 },
+        { swish: 1.6, bob: -0.3 },
+      ];
+      buildPoseFrames(scene, key, G.W, G.H, (g, p) => drawFish(g, p, look, G), poses);
+    },
   },
 };
 

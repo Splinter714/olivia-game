@@ -6,7 +6,7 @@
 // art/animals.js.
 import { gen } from './_gen.js';
 import {
-  LITTER_BOX_SIZE, CAGE_W, CAGE_H, OVEN, BED, YARD_DOOR, YARD_DOOR_LEAF,
+  LITTER_BOX_SIZE, CAGE_W, CAGE_H, OVEN, BED, YARD_DOOR, YARD_DOOR_LEAF, POND_SIZE,
 } from '../data/props.js';
 import { SPECIES_KEYS } from '../data/species.js';
 
@@ -48,6 +48,9 @@ export const BOWL_KEY_BY_SPECIES = {
   // "ordinary per-cage bowls" and "whatever fits the style" — a shallow dish
   // in a terrarium needs no new art).
   lizard: BOWL_SIMPLE_KEY,
+  // Issue #77: fish reuse the generic feeding system as-is (#44) — same small
+  // plain dish, no tank-specific feeding mechanic.
+  fish: BOWL_SIMPLE_KEY,
 };
 // Empty counterparts of every food-bowl variant above (owner note 2026-07-29:
 // "filling a bowl and an animal eating from it should be decoupled" — the
@@ -68,6 +71,7 @@ export const BOWL_EMPTY_KEY_BY_SPECIES = {
   hamster: BOWL_SIMPLE_EMPTY_KEY,
   turtle: BOWL_SIMPLE_EMPTY_KEY,
   lizard: BOWL_SIMPLE_EMPTY_KEY,
+  fish: BOWL_SIMPLE_EMPTY_KEY,
 };
 // Water bowl (owner note 2026-07-29: "same with water bowls") — one shared
 // blue-tinted dish look, full/empty, for every bowl-eligible species (no
@@ -91,6 +95,18 @@ export const TREAT_TRAY_KEY = 'prop-treat-tray';
 export const SHELF_KEY = 'prop-shelf';
 export const BOX_KEY = 'prop-boxes';
 export const BAG_KEY = 'prop-bag';
+// Issue #77 — fish. TRAVEL_TANK_KEY is the PERSISTENT resting prop (parked
+// beside her home tank, or at the pond's edge while she's out playing —
+// KennelScene._refreshTravelTank); it's a different, simpler (non-
+// supersampled) texture from art/carry.js's CARRY_KEY.tank, which is what
+// renders while she's actually being carried, same convention as every
+// other prop-vs-carry-art split in this file. WATERPROOF_COVER_KEY stands in
+// for BLANKET_KEY on a fish's cage at night — same "tucked in" beat, a
+// fitted cover instead of draped fabric, since a blanket doesn't work over a
+// tank of water. POND_KEY is the shared yard pond itself.
+export const TRAVEL_TANK_KEY = 'prop-travel-tank';
+export const WATERPROOF_COVER_KEY = 'prop-waterproof-cover';
+export const POND_KEY = 'prop-pond';
 // Issue #46: no `tuck` icon anymore — every occupied cage always has a
 // blanket and the animal gets under it herself at night, so there's no
 // "needs tucking in" chore to flag.
@@ -145,6 +161,7 @@ function cageBgDrawFn(key) {
   if (key === 'bird') return drawNestSlotBg;
   if (key === 'lizard') return drawTerrariumSlotBg;
   if (key === 'dragon') return drawDragonCastleBg;
+  if (key === 'fish') return drawFishTankSlotBg;
   return drawCagePenBg;
 }
 
@@ -157,6 +174,7 @@ function cageFgDrawFn(key) {
   if (key === 'bird') return drawNestSlotFg;
   if (key === 'lizard') return drawTerrariumSlotFg;
   if (key === 'dragon') return drawDragonCastleFg;
+  if (key === 'fish') return drawFishTankSlotFg;
   return drawCagePenFg;
 }
 
@@ -182,6 +200,39 @@ function drawIslandSlotBg(g, w, h) {
   g.fillCircle(w * 0.58, h * 0.6, 0.9);
 }
 function drawIslandSlotFg(g, w, h) {
+  g.lineStyle(2, 0xcfe9f2, 0.7).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
+}
+
+// A small individual fish tank (issue #77) — one per fish cage slot, directly
+// extending the turtle tank treatment above: same glass-rimmed pool base, but
+// fully submerged (no sand island to sun on — a fish never comes up for air)
+// with a scattering of gravel, a couple of water plants, and rising bubbles
+// instead. Same BACKGROUND/FOREGROUND split as every other cage look (issue
+// #43): the water/gravel/plants/bubbles are BACKGROUND (behind the fish);
+// the glass-cover rim is FOREGROUND, same "looking at her through glass" read
+// the turtle tank uses.
+function drawFishTankSlotBg(g, w, h) {
+  g.fillStyle(0x1f5878, 1).fillRoundedRect(0, 0, w, h, 8);            // tank frame
+  g.fillStyle(0x3f8fb8, 0.9).fillRoundedRect(2, 2, w - 4, h - 4, 6);   // deep water fill
+  g.fillStyle(0x2a6d90, 0.6).fillRoundedRect(2, 2, w - 4, h * 0.4, 6); // darker band near the surface
+  // Gravel bed along the floor.
+  g.fillStyle(0xb9a97e, 1).fillRoundedRect(2, h * 0.82, w - 4, h * 0.16, 4);
+  g.fillStyle(0x9c8c63, 1);
+  for (let gx = w * 0.1; gx < w * 0.9; gx += w * 0.09) g.fillCircle(gx, h * 0.88 + (gx % 2), 1.1);
+  // A couple of simple water plants swaying up from the gravel.
+  g.fillStyle(0x3f7a3f, 1);
+  g.fillRect(w * 0.18, h * 0.52, w * 0.04, h * 0.32);
+  g.fillEllipse(w * 0.14, h * 0.54, w * 0.14, w * 0.07);
+  g.fillEllipse(w * 0.24, h * 0.6, w * 0.14, w * 0.07);
+  g.fillRect(w * 0.78, h * 0.58, w * 0.04, h * 0.26);
+  g.fillEllipse(w * 0.82, h * 0.6, w * 0.12, w * 0.06);
+  // Rising bubbles.
+  g.fillStyle(0xdff5fa, 0.7);
+  g.fillCircle(w * 0.42, h * 0.28, 1.3);
+  g.fillCircle(w * 0.46, h * 0.18, 1.0);
+  g.fillCircle(w * 0.6, h * 0.34, 1.1);
+}
+function drawFishTankSlotFg(g, w, h) {
   g.lineStyle(2, 0xcfe9f2, 0.7).strokeRoundedRect(1, 1, w - 2, h - 2, 7);
 }
 
@@ -506,6 +557,22 @@ function drawBlanket(g, w, h) {
   g.lineStyle(1.4, 0xc9a15f, 0.9).strokeRoundedRect(1, h * 0.14, w - 2, h * 0.72, h * 0.24);
 }
 
+// Issue #77's stand-in for the blanket above, ONLY ever used on a fish's
+// cage: a fitted waterproof sheet stretched taut over the tank rather than
+// draped fabric (owner: "a piece of waterproof fabric") — a flat taut panel
+// with a shiny plastic sheen and elastic-strap corners holding it down, doing
+// the exact same job (KennelScene._refreshBlanket's tuckedIn day/night swap)
+// with a completely different silhouette.
+function drawWaterproofCover(g, w, h) {
+  g.fillStyle(0x4a6a78, 0.95).fillRoundedRect(0, 0, w, h, 4);           // taut panel
+  g.fillStyle(0x6f97a6, 0.6).fillRoundedRect(2, 2, w - 4, h * 0.42, 3); // plastic sheen near the top
+  g.lineStyle(1, 0x33505c, 0.7);
+  for (let x = w * 0.18; x < w; x += w * 0.28) g.lineBetween(x, 2, x, h - 2); // taut seam lines
+  // Elastic-strap corners.
+  g.fillStyle(0x2e454e, 1);
+  [[0, 0], [w, 0], [0, h], [w, h]].forEach(([cx, cy]) => g.fillCircle(cx, cy, Math.min(w, h) * 0.12));
+}
+
 // Small gold sparkle/star — issue #12's "she's a well-cared-for regular"
 // badge. One is rendered per upgrade a returning animal has earned, so they
 // visibly stack up next to her sprite across repeat visits (DESIGN.md's
@@ -646,6 +713,40 @@ function drawBag(g, w, h) {
 // (Issue #47: the yard divider's post/fence-line art is gone along with the
 // divider itself — the play yard is one single undivided area now.)
 
+// Issue #77 — the travel tank's PERSISTENT resting look (parked beside a
+// fish's home tank by default, or at the pond's edge while she's out
+// playing — KennelScene._refreshTravelTank). Same small glass-tank-with-
+// handle silhouette as art/carry.js's supersampled CARRY_KEY.tank (used only
+// while she's actually being carried), just drawn with this file's plain,
+// non-supersampled technique — the same prop-vs-carry-art split every other
+// furniture item in this file already has (e.g. BLANKET_KEY here vs.
+// CARRY_KEY.leash/cage/box/basket in carry.js).
+function drawTravelTankRest(g, w, h) {
+  const waterH = h * 0.6;
+  const baseY = h * 0.94;
+  g.fillStyle(0x8fa39e, 1).fillRoundedRect(w * 0.06, baseY - h * 0.72, w * 0.88, h * 0.72, 3);
+  g.fillStyle(0xbfe6f2, 0.55).fillRoundedRect(w * 0.1, baseY - waterH, w * 0.8, waterH, 2);
+  g.fillStyle(0xffffff, 0.5);
+  g.fillCircle(w * 0.34, baseY - waterH * 0.5, w * 0.04);
+  g.fillCircle(w * 0.6, baseY - waterH * 0.72, w * 0.03);
+  g.lineStyle(1.6, 0x6b6b76, 1).strokeEllipse(w * 0.5, baseY - h * 0.72, w * 0.7, h * 0.3);
+}
+
+// The shared yard pond (issue #77) — a simple round pool with a sandy-stone
+// rim, deep-blue water, and a couple of lily pads, same flat/legible style as
+// every other yard prop.
+function drawPond(g, w, h) {
+  g.fillStyle(0xcbb888, 1).fillEllipse(w / 2, h / 2, w, h);              // stone/sand rim
+  g.fillStyle(0x2d6f8e, 1).fillEllipse(w / 2, h / 2, w * 0.86, h * 0.82); // deep water
+  g.fillStyle(0x4b9fc4, 0.7).fillEllipse(w * 0.44, h * 0.42, w * 0.5, h * 0.34); // sheen
+  g.fillStyle(0x3f8a4a, 1);
+  g.fillEllipse(w * 0.28, h * 0.62, w * 0.16, h * 0.1);
+  g.fillEllipse(w * 0.68, h * 0.3, w * 0.14, h * 0.09);
+  g.fillStyle(0x2f6b38, 1);
+  g.fillEllipse(w * 0.28, h * 0.62, w * 0.05, h * 0.03);
+  g.fillEllipse(w * 0.68, h * 0.3, w * 0.045, h * 0.03);
+}
+
 export function buildPropTextures(scene) {
   gen(scene, LITTER_BOX_KEY, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h, (g) => drawLitterBox(g, LITTER_BOX_SIZE.w, LITTER_BOX_SIZE.h));
   gen(scene, BOWL_KEY, 24, 18, (g) => drawBowl(g, 24, 18, true));
@@ -670,6 +771,9 @@ export function buildPropTextures(scene) {
   gen(scene, NEED_KEY.photo, 18, 18, (g) => drawNeedBubble(g, 18, 18, 'photo'));
   gen(scene, COMPUTER_KEY, 28, 34, (g) => drawComputer(g, 28, 34));
   gen(scene, BLANKET_KEY, 36, 26, (g) => drawBlanket(g, 36, 26));
+  gen(scene, WATERPROOF_COVER_KEY, 40, 30, (g) => drawWaterproofCover(g, 40, 30));
+  gen(scene, TRAVEL_TANK_KEY, 24, 20, (g) => drawTravelTankRest(g, 24, 20));
+  gen(scene, POND_KEY, POND_SIZE.w, POND_SIZE.h, (g) => drawPond(g, POND_SIZE.w, POND_SIZE.h));
   gen(scene, UPGRADE_KEY, 12, 12, (g) => drawUpgradeStar(g, 12, 12));
   gen(scene, OVEN_KEY, OVEN.w, OVEN.h, (g) => drawOven(g, OVEN.w, OVEN.h));
   gen(scene, BED_KEY, BED.w, BED.h, (g) => drawBed(g, BED.w, BED.h));

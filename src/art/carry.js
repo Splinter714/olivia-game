@@ -24,6 +24,7 @@ export const CARRY_KEY = {
   [CARRY_KIND.CAGE]: 'carry-cage',
   [CARRY_KIND.BOX]: 'carry-box',
   [CARRY_KIND.BASKET]: 'carry-basket',
+  [CARRY_KIND.TANK]: 'carry-tank',
 };
 
 // Same net on-screen scale every animal sprite uses (design-grid px -> 2
@@ -89,6 +90,34 @@ function drawOpenCarrier(g, w, h) {
   g.fillStyle(0x6e8781, 1).fillRoundedRect(w * 0.4, baseY - wallH - h * 0.2, w * 0.2, h * 0.16, 3);
 }
 
+// ── Travel tank (issue #77) — a small glass carrier with a top handle ──────
+// Design grid ~16x14. Unlike the box/basket above (a one-time reception
+// hand-off, faded away by _playUnboxing once she's settled), this same
+// texture doubles as KennelScene's PERSISTENT resting-tank prop art — she's
+// drawn BEHIND it while carried (same "see what's inside" idea as the
+// turtle's open carrier), swimming visibly inside the glass the whole trip
+// between her home tank and the yard's shared pond.
+function drawTravelTank(g, w, h) {
+  const waterH = h * 0.62;
+  const baseY = h * 0.92;
+  // Glass body — a squat rounded tank, water filled most of the way up.
+  g.fillStyle(0x8fa39e, 1).fillRoundedRect(w * 0.06, baseY - h * 0.7, w * 0.88, h * 0.7, 3);
+  g.fillStyle(0xbfe6f2, 0.55).fillRoundedRect(w * 0.1, baseY - waterH, w * 0.8, waterH, 2);
+  g.fillStyle(0xe7f5f0, 0.25).fillRect(w * 0.1, baseY - h * 0.68, w * 0.8, h * 0.1); // glass sheen near the top
+  // A couple of little rising bubbles.
+  g.fillStyle(0xffffff, 0.6);
+  g.fillCircle(w * 0.34, baseY - waterH * 0.55, w * 0.03);
+  g.fillCircle(w * 0.6, baseY - waterH * 0.75, w * 0.025);
+  // Carry handle — an arc of sturdy plastic over the top. Same "rare detail
+  // that wants native R× coordinates" trick drawLeash above uses: dropping
+  // to `.raw` for the stroked arc, so the line width is scaled by hand
+  // exactly once (the wrapped g.lineStyle would double-apply ART_SCALE).
+  g.raw.lineStyle(1.6 * ART_SCALE, 0x6b6b76, 1);
+  g.raw.beginPath();
+  g.raw.arc(w * 0.5 * ART_SCALE, (baseY - h * 0.7) * ART_SCALE, w * 0.36 * ART_SCALE, Math.PI, 0, false);
+  g.raw.strokePath();
+}
+
 export function buildCarryTextures(scene) {
   gen(scene, CARRY_KEY[CARRY_KIND.LEASH], 17 * ART_SCALE, 15 * ART_SCALE,
     (g0) => drawLeash(scaledGraphics(g0), 17, 15));
@@ -98,4 +127,6 @@ export function buildCarryTextures(scene) {
     (g0) => drawOpenCarrier(scaledGraphics(g0), 16, 13));
   gen(scene, CARRY_KEY[CARRY_KIND.BASKET], 15 * ART_SCALE, 11 * ART_SCALE,
     (g0) => drawOpenCarrier(scaledGraphics(g0), 15, 11));
+  gen(scene, CARRY_KEY[CARRY_KIND.TANK], 16 * ART_SCALE, 14 * ART_SCALE,
+    (g0) => drawTravelTank(scaledGraphics(g0), 16, 14));
 }
