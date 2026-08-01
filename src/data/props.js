@@ -90,6 +90,37 @@ export function cageAnimalSpot(cage) {
   return { x: cage.x + cage.w / 2, y: cage.y + cage.h - 6 };
 }
 
+// Issue #54 (owner: "assignment order should be bottom row first, left to
+// right"): the order cages get handed out in, as a flat list of
+// `{ sectionKey, slot }` identities — the BOTTOM row of the grid (the one
+// nearest the reception desk, i.e. visually lowest / highest y) first, filled
+// left to right, then the row above it, and so on upward.
+//
+// This has to live here, next to the layout it inverts. A cage's bookkeeping
+// identity is still the `(sectionKey, slot)` pair data/roster.js and
+// KennelScene use everywhere else, but that pair says NOTHING about where the
+// cage physically sits: CAGES above flattens (speciesIndex, slot) to
+// `idx = speciesIndex * CAGES_PER_SECTION + slot` and then lays idx out
+// row-major, so a single species' six cages are scattered across the grid and
+// iterating sections-then-slots visits physical positions in a jumbled order.
+// Inverting that flattening (`si = floor(idx / CAGES_PER_SECTION)`,
+// `slot = idx % CAGES_PER_SECTION`) is exact for any species count, since
+// CAGE_COLS * CAGE_ROWS === SECTIONS.length * CAGES_PER_SECTION by
+// construction — nothing here assumes today's 9x6.
+export const CAGE_ASSIGN_ORDER = (() => {
+  const order = [];
+  for (let row = CAGE_ROWS - 1; row >= 0; row--) {
+    for (let col = 0; col < CAGE_COLS; col++) {
+      const idx = row * CAGE_COLS + col;
+      order.push({
+        sectionKey: SECTIONS[Math.floor(idx / CAGES_PER_SECTION)].key,
+        slot: idx % CAGES_PER_SECTION,
+      });
+    }
+  }
+  return order;
+})();
+
 // Small per-cage litter box (owner note 2026-07-29: "each cat cage should
 // have a small litter box, not a corner everyone litter box") — same
 // occupancy-driven create/destroy/reskin pattern as bowlSpotForCage/

@@ -10,6 +10,7 @@ import { createNeeds, createBowlState } from './needs.js';
 import { attachBirthTimer } from './births.js';
 import { pickUpgradeKind } from './economy.js';
 import { CAGES_PER_SECTION, SECTIONS } from './sections.js';
+import { CAGE_ASSIGN_ORDER } from './props.js';
 
 // Where a stay currently is. Any SECTIONS[].key (data/sections.js) is also a
 // valid `location` once an animal has been carried to its section.
@@ -49,8 +50,9 @@ const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 // was an easy stand-in for "whichever section her cage is actually in". Once
 // generalized mode lets a cage hold ANY species, that stand-in breaks — a
 // turtle napping in a dog cage would never "belong" to the dog section by
-// this species check. `stay.cageSection` (set by KennelScene._dropOff/
-// _startWalkHome the moment she's actually assigned a cage) is the real
+// this species check. `stay.cageSection` (set at check-in by spawnArrival/
+// spawnDragon below as of issue #54, and re-pointed by KennelScene._dropOff/
+// _startWalkHome whenever she changes cages) is the real
 // answer regardless of mode; in normal (species-locked) mode it's always
 // equal to her species anyway, so this is a no-op there. The secret bonus
 // dragon (roster.spawnDragon below) leans on this exact same mechanism — she
@@ -58,17 +60,49 @@ const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 // (any section, via KennelScene's generalized-cages placement path) her
 // `cageSection` is set exactly like anyone else's, so this needs no special
 // case for her either.
+//
+// Issue #54 (cage assigned at CHECK-IN, not at drop-off): `cageSection` is now
+// set the moment she checks in, while she's still at reception / in the
+// player's hands / out in the yard with her delivering owner — so it, not
+// `location`, is the whole answer whenever it's set. The old version only
+// consulted `cageSection` for a YARD stay and read `location` otherwise, which
+// would have said "no cage" for every newly-arrived guest — her nameplate and
+// bowls wouldn't appear (they're occupancy-driven through this helper), and
+// worse, isCageSlotOpen below would have reported her freshly-assigned cage as
+// free and handed it straight to the next arrival too. `location` survives as
+// the fallback for a stay who genuinely has no assigned cage (a save written
+// before this change, until KennelScene._restoreStaySprites grants her one).
 export function belongsToSection(stay, sectionKey) {
-  if (stay.location === sectionKey) return true;
-  return stay.location === LOCATION.YARD && stay.cageSection === sectionKey;
+  if (stay.cageSection != null) return stay.cageSection === sectionKey;
+  return stay.location === sectionKey;
 }
 
 // Issue #27: is this EXACT cage slot (not just "some slot in the section")
 // currently free? Used by KennelScene in generalized mode, where a fresh
 // arrival can be dropped into any specific open cage anywhere, not just an
 // auto-assigned slot within her own species' section.
-export function isCageSlotOpen(stays, sectionKey, slot) {
-  return !stays.some((s) => belongsToSection(s, sectionKey) && s.cageSlot === slot);
+//
+// Issue #54: `except` is a stay to ignore when judging occupancy — always the
+// stay currently being placed. Since she now holds a cage from check-in
+// onward, her OWN cage would otherwise read as taken (by her), so the player
+// couldn't carry her back into it after picking her up, and _dropOff's
+// fallback couldn't re-derive the slot she already has.
+export function isCageSlotOpen(stays, sectionKey, slot, except = null) {
+  return !stays.some((s) => s !== except && belongsToSection(s, sectionKey) && s.cageSlot === slot);
+}
+
+// Issue #54 (owner: "when pets check in, they should get an assigned cage
+// right away, and assignment order should be bottom row first, left to
+// right"): the next cage to hand out, as `{ sectionKey, slot }`, or null if
+// every cage in the kennel is taken. Walks data/props.js's CAGE_ASSIGN_ORDER —
+// PHYSICAL grid order, bottom row first and left to right within a row —
+// rather than the nominal sections-then-slots order, which maps to a scattered
+// set of on-screen positions (see that constant's comment).
+export function findOpenCage(stays, except = null) {
+  for (const { sectionKey, slot } of CAGE_ASSIGN_ORDER) {
+    if (isCageSlotOpen(stays, sectionKey, slot, except)) return { sectionKey, slot };
+  }
+  return null;
 }
 
 // Issue #27: true if ANY cage anywhere in the whole kennel is currently open
@@ -90,8 +124,15 @@ export function isCageSlotOpen(stays, sectionKey, slot) {
 // capacity) closes that gap — now matches "the kennel is full" the instant
 // enough guests exist to fill every cage, not just once they've all
 // literally been placed in one.
+//
+// Issue #54: now that a cage is actually reserved at check-in, the total-count
+// check and "is there a physically free cage" are two independently checkable
+// things, and BOTH have to hold — the count catches a stay who somehow holds
+// no slot at all (a pre-#54 save mid-restore), findOpenCage catches the real
+// grid. Requiring both means an arrival can never be waved through into a
+// kennel that has no cage left to give it.
 export function anyOpenCageAnywhere(stays) {
-  return stays.length < SECTIONS.length * CAGES_PER_SECTION;
+  return stays.length < SECTIONS.length * CAGES_PER_SECTION && findOpenCage(stays) !== null;
 }
 
 // Issue #18: picks the first open cage slot (0..CAGES_PER_SECTION-1) in
@@ -100,9 +141,13 @@ export function anyOpenCageAnywhere(stays) {
 // turtles don't have a rendered cage grid but still use this for capacity
 // bookkeeping via _islandSlot's own index). A stay's `cageSlot` is freed
 // automatically at checkout since roster.finalizeCheckout() removes her from `stays`.
-export function assignCageSlot(stays, sectionKey) {
+// Issue #54: `except` — the stay being placed, ignored when counting who's
+// using what, same reason as isCageSlotOpen's.
+export function assignCageSlot(stays, sectionKey, except = null) {
   const used = new Set(
-    stays.filter((s) => belongsToSection(s, sectionKey) && s.cageSlot != null).map((s) => s.cageSlot),
+    stays
+      .filter((s) => s !== except && belongsToSection(s, sectionKey) && s.cageSlot != null)
+      .map((s) => s.cageSlot),
   );
   for (let i = 0; i < CAGES_PER_SECTION; i++) if (!used.has(i)) return i;
   return null;
@@ -235,7 +280,13 @@ export function createRoster(saved = null) {
   // (KennelScene) just skips that particular roll, quietly.
   function spawnArrival({ day, hour, rng = Math.random } = {}) {
     const speciesKey = pickSpecies(rng);
-    if (!anyOpenCageAnywhere(stays)) return null;
+    // Issue #54: reserve her actual cage right here, at check-in — this
+    // doubles as the "is the kennel full?" gate it replaces (a null means
+    // there is genuinely no cage left, so the arrival is refused cleanly
+    // exactly as before, rather than being admitted with a null slot or
+    // handed a slot someone else already holds).
+    const cage = findOpenCage(stays);
+    if (!cage || stays.length >= SECTIONS.length * CAGES_PER_SECTION) return null;
     let group = null;
 
     if (rng() < 0.4) {
@@ -271,6 +322,14 @@ export function createRoster(saved = null) {
       arrivedDay: day,
       checkoutDay: day + MIN_NIGHTS + Math.floor(rng() * 2), // 2-3 nights
       location: LOCATION.RECEPTION,
+      // Issue #54: hers from check-in onward, wherever she physically is —
+      // her nameplate and bowls show at this cage immediately, and she has a
+      // home to walk back to at nightfall (KennelScene._startWalkHome)
+      // without the player ever having to place her. Carrying her into a
+      // (different) cage later just overwrites these two fields, same as it
+      // always set them.
+      cageSection: cage.sectionKey,
+      cageSlot: cage.slot,
       carryKind: primary.hasEggs ? CARRY_KIND.BASKET : carryKindForSpecies(speciesKey),
       // Feeding/potty chores (issues #6/#7) — see data/needs.js for the shape.
       // Timers only actually count down once the stay has settled into its
@@ -369,10 +428,20 @@ export function createRoster(saved = null) {
   // "any open cage anywhere" placement path (normally generalized-mode-only)
   // also applies to her specifically regardless of mode, since she has no
   // species-matching section to walk into — see KennelScene._checkDropoff.
-  // Once actually settled, `_dropOff` assigns her `cageSection`/`cageSlot`
-  // exactly like any other stay, so belongsToSection/assignCageSlot above
-  // need no special case for her.
+  // Issue #54: she's assigned her `cageSection`/`cageSlot` at check-in
+  // exactly like any other stay, so belongsToSection/findOpenCage above need
+  // no special case for her.
   function spawnDragon({ day, hour, rng = Math.random } = {}) {
+    // Issue #54: she checks in with a real assigned cage like everyone else.
+    // She has no species section of her own, but needs none — findOpenCage
+    // hands out cages by PHYSICAL grid position, and the (sectionKey, slot)
+    // identity attached to a position carries no species meaning since issue
+    // #32. Null (kennel genuinely full) is already ruled out by
+    // KennelScene._triggerSecretDragon's anyOpenCageAnywhere check before it
+    // ever calls this; guarded here anyway so she can't end up with a bogus
+    // slot if that ever changes.
+    const cage = findOpenCage(stays);
+    if (!cage) return null;
     // stage: 'baby' — the smaller hatchling art/name pool (draws from both
     // girl and boy dragon names), matching "a small baby dragon" rather than
     // a grown mom.
@@ -385,6 +454,8 @@ export function createRoster(saved = null) {
       arrivedDay: day,
       checkoutDay: day + MIN_NIGHTS + Math.floor(rng() * 2),
       location: LOCATION.RECEPTION,
+      cageSection: cage.sectionKey,
+      cageSlot: cage.slot,
       carryKind: carryKindForSpecies('dragon'),
       needs,
       timers,
