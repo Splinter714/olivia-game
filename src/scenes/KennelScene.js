@@ -21,7 +21,7 @@ import { tickNeeds, clearNeed, createBowlState } from '../data/needs.js';
 import { tickBirth, attachBirthTimer } from '../data/births.js';
 import { SPECIES, FAMILY } from '../data/species.js';
 import { pickWakeEvent, WAKE_REASON } from '../data/night.js';
-import { createAnimal } from '../data/animal.js';
+import { createAnimal, BABY_PLACEHOLDER } from '../data/animal.js';
 import { randomName } from '../data/names.js';
 import { createEconomy, computePayout, upgradeMessage } from '../data/economy.js';
 import {
@@ -59,11 +59,6 @@ import { circleRectOverlap } from '../data/geometry.js';
 import { applyDpr, dprOf, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
 import { WithSecretDragon } from '../dev/secretDragon.js';
-
-// Placeholder name shown on a baby's tiny label until the owner names it via
-// the reception computer (issue #10). Matches data/animal.js's opts.name
-// override convention — createAnimal({ name: BABY_PLACEHOLDER }).
-const BABY_PLACEHOLDER = '???';
 
 const SPEED = 160; // px/s, world (logical) units
 const PICKUP_RADIUS = 50; // px, how close the player must be to interact with anything

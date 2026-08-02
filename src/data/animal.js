@@ -5,6 +5,15 @@ import { SPECIES } from './species.js';
 import { randomName, registerName } from './names.js';
 import { randomLook } from './coats.js';
 
+// Placeholder name shown on a baby's tiny label until the owner names it via
+// the reception computer (issue #10). Lives here because it's an `opts.name`
+// override for createAnimal below — createAnimal({ name: BABY_PLACEHOLDER }) —
+// and because its readers straddle a file boundary (KennelScene's stay
+// rendering and its births/computer flow). See issue #83. Deliberately NOT a
+// default for `opts.name`: an unnamed baby is a distinct state the computer
+// flow filters on, not the normal case.
+export const BABY_PLACEHOLDER = '???';
+
 let _nextId = 1;
 
 // Stable, human-debuggable ids ("dog-3") — fine for a single in-memory session;
