@@ -7,7 +7,7 @@ import {
   BOWL_SPOTS, WATER_BOWL_SPOTS, COMPUTER_SPOT,
   OVEN, OVEN_SPOT, TREAT_TRAY_SPOT, BED, BED_SPOT,
   CAGES, LITTER_SPOTS, YARD_BOWL_SPOTS, YARD_RECT,
-  cageAnimalSpot, yardGateSpot, clampToYard,
+  cageAnimalSpot, cagePlateSpot, yardGateSpot, clampToYard,
   YARD_DOOR, YARD_DOOR_OPEN_POS,
   POND_RECT, pondSwimSpot, travelTankPondRestSpot, travelTankHomeSpot,
   clampToPondWater, randomPondWaterPoint, pondReachPoint,
@@ -275,6 +275,11 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
     this._carryVisual = null;      // { parts: [{obj, dx, dy}, ...] } following the player while carrying
     this._lingeringOwners = new Map(); // stay -> owner sprite, reserved from the moment a delivering owner starts walking in until she's walked back out again (issue #25, reworked by #45)
     this._checkoutOwners = new Map();  // stay -> { sprite, arrived } — a waiting checkout owner (issue #36), from the moment she starts walking in until her pet reaches her
+    // Issue #92: a nameplate sign the player carried off a cage and set back
+    // down somewhere that wasn't an open cage (the yard, an occupied cage) —
+    // stay -> { container, x, y }. Not tied to any cageIndex; just sits there,
+    // pick-up-able again, same as putting down any other carried object.
+    this._looseSigns = new Map();
     // Issue #45: every sprite currently walking somewhere under its own
     // power — animals AND owner NPCs, several at once (multiple opened
     // cages, a whole yard heading home at nightfall), so this is a
@@ -1419,7 +1424,12 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
   // worth building real "drop it where you stand" placement for.
   _releaseHelper(actor) {
     if (!actor || actor.isPlayer1) return;
-    if (actor.carrying) {
+    if (actor.carrying?.signStay) {
+      // Issue #92: she was mid-sign-carry when her controller dropped —
+      // same "don't strand her holding something" care as the animal case
+      // below, just settled as a loose sign rather than into a cage.
+      this._dropSignLoose(actor, actor.carrying.signStay);
+    } else if (actor.carrying) {
       const stay = actor.carrying;
       if (CAGES[stay.cageIndex]) this._dropOff(actor, stay, stay.cageIndex, {});
       else this._dropOffToYard(actor, stay);
@@ -1888,6 +1898,10 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
     // player-triggered drop-off AND from the automatic "she walked herself
     // over" path (_openCage), so it can't assume a specific actor.
     this._clearCarryingFor(stay);
+    // Issue #92: a sign she'd had set down loose (rather than being carried,
+    // covered above) has nobody left to belong to once she's gone home.
+    this._looseSigns.get(stay)?.container.destroy();
+    this._looseSigns.delete(stay);
 
     if (rec) {
       rec.tag?.container.destroy(); // the pet's gone now — no more name to show
@@ -1922,6 +1936,16 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
   _clearCarryingFor(stay) {
     const holders = this.helpers ? [...this.activePlayers, ...this.helpers] : this.activePlayers;
     for (const actor of holders) {
+      // Issue #92: whoever's carrying THIS stay's nameplate sign (a separate
+      // thing from carrying her bodily — see _pickUpSign) also needs
+      // clearing here, or the sign would keep following them for an animal
+      // who's just gone home.
+      if (actor.carrying?.signStay === stay) {
+        actor.carryVisual?.parts.forEach(({ obj }) => obj.destroy());
+        actor.carryVisual = null;
+        actor.carrying = null;
+        continue;
+      }
       if (actor.carrying !== stay) continue;
       actor.carryVisual?.parts.forEach(({ obj }) => obj.destroy());
       actor.carryVisual = null;
@@ -2524,6 +2548,88 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
       obj.y = ay + dy;
       obj.setDepth(actor.sprite.y + 1 + i * 0.01);
     });
+  }
+
+  // ── Carrying a cage's nameplate (issue #92) ──────────────────────────────
+  // Owner: "we should be able to move a cage assignment even while the pet
+  // is in the play area, you grab the sign and move it to another cage."
+  // The sign is cage FURNITURE (issue #64), not the animal — grabbing it
+  // reassigns where she lives without physically moving her at all; she just
+  // walks back to whichever cage is hers next time she goes home (nightfall,
+  // or "send her to her cage").
+  //
+  // A carried sign rides in `actor.carrying`/`actor.carryVisual` exactly like
+  // a carried animal (so _followCarry, the ACT-disabled-while-carrying rule,
+  // and HANDLE's "put down" branch all keep working with zero new plumbing
+  // in those three places) — but `actor.carrying` is a small wrapper
+  // `{ signStay }` rather than the stay itself, so nothing that assumes
+  // `actor.carrying.animal`/`actor.carrying === someStay` (checkout's
+  // _clearCarryingFor, the on-screen prompt) mistakes a carried sign for a
+  // carried animal. Call sites that need to tell the two apart just check
+  // `actor.carrying?.signStay`.
+
+  // Grabs the nameplate off cage `stay` currently holds (or off wherever it
+  // was last set down loose, if it's not on a cage right now) and starts
+  // carrying it. Reuses #93's exact "clear cageIndex, refresh furniture"
+  // mechanism for freeing her old cage — the owner's answer here ("old cage
+  // frees up immediately on pickup") is the same instant-release moment
+  // #93 gives a checkout-bound departure.
+  _pickUpSign(actor, stay) {
+    const loose = this._looseSigns.get(stay);
+    if (loose) {
+      loose.container.destroy();
+      this._looseSigns.delete(stay);
+    }
+    if (stay.cageIndex != null) {
+      stay.cageIndex = null;
+      this._refreshCageArt();
+    }
+    const anchorX = actor.sprite.x, anchorY = actor.sprite.y;
+    const plate = this._addNameTag(anchorX, anchorY, stay.animal.name, { highlight: true });
+    plate.container.setVisible(true);
+    actor.carrying = { signStay: stay };
+    actor.carryVisual = { parts: [{ obj: plate.container, dx: 0, dy: -6 }] };
+  }
+
+  // Issue #58-style resolve/run split, mirroring _resolveDropoff but for a
+  // carried sign: dropping it on an open cage completes the reassignment;
+  // dropping it anywhere else just sets it down where it is, cageless,
+  // rather than forcing a completion or a rejection — same as putting any
+  // other carried object down. Deliberately does NOT call
+  // findOpenCageForSpecies — issue #88's clustering is for a fresh arrival's
+  // OWN check-in, not a deliberate manual override by the player.
+  _resolveSignDropoff(actor) {
+    const stay = actor.carrying?.signStay;
+    if (!stay) return null;
+    const name = stay.animal.name;
+    const found = this._findOpenCageNear(actor.sprite.x, actor.sprite.y, stay);
+    if (found != null) {
+      return { label: `Put ${name}'s sign on this cage`, run: () => this._dropSign(actor, stay, found) };
+    }
+    return { label: `Set ${name}'s sign down here`, run: () => this._dropSignLoose(actor, stay) };
+  }
+
+  // Completes a reassignment: the sign (and so the cage) is hers now.
+  _dropSign(actor, stay, cageIndex) {
+    actor.carryVisual?.parts.forEach(({ obj }) => obj.destroy());
+    actor.carryVisual = null;
+    actor.carrying = null;
+    stay.cageIndex = cageIndex;
+    this._refreshCageArt();
+  }
+
+  // Sets the sign down wherever it currently is, without assigning a cage —
+  // it stays right there in the world as a loose prop (_looseSigns), findable
+  // and pick-up-able again exactly like before, rather than vanishing or
+  // silently forcing a placement.
+  _dropSignLoose(actor, stay) {
+    const container = actor.carryVisual?.parts[0]?.obj;
+    actor.carryVisual = null;
+    actor.carrying = null;
+    if (!container) return;
+    const x = actor.sprite.x, y = actor.sprite.y - 4;
+    container.setPosition(x, y);
+    this._looseSigns.set(stay, { container, x, y });
   }
 
   // Issue #32: "By Type" mode is gone — there's only one cage layout now, so
@@ -3327,13 +3433,49 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
     }
   }
 
+  // Issue #92: a HOLD-able target at every occupied cage's own nameplate spot
+  // (cagePlateSpot — top-center of the cage door), competing in the SAME
+  // nearest-wins resolver pass as _considerCages/_considerLoosePets, so
+  // standing right at the plate wins the pick over standing near the animal
+  // herself. No tap action of its own (there's nothing sensible for a plain
+  // press to do to a nameplate) — shown disabled with a hold hint, same
+  // pattern every other hold-only target in this file already uses (a
+  // sleeping/fish animal's cage, above). Also offers any sign the player
+  // already set down loose somewhere (_looseSigns) — still hers, still
+  // pick-up-able, wherever it landed.
+  _considerCagePlates(actor, r) {
+    CAGES.forEach((cage, i) => {
+      const occupant = this._cageOccupant(i);
+      if (!occupant) return;
+      const spot = cagePlateSpot(cage);
+      r.consider(spot.x, spot.y, `${occupant.animal.name}'s nameplate`, () => {}, {
+        disabled: true,
+        hint: 'hold to move her to a different cage',
+        hold: () => this._pickUpSign(actor, occupant),
+      });
+    });
+    for (const [stay, entry] of this._looseSigns) {
+      r.consider(entry.x, entry.y, `${stay.animal.name}'s nameplate`, () => {}, {
+        disabled: true,
+        hint: 'hold to pick it back up',
+        hold: () => this._pickUpSign(actor, stay),
+      });
+    }
+  }
+
   _resolveHandle(actor) {
-    // Hands full — the only thing this button can do is put her down.
+    // Hands full — the only thing this button can do is put down whatever
+    // she's holding: an animal (_resolveDropoff) or, issue #92, a cage's
+    // nameplate sign (_resolveSignDropoff). `carrying.signStay` is how a
+    // sign-carry is told apart from an ordinary animal carry (see that
+    // method's own comment).
+    if (actor.carrying?.signStay) return this._resolveSignDropoff(actor);
     if (actor.carrying) return this._resolveDropoff(actor);
 
     const r = this._resolver(actor);
     this._considerCages(actor, r);
     this._considerLoosePets(actor, r);
+    this._considerCagePlates(actor, r);
     return r.best;
   }
 
@@ -3572,7 +3714,13 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
       // says what it WOULD do and why it won't — the silent version of this is
       // what left the player standing at the bed with an animal in her arms
       // wondering why nothing happened.
-      const blocked = actor.carrying ? `put ${actor.carrying.animal.name} down first` : null;
+      // Issue #92: a carried sign has no `.animal` of its own — it's a
+      // wrapper around the stay whose nameplate it is (see _pickUpSign).
+      const blocked = actor.carrying
+        ? (actor.carrying.signStay
+          ? `put ${actor.carrying.signStay.animal.name}'s sign down first`
+          : `put ${actor.carrying.animal.name} down first`)
+        : null;
       push('act', this._resolveAct(actor), blocked);
       push('handle', this._resolveHandle(actor));
     }
