@@ -496,17 +496,25 @@ export function createRoster(saved = null) {
   // Secret bonus guest (src/dev/secretDragon.js's "DRAGON" cheat code) — the
   // ONE other way a stay enters `stays`, called directly by KennelScene once
   // the player types the secret code. Deliberately simpler than
-  // spawnArrival's family/returning-pool machinery: a solo baby dragon, no
-  // eggs/pregnancy roll, no returning-pool tracking — she's a one-time
-  // bonus, not part of the regular rotation (species.js's SPECIES_KEYS
-  // excludes 'dragon' entirely, so she never enters the normal arrival
-  // roll). She has no section of her own, but needs none: she arrives at
-  // reception exactly like any other guest, and KennelScene's issue #27
-  // "any open cage anywhere" placement path (normally generalized-mode-only)
-  // also applies to her specifically regardless of mode, since she has no
-  // species-matching section to walk into — see KennelScene._resolveDropoff.
-  // Issue #54: she's assigned her `cageIndex` at check-in exactly like any
-  // other stay, so findOpenCage above needs no special case for her.
+  // spawnArrival's family/returning-pool machinery: a solo adult dragon, no
+  // family roll on this very first summon (owner: "first summon always
+  // solo" — issue #91), no returning-pool tracking here — she's a one-time
+  // bonus creation, not part of the regular rotation (species.js's
+  // SPECIES_KEYS excludes 'dragon' entirely, so the secret code stays the
+  // ONLY way a brand-new dragon is ever created). Once she checks out she
+  // gets a normal pool entry like anyone else (finalizeCheckout is generic),
+  // and issue #90 lets THAT pool entry resurface later through the ordinary
+  // pickSpecies/spawnArrival rotation — see spawnArrival's isReturningDragon
+  // branch — complete with the usual eggs/pregnant/babies/solo family roll
+  // (familyFor already reads species.js's FAMILY.EGGS_OR_BABIES generically,
+  // no dragon-specific code needed there). She has no section of her own, but
+  // needs none: she arrives at reception exactly like any other guest, and
+  // KennelScene's issue #27 "any open cage anywhere" placement path (normally
+  // generalized-mode-only) also applies to her specifically regardless of
+  // mode, since she has no species-matching section to walk into — see
+  // KennelScene._resolveDropoff. Issue #54: she's assigned her `cageIndex` at
+  // check-in exactly like any other stay, so findOpenCage above needs no
+  // special case for her.
   function spawnDragon({ day, hour, rng = Math.random } = {}) {
     // Issue #54: she checks in with a real assigned cage like everyone else.
     // She has no species section of her own and needs none — a cage is just a
@@ -516,10 +524,12 @@ export function createRoster(saved = null) {
     // so she can't end up with a bogus cage if that ever changes.
     const cage = findOpenCage(stays);
     if (cage == null) return null;
-    // stage: 'baby' — the smaller hatchling art/name pool (draws from both
-    // girl and boy dragon names), matching "a small baby dragon" rather than
-    // a grown mom.
-    const primary = createAnimal('dragon', { stage: 'baby' });
+    // createAnimal('dragon') defaults to stage: 'adult' — issue #91 (owner:
+    // "Change baby dragons to just dragons"): the secret code now summons a
+    // grown dragon (DRAGON_GEO.adult in art/animals.js), not a hatchling.
+    // Baby dragons still exist, just as the babies a returning mom's family
+    // roll can produce (issue #90) — see familyFor via spawnArrival.
+    const primary = createAnimal('dragon');
     const { needs, timers } = createNeeds('dragon', day, hour);
     const stay = {
       animal: primary,
@@ -535,7 +545,7 @@ export function createRoster(saved = null) {
       bowl: createBowlState(),
       needsAnnouncement: false,
     };
-    attachBirthTimer(stay); // no-op: she never arrives pregnant/with eggs
+    attachBirthTimer(stay); // no-op: solo on this first summon, no family roll
     stays.push(stay);
     return stay;
   }

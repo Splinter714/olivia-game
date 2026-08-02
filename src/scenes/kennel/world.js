@@ -37,7 +37,7 @@ import {
   YARD_DOOR, POND_SPOT, POND_RECT,
 } from '../../data/props.js';
 import { LOCATION } from '../../data/roster.js';
-import { EGG_KEY } from '../../art/animals.js';
+import { EGG_KEY, ensureDragonEggTexture } from '../../art/animals.js';
 import {
   LITTER_BOX_KEY,
   BOWL_KEY, BOWL_KEY_BY_SPECIES, BOWL_EMPTY_KEY, BOWL_EMPTY_KEY_BY_SPECIES,
@@ -390,10 +390,16 @@ export const WithWorld = (Base) => class extends Base {
       const spot = cageEggSpot(CAGES[i]);
       const objs = [];
       const startX = spot.x - ((count - 1) * CAGE_EGG_SPACING) / 2;
+      // Issue #91: a dragon-owned clutch gets her own per-mother-colored,
+      // speckled egg texture instead of the plain shared EGG_KEY every other
+      // egg-laying species keeps using unchanged.
+      const eggKey = occupant.animal.species === 'dragon'
+        ? ensureDragonEggTexture(this, occupant.animal.look)
+        : EGG_KEY;
       for (let e = 0; e < count; e++) {
         const ex = startX + e * CAGE_EGG_SPACING;
         const ey = spot.y + (e % 2 ? 3 : -3); // a slightly uneven nest, not a straight line
-        objs.push(this.add.image(ex, ey, EGG_KEY).setOrigin(0.5, 1).setDepth(ey));
+        objs.push(this.add.image(ex, ey, eggKey).setOrigin(0.5, 1).setDepth(ey));
       }
       if (heart) {
         objs.push(this.add.image(spot.x, spot.y - 16, NEED_KEY.babies).setOrigin(0.5, 1).setDepth(9002));

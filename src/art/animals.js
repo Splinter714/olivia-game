@@ -1515,6 +1515,48 @@ function drawEgg(g, w, h) {
   g.fillEllipse(w * 0.62, h * 0.6, 1.2, 1.2);
 }
 
+// Issue #91 (owner: "eggs should be the same color as the mother, and should
+// have sparkles," clarified as "kind of like nicely colored speckles just on
+// the egg itself"): a dragon-owned clutch doesn't use the plain shared
+// EGG_KEY every other egg-layer gets — her eggs are tinted from her own coat
+// (body.mid for the shell, same as her body's base tone) with a scatter of
+// colored speckle dots baked into the texture as static decals (hi/lo/mark
+// for contrast) — no animation/particle/tween effect, just a colorful version
+// of the plain egg's existing faint cream-on-cream speckles above.
+//
+// Keyed off lookId(look), same convention as animalTextureKey, so every
+// distinct mother coat gets her own lazily-built egg look rather than one
+// texture per dragon instance.
+export function dragonEggTextureKey(look) {
+  return `animal-dragon-egg-${lookId(look)}`;
+}
+
+function drawDragonEgg(g, w, h, look) {
+  const c = coatDef('dragon', look);
+  const { hi, mid, lo } = c.body;
+  g.fillStyle(mid, 1);       g.fillEllipse(w / 2, h / 2, w * 0.92, h * 0.96);
+  g.fillStyle(hi, 0.55);     g.fillEllipse(w * 0.4, h * 0.36, w * 0.4, h * 0.34);
+  // Colored speckles — cycling through hi/lo/mark so they read against the
+  // mid-toned shell regardless of which coat this is.
+  const speckles = [hi, lo, c.mark];
+  [[0.30, 0.30], [0.62, 0.40], [0.44, 0.62], [0.68, 0.66], [0.34, 0.56], [0.56, 0.24]]
+    .forEach(([fx, fy], i) => {
+      g.fillStyle(speckles[i % speckles.length], 1);
+      g.fillEllipse(w * fx, h * fy, 1.3, 1.3);
+    });
+}
+
+// Lazily builds (once per distinct mother coat) and returns the dragon-egg
+// texture key for `look` — mirrors ensureAnimalTextures' lazy-generation
+// guard, just for this one shared prop rather than a full animal sheet.
+export function ensureDragonEggTexture(scene, look) {
+  const key = dragonEggTextureKey(look);
+  if (!scene.textures.exists(key)) {
+    gen(scene, key, 10, 8, (g) => drawDragonEgg(g, 10, 8, look));
+  }
+  return key;
+}
+
 // Builds the egg texture shared by every placement. Name tags (issue #22 #1)
 // are now sized procedurally per-name at render time in KennelScene, rather
 // than stamped from a fixed-size texture — see KennelScene._addNameTag.
