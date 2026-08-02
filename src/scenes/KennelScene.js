@@ -55,6 +55,7 @@ import {
 import { RACCOON_CHECK_INTERVAL, RACCOON_APPROACH_MS, RACCOON_SCAMPER_MS, RACCOON_SCARE_DASH_MS, randomTreat } from '../data/raccoon.js';
 import { createRoster, LOCATION, CARRY_KIND, isCageOpen, anyOpenCageAnywhere, findOpenCage } from '../data/roster.js';
 import { loadGame, saveGame, clearSave, seedGlobalNameState } from '../data/persistence.js';
+import { circleRectOverlap } from '../data/geometry.js';
 import { applyDpr, dprOf, logicalW, logicalH, worldUiOffset } from '../uiUtils.js';
 import { WithDevDrag } from '../dev/dragTool.js';
 import { WithSecretDragon } from '../dev/secretDragon.js';
@@ -135,13 +136,6 @@ const ANIMAL_COLLIDE_PAD = 4; // extra clearance beyond the two sprites' own hal
 // at the edge of frame isn't glued to the literal screen edge.
 const MIN_FRAME_ZOOM = 0.45;
 const CAMERA_FRAME_MARGIN = 160;
-
-// Circle-vs-axis-aligned-rect overlap test, used by findPath's `collides` callback.
-function circleRectOverlap(cx, cy, r, rect) {
-  const nx = Phaser.Math.Clamp(cx, rect.x, rect.x + rect.w);
-  const ny = Phaser.Math.Clamp(cy, rect.y, rect.y + rect.h);
-  return Phaser.Math.Distance.Between(cx, cy, nx, ny) < r;
-}
 
 // Main gameplay scene: draws the kennel building + outside strip from
 // data/sections.js, and drives the player around it. Animals, arrivals, and
