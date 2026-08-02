@@ -626,7 +626,13 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
     // route planned before the gate existed as an obstacle, straight through
     // it. Replan every active walk against the fresh obstacle set the instant
     // it closes, same endpoint-cage-ignoring rule ordinary walks use.
-    if (changed && !open) {
+    //
+    // `this._walkers` is guarded because create() calls this BEFORE the walker
+    // list exists, to restore a save's gate state — and a save whose gate was
+    // left SHUT takes the `changed && !open` branch on that very first call.
+    // Nobody is walking yet at that point, so skipping is the correct no-op
+    // rather than merely a crash guard.
+    if (changed && !open && this._walkers) {
       for (const walk of this._walkers) {
         const target = walk.path[walk.path.length - 1];
         if (!target) continue;
