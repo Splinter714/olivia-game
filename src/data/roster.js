@@ -46,6 +46,11 @@ export const CARRY_KIND = {
 
 const MIN_NIGHTS = 2; // DESIGN.md: "every pet sleeps over at least 2 nights"
 
+// Issue #86 (owner: "Let's cap each species at 4 at a time"): the most of
+// any one species checked in at once, kennel-wide (cages + yard + anywhere),
+// not a per-yard limit. See pickSpecies below for how it's enforced.
+const SPECIES_CAP = 4;
+
 // Is this exact cage free among `stays`?
 //
 // Issue #71 collapsed a small family of near-identical helpers into this one.
@@ -196,18 +201,33 @@ export function createRoster(saved = null) {
   // already at 5+ — while every species keeps SOME chance regardless of how
   // crowded it already is, so it still reads as random, not a strict
   // round-robin.
+  //
+  // Issue #86 (owner: "Let's cap each species at 4 at a time" — kennel-wide,
+  // not per-yard, "re-roll a different species instead" once a species is
+  // full): a species already at SPECIES_CAP gets weight ZERO rather than
+  // just a smaller one. That alone makes "re-roll" automatic — a zero-weight
+  // species can never be the one this pick lands on, no explicit retry loop
+  // needed. If every species is capped, every weight is 0 and this returns
+  // null; spawnArrival treats that exactly like "kennel is full" (#40).
   function pickSpecies(rng) {
-    const weights = SPECIES_KEYS.map((key) => {
-      const count = stays.filter((s) => s.animal.species === key).length;
-      return 1 / (count + 1);
-    });
-    const total = weights.reduce((sum, w) => sum + w, 0);
+    // Capped species are dropped from the candidate list entirely, rather
+    // than merely given weight 0 in the full list — a weight of exactly 0
+    // can still get selected by the running-remainder scan below if `r`
+    // happens to land on it at exactly 0 (verified this the hard way: an
+    // `r <= 0` check after subtracting 0 stays true), so "not a candidate"
+    // has to mean "not in the list", not "weight zero in the list".
+    const candidates = SPECIES_KEYS
+      .map((key) => ({ key, count: stays.filter((s) => s.animal.species === key).length }))
+      .filter(({ count }) => count < SPECIES_CAP)
+      .map(({ key, count }) => ({ key, weight: 1 / (count + 1) }));
+    if (!candidates.length) return null; // every species is at its cap
+    const total = candidates.reduce((sum, c) => sum + c.weight, 0);
     let r = rng() * total;
-    for (let i = 0; i < SPECIES_KEYS.length; i++) {
-      r -= weights[i];
-      if (r <= 0) return SPECIES_KEYS[i];
+    for (const c of candidates) {
+      r -= c.weight;
+      if (r <= 0) return c.key;
     }
-    return SPECIES_KEYS[SPECIES_KEYS.length - 1]; // floating-point rounding fallback
+    return candidates[candidates.length - 1].key; // floating-point rounding fallback
   }
 
   // Builds the group of animal instances that arrive together for `speciesKey`,
@@ -246,9 +266,12 @@ export function createRoster(saved = null) {
   // generalized by issue #32: since any pet can go in any open cage, there's
   // no more per-species territory — a species keeps arriving as long as ANY
   // cage anywhere is open, not just one nominally "hers"); the caller
-  // (KennelScene) just skips that particular roll, quietly.
+  // (KennelScene) just skips that particular roll, quietly. Also null if
+  // every species is at its #86 cap — same quiet skip, not a distinct case
+  // the caller needs to tell apart from an ordinary full kennel.
   function spawnArrival({ day, hour, rng = Math.random } = {}) {
     const speciesKey = pickSpecies(rng);
+    if (!speciesKey) return null;
     // Issue #54: reserve her actual cage right here, at check-in — this
     // doubles as the "is the kennel full?" gate it replaces (a null means
     // there is genuinely no cage left, so the arrival is refused cleanly
