@@ -1604,6 +1604,16 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
 
     const checkout = this._checkoutOwners.get(stay);
     if (stay.checkoutReady && checkout) {
+      // Issue #93 (owner: "when a pet is sent to go home... immediately make
+      // their previous cage available"): she's leaving for good the instant
+      // this walk starts, not just stepping out to play — so unlike an
+      // ordinary yard trip (which keeps the cage hers the whole time), her
+      // cage lets go of her right now rather than staying reserved until she
+      // actually reaches her owner. A full art refresh (not just furniture)
+      // since occupancy itself changed here — the freed cage's own look
+      // reverts to empty too, immediately available to a new arrival.
+      stay.cageIndex = null;
+      this._refreshCageArt();
       this._setStayMoving(rec, true);
       this._startWalk(rec.sprite, checkout.waitX, checkout.waitY + 14, {
         stay,
@@ -2446,23 +2456,38 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
     this._destroyStaySprites(stay);
     stay.location = LOCATION.CARRYING;
     actor.carrying = stay;
-    // Keeps the cage's bowl/litter box in sync the instant she's picked back
-    // up — _refreshCageArt isn't otherwise called on pickup (cage ART itself
-    // only changes per-occupant in generalized mode, refreshed on the next
-    // drop-off/checkout), so these need their own explicit refresh.
-    // Issue #54: her cage stays HERS while she's in the player's hands (she
-    // was assigned it at check-in, and only a drop-off elsewhere re-points
-    // it), so these now leave her bowls/litter box in place rather than
-    // clearing them — same as a yard trip already did. That supersedes the
-    // owner's 2026-07-29 note about bowls disappearing on pickup, which was
-    // written when being carried genuinely meant having no cage at all.
-    // Issue #64 ("name tag should remain on an assigned cage no matter what.
-    // Even if they just arrived or if they're currently held"): her door plate
-    // is cage furniture now, so this refresh is what re-asserts it right after
-    // _destroyStaySprites above tore her sprite record down — and
-    // the occupancy rule still counts her as this cage's occupant while she's
-    // in the player's hands, so the plate simply stays.
-    this._refreshCageFurniture();
+    if (stay.checkoutReady) {
+      // Issue #93 (owner: "when a pet is sent to go home or picked up to go
+      // home, immediately make their previous cage available"): a
+      // checkout-ready stay picked up directly (issue #82's hold-to-pick-up
+      // straight out of her cage, or a helper's stranded-checkout carry) is
+      // being carried out for GOOD here, not just taken out to play — she's
+      // not coming back to this cage, so unlike the ordinary case below it
+      // frees up right now instead of staying reserved for a hand-off that's
+      // about to happen anyway. Full art refresh, not just furniture, since
+      // occupancy itself changed — the freed cage's own look reverts to
+      // empty too.
+      stay.cageIndex = null;
+      this._refreshCageArt();
+    } else {
+      // Keeps the cage's bowl/litter box in sync the instant she's picked back
+      // up — _refreshCageArt isn't otherwise called on pickup (cage ART itself
+      // only changes per-occupant in generalized mode, refreshed on the next
+      // drop-off/checkout), so these need their own explicit refresh.
+      // Issue #54: her cage stays HERS while she's in the player's hands (she
+      // was assigned it at check-in, and only a drop-off elsewhere re-points
+      // it), so these now leave her bowls/litter box in place rather than
+      // clearing them — same as a yard trip already did. That supersedes the
+      // owner's 2026-07-29 note about bowls disappearing on pickup, which was
+      // written when being carried genuinely meant having no cage at all.
+      // Issue #64 ("name tag should remain on an assigned cage no matter what.
+      // Even if they just arrived or if they're currently held"): her door plate
+      // is cage furniture now, so this refresh is what re-asserts it right after
+      // _destroyStaySprites above tore her sprite record down — and
+      // the occupancy rule still counts her as this cage's occupant while she's
+      // in the player's hands, so the plate simply stays.
+      this._refreshCageFurniture();
+    }
     // Arrivals with a carry prop (leash/cage/box/basket) ride in that prop,
     // composed with her own sprite the same "contained" way she showed at
     // reception (issue #21) — everything else (small pets, or any settled
