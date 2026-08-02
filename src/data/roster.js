@@ -9,7 +9,7 @@ import { SPECIES, SPECIES_KEYS, FAMILY } from './species.js';
 import { createNeeds, createBowlState } from './needs.js';
 import { attachBirthTimer } from './births.js';
 import { pickUpgradeKind } from './economy.js';
-import { CAGE_ASSIGN_ORDER, CAGE_COUNT } from './props.js';
+import { CAGES, CAGE_ASSIGN_ORDER, CAGE_COUNT } from './props.js';
 
 // Where a stay currently is.
 //
@@ -84,6 +84,79 @@ export function findOpenCage(stays, except = null) {
     if (isCageOpen(stays, idx, except)) return idx;
   }
   return null;
+}
+
+const cageCenter = (idx) => {
+  const c = CAGES[idx];
+  return { x: c.x + c.w / 2, y: c.y + c.h / 2 };
+};
+
+// Issue #86's per-species cap (SPECIES_CAP = 4) also means every open cage
+// this ever has to choose between is small in number, so a full pairwise
+// distance scan over the whole grid per candidate is cheap (<= CAGE_COUNT^2
+// = 2304 distance checks worst case) — no need for anything cleverer.
+const SAME_SPECIES_WEIGHT = 1000; // dwarfs the open-neighbor term below
+const OPEN_NEIGHBOR_WEIGHT = 1;   // only ever matters when no same-species term applies anywhere
+
+// Issue #88 (owner: "new arrivals of a given species should get a cage
+// assignment in the same cluster of 4 cages as others of the same species,
+// or as close as possible to as many of the same species as possible") — a
+// species-aware alternative to findOpenCage above, used ONLY for a fresh
+// arrival's own check-in assignment (spawnArrival). Every other caller
+// (the pre-#54-save fallback, the secret dragon's one-off check-in) keeps
+// plain findOpenCage's bottom-up order — dragon's population is always <=1,
+// so there's never anyone of her own kind to cluster near anyway.
+//
+// Owner's answers to the two follow-up questions, both baked into one
+// scoring pass rather than two separate rules: "dynamic proximity, not a
+// fixed grid of clusters" and "same-species clustering wins over #54's
+// order" (so this REPLACES that order rather than merely tie-breaking it).
+// Every open cage gets scored by summing an inverse-distance bonus for every
+// OTHER cage in the grid that's occupied by the same species (heavily
+// weighted — this is what pulls a new arrival toward her own kind), plus a
+// much smaller inverse-distance bonus for every other cage that's currently
+// OPEN. The highest-scoring open cage wins; #54's order only breaks a tie.
+//
+// The "first of her kind" case the owner asked about ("reserve a fresh
+// cluster for her") falls out of this same formula rather than needing its
+// own branch: with no same-species cage anywhere, that whole heavy term is
+// zero for every candidate, so the small open-neighbor term is all that's
+// left — which favors whichever open cage has the most empty cages
+// clustered around IT, i.e. she settles into open space with room for
+// company later, as an emergent result of the same scoring pass.
+export function findOpenCageForSpecies(stays, speciesKey, except = null) {
+  const openIdx = CAGE_ASSIGN_ORDER.filter((idx) => isCageOpen(stays, idx, except));
+  if (!openIdx.length) return null;
+  const openSet = new Set(openIdx);
+  const speciesByIdx = new Map();
+  for (const s of stays) {
+    if (s !== except) speciesByIdx.set(s.cageIndex, s.animal.species);
+  }
+
+  let best = openIdx[0];
+  let bestScore = -Infinity;
+  for (const idx of openIdx) {
+    const here = cageCenter(idx);
+    let score = 0;
+    for (let j = 0; j < CAGES.length; j++) {
+      if (j === idx) continue;
+      const there = cageCenter(j);
+      const dist = Math.hypot(here.x - there.x, here.y - there.y);
+      const w = 1 / (dist + 1);
+      if (speciesByIdx.get(j) === speciesKey) score += SAME_SPECIES_WEIGHT * w;
+      else if (openSet.has(j)) score += OPEN_NEIGHBOR_WEIGHT * w;
+    }
+    // Tie-break toward #54's normal order (earlier in CAGE_ASSIGN_ORDER wins)
+    // whenever two cages score identically — most visibly, at game start
+    // when every cage is equally empty and there's nothing to cluster near.
+    const orderRank = CAGE_ASSIGN_ORDER.indexOf(idx);
+    score += (CAGE_ASSIGN_ORDER.length - orderRank) * 1e-9;
+    if (score > bestScore) {
+      bestScore = score;
+      best = idx;
+    }
+  }
+  return best;
 }
 
 // True if ANY cage anywhere is currently open — the arrival gate. Since issue
@@ -276,8 +349,10 @@ export function createRoster(saved = null) {
     // doubles as the "is the kennel full?" gate it replaces (a null means
     // there is genuinely no cage left, so the arrival is refused cleanly
     // exactly as before, rather than being admitted with a null slot or
-    // handed a slot someone else already holds).
-    const cage = findOpenCage(stays);
+    // handed a slot someone else already holds). Issue #88: WHICH open cage
+    // now clusters her near her own species, in place of #54's plain
+    // bottom-up order — see findOpenCageForSpecies.
+    const cage = findOpenCageForSpecies(stays, speciesKey);
     if (cage == null || stays.length >= CAGE_COUNT) return null;
     let group = null;
 
