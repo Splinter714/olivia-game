@@ -320,8 +320,23 @@ export const YARD_BOWL_SPOTS = {
 // yard's far (east) side, well clear of both the gate (west edge, mid-height
 // — YARD_GATE_Y below) and the food/water bowls (bottom-left) so a fish
 // delivered to either doesn't visually collide with this.
-export const POND_SIZE = { w: 130, h: 90 };
-export const POND_SPOT = { x: YARD_X1 - 130, y: YARD_RECT.y + 130 };
+//
+// Issue #84 (owner, after playtesting #77): "For fish pets, they are
+// currently getting out of the pond when they're in the play yard; they look
+// like they're on the grass sometimes; 1. make the pond itself bigger and
+// 2. restrict fish to the pond water exactly."
+//
+// Part 1 — the pond is twice as wide and twice as deep as #77's first pass
+// (130x90 → 260x180, so ~4x the surface). #77 sized it as a small decorative
+// puddle; it's actually the whole play space for every fish out at once,
+// mothers and hatchlings both, and at 130x90 a mother plus a litter filled
+// it. It still sits in the yard's top-east corner, clear of everything:
+// ~30px of grass between its east edge and the fence (YARD_X1 = 2100),
+// ~70px above it to the yard's north edge, and ~350px below it to the gate
+// (YARD_GATE_Y, the yard's vertical middle). The food/water bowls are in the
+// opposite (bottom-left) corner and nowhere near it.
+export const POND_SIZE = { w: 260, h: 180 };
+export const POND_SPOT = { x: YARD_X1 - 160, y: YARD_RECT.y + 160 };
 export const POND_RECT = {
   x: POND_SPOT.x - POND_SIZE.w / 2,
   y: POND_SPOT.y - POND_SIZE.h / 2,
@@ -329,17 +344,89 @@ export const POND_RECT = {
   h: POND_SIZE.h,
 };
 
+// Part 2 — the WATER, as distinct from the pond texture's bounding box.
+// POND_RECT is the whole square the art occupies; art/props.js's drawPond
+// paints a sandy rim ellipse filling that square and the actual water as a
+// smaller ellipse inside it. That gap is the literal bug in #84: a fish
+// clamped to POND_RECT (which is what KennelScene did) could sit in a corner
+// of the square, which is outside the rim entirely — i.e. standing on the
+// grass. These fractions ARE the ones drawPond paints with (it imports them),
+// so the clamp and the painted water can't drift apart.
+export const POND_WATER_FRAC = { w: 0.86, h: 0.82 };
+
+// A fish sprite's on-screen footprint in logical px — art/animals.js's
+// FISH_GEO design grid (14x10 adult, 9x6 baby) at ANIMAL_DISPLAY_SCALE, i.e.
+// design x 2. Only the default for the placement helpers below; KennelScene
+// passes each sprite's real displayWidth/displayHeight at runtime.
+export const FISH_BODY = { w: 28, h: 20 };
+
+// The ellipse a swimming fish's ANCHOR POINT may occupy, given her own size.
+// Animal sprites are bottom-origin (KennelScene._addAnimalSprite does
+// setOrigin(0.5, 1)), so her body is drawn ABOVE her x/y — which is the other
+// half of #84's "she looks like she's on the grass": even a correct clamp to
+// the water's top edge drew her whole body above the water. So the anchor's
+// ellipse is the water ellipse shrunk by half her width / half her height and
+// pushed DOWN by half her height, which puts her BODY inside the water rather
+// than her feet on its rim.
+export function pondSwimArea(bodyW = FISH_BODY.w, bodyH = FISH_BODY.h) {
+  const waterRx = (POND_SIZE.w * POND_WATER_FRAC.w) / 2;
+  const waterRy = (POND_SIZE.h * POND_WATER_FRAC.h) / 2;
+  return {
+    cx: POND_SPOT.x,
+    cy: POND_SPOT.y + bodyH / 2,
+    rx: Math.max(6, waterRx - bodyW / 2 - 3),
+    ry: Math.max(4, waterRy - bodyH / 2 - 3),
+  };
+}
+
+// Pull a point onto/inside that ellipse. An ellipse rather than an inset rect
+// on purpose: the pond IS an ellipse, and the corners of any rect big enough
+// to use the water's full width are exactly where a fish read as beached.
+export function clampToPondWater(x, y, bodyW, bodyH) {
+  const a = pondSwimArea(bodyW, bodyH);
+  const nx = (x - a.cx) / a.rx;
+  const ny = (y - a.cy) / a.ry;
+  const d = Math.hypot(nx, ny);
+  if (d <= 1 || d === 0) return { x, y };
+  return { x: a.cx + (nx / d) * a.rx, y: a.cy + (ny / d) * a.ry };
+}
+
+// A uniformly-distributed point in the water — where a swimming fish (or a
+// hatchling) picks her next drift target. Uniform over the AREA (hence the
+// sqrt), so nobody gathers in the middle of the pond.
+export function randomPondWaterPoint(bodyW, bodyH) {
+  const a = pondSwimArea(bodyW, bodyH);
+  const ang = Math.random() * Math.PI * 2;
+  const r = Math.sqrt(Math.random());
+  return { x: a.cx + Math.cos(ang) * a.rx * r, y: a.cy + Math.sin(ang) * a.ry * r };
+}
+
+// The nearest bit of pond to (px, py) — what "close enough to the pond to set
+// her tank down" measures against (KennelScene._resolveDropoff). It used to
+// measure from POND_SPOT, the pond's CENTRE, which was fine at 130x90 but at
+// 260x180 would mean a player standing at the water's edge was 130px away and
+// out of reach of her own pond.
+export function pondReachPoint(px, py) {
+  return {
+    x: Math.min(Math.max(px, POND_RECT.x), POND_RECT.x + POND_RECT.w),
+    y: Math.min(Math.max(py, POND_RECT.y), POND_RECT.y + POND_RECT.h),
+  };
+}
+
 // Small fan so more than one fish swimming at the pond (or resting travel
 // tanks parked at its edge) don't all stack on the exact same point — same
-// "fan simultaneous arrivals" idea as YARD_GATE_FAN above, just smaller since
-// the pond itself is small.
+// "fan simultaneous arrivals" idea as YARD_GATE_FAN above. Expressed as
+// FRACTIONS of the swim ellipse's radii (issue #84) rather than fixed pixel
+// offsets, so the fan spreads across the bigger pond instead of huddling in
+// the middle of it, and can never place a fish outside the water.
 const POND_SWIM_FAN = [
-  { dx: 0, dy: 0 }, { dx: 22, dy: -12 }, { dx: -22, dy: 12 },
-  { dx: 28, dy: 14 }, { dx: -28, dy: -10 }, { dx: 10, dy: 22 },
+  { fx: 0, fy: 0 }, { fx: 0.36, fy: -0.30 }, { fx: -0.36, fy: 0.30 },
+  { fx: 0.46, fy: 0.34 }, { fx: -0.46, fy: -0.26 }, { fx: 0.16, fy: 0.52 },
 ];
 export function pondSwimSpot(index = 0) {
+  const a = pondSwimArea();
   const fan = POND_SWIM_FAN[index % POND_SWIM_FAN.length];
-  return { x: POND_SPOT.x + fan.dx, y: POND_SPOT.y + fan.dy };
+  return clampToPondWater(a.cx + fan.fx * a.rx, a.cy + fan.fy * a.ry);
 }
 
 // Resting travel tanks sit at the pond's edge (not out in the water) —

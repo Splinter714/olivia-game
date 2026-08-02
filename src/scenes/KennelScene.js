@@ -12,6 +12,7 @@ import {
   cageEggSpot, cagePlateSpot, CAGE_EGG_SPACING,
   YARD_DOOR, YARD_DOOR_OPEN_POS,
   POND_SPOT, POND_RECT, pondSwimSpot, travelTankPondRestSpot, travelTankHomeSpot,
+  clampToPondWater, randomPondWaterPoint, pondReachPoint,
 } from '../data/props.js';
 import { createClock, tintForHour, PHASE, DAY_START } from '../data/clock.js';
 import { EVENTS } from '../data/events.js';
@@ -294,7 +295,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       this._save = null;
       this.roster = createRoster(null);
     }
-    this._staySprites = new Map(); // stay -> { pos, sprite, tag:{container,width,height}, extras:[...], babyLabels:[...], needIcons:{}, wanderBounds }
+    this._staySprites = new Map(); // stay -> { pos, sprite, tag:{container,width,height}, extras:[...], babyLabels:[...], needIcons:{}, wanderBounds, inPond }
     this.carrying = null;          // the stay currently in the player's hands, or null
     this._carryOrigin = null;      // where `carrying` was picked up from: 'reception' | sectionKey | LOCATION.YARD
     this._carryVisual = null;      // { parts: [{obj, dx, dy}, ...] } following the player while carrying
@@ -492,6 +493,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const { rug } = RECEPTION;
     let receptionIdx = 0;
     let yardIdx = 0;
+    let pondIdx = 0;
     for (const stay of this.roster.stays) {
       if (stay.location === LOCATION.RECEPTION) {
         const idx = receptionIdx++;
@@ -499,7 +501,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         const y = rug.y + 24 + Math.floor(idx / 3) * 42;
         this._renderStay(stay, x, y);
       } else if (stay.location === LOCATION.YARD) {
-        const pos = this._gridSlot(YARD_RECT, yardIdx++, 20, 44, 52);
+        // Issue #84: a fish restored as "out in the yard" is out at the POND,
+        // the only place in the yard she can be — the generic yard grid slot
+        // put her up in the top-left corner of the grass, and the pond clamp
+        // would then teleport her across the yard on the first frame.
+        const pos = stay.animal.species === 'fish'
+          ? pondSwimSpot(pondIdx++)
+          : this._gridSlot(YARD_RECT, yardIdx++, 20, 44, 52);
         this._renderStay(stay, pos.x, pos.y);
       } else if (stay.location === LOCATION.CAGE) {
         const pos = this._cageSpotFor(stay);
@@ -2593,8 +2601,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // her bounds are the small POND_RECT instead. This is what keeps both her
     // own wander (_updateWander) and any hatchlings' wander (_updateBabies)
     // confined to the pond rather than roaming the grass around it.
+    //
+    // Issue #84: POND_RECT alone was NOT enough. It's the pond texture's
+    // bounding square, and the water inside it is an ellipse — so the rect's
+    // corners are grass, and that's where a drifting fish ended up ("they
+    // look like they're on the grass sometimes"). `inPond` below flags her so
+    // both wander loops swap the rect clamp for the real elliptical water
+    // clamp (data/props.js's clampToPondWater); the rect stays as the coarse
+    // "does she have bounds at all" record every other system reads.
+    const inPond = !cage && stay.location === LOCATION.YARD && animal.species === 'fish';
     const bounds = cage || (stay.location === LOCATION.YARD
-      ? (animal.species === 'fish' ? POND_RECT : YARD_RECT)
+      ? (inPond ? POND_RECT : YARD_RECT)
       : null);
     const spread = Math.min(1.7, Math.max(0.9, (bounds?.w ?? 90) / 90));
 
@@ -2721,7 +2738,7 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     const rec = {
       pos: { x, y }, sprite, tag, extras, followers, babies, babyLabels, babySprites,
       needIcons: {}, blanket: null, walking: false,
-      wanderBounds, wanderAnchor, wander: null,
+      wanderBounds, wanderAnchor, wander: null, inPond,
       // Issue #57: the clutch's fixed spot in her cage, when she has one —
       // where _layOutNeedIcons parks the "ready to hatch" heart, so it stays
       // with the eggs instead of floating over a mother who's out playing.
@@ -3040,9 +3057,15 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
     // pond (there's nowhere else for her to swim), so unlike every other
     // species — who can be set down anywhere in the yard — she's gated on
     // being right at the pond, not just generally out in the grass.
+    //
+    // Issue #84: measured against the NEAREST BIT of the pond, not its
+    // centre. At #77's 130x90 those were near enough the same thing; at
+    // 260x180 a player standing right at the water's edge is 130px from the
+    // middle and would have been told she wasn't at the pond at all.
     const isFish = stay.animal.species === 'fish';
+    const pondReach = pondReachPoint(actor.sprite.x, actor.sprite.y);
     const inYard = isFish
-      ? this._inRange(actor, POND_SPOT.x, POND_SPOT.y)
+      ? this._inRange(actor, pondReach.x, pondReach.y)
       : actor.sprite.x >= OUTSIDE.x + 8;
     const toYard = () => (isFish ? {
       label: `Set ${name}'s travel tank down at the pond`,
@@ -4894,17 +4917,25 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       const b = rec.wanderBounds;
       // Issue #77: a fish never gets the "roam the whole yard" treatment
       // below, even while her `location` reads YARD — she's confined to the
-      // small POND_RECT (_renderStay's bounds) either way, so she always
-      // uses the small anchored drift every OTHER species only gets while
-      // in a cage.
-      const inYard = stay.location === LOCATION.YARD && stay.animal.species !== 'fish';
+      // pond either way.
+      const inYard = stay.location === LOCATION.YARD && !rec.inPond;
       const amp = wanderAmplitude(stay.animal.species, inYard);
       if (!rec.wander) {
         rec.wander = { tx: rec.sprite.x, ty: rec.sprite.y, t: pickWanderInterval(stay.animal.species) };
       }
       rec.wander.t -= delta;
       if (rec.wander.t <= 0) {
-        if (inYard) {
+        if (rec.inPond) {
+          // Issue #84: she swims the pond the way a yard animal roams the
+          // yard — a fresh target anywhere in the WATER — rather than the
+          // tiny anchored jiggle #77 gave her. That jiggle was sized for a
+          // 130x90 puddle and would leave her nearly motionless in a pond
+          // twice that size; her species amp (5, the smallest there is) keeps
+          // the actual pace to a slow ~21px/s glide either way.
+          const p = randomPondWaterPoint(rec.sprite.displayWidth, rec.sprite.displayHeight);
+          rec.wander.tx = p.x;
+          rec.wander.ty = p.y;
+        } else if (inYard) {
           // Owner note 2026-07-30: "Animals aren't wandering in the full play
           // area, they should." Out in the yard she roams the WHOLE space —
           // a fresh target anywhere in it, not a small box around wherever
@@ -4943,6 +4974,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         const step = Math.min(wdist, wanderSpeed(stay.animal.species) * (delta / 1000));
         rec.sprite.x += (wdx / wdist) * step;
         rec.sprite.y += (wdy / wdist) * step;
+      }
+      // Issue #84: the water's edge is a hard boundary, not just a hint about
+      // where to aim — she could still be OUTSIDE it here (dropped at the
+      // pond's rim, or shoved by a neighbour in _updateAnimalCollisions), and
+      // walking her back only on the next re-target would show her on the
+      // grass for seconds at a time. So the clamp is applied to her position
+      // every frame, not just to her target.
+      if (rec.inPond) {
+        const p = clampToPondWater(rec.sprite.x, rec.sprite.y, rec.sprite.displayWidth, rec.sprite.displayHeight);
+        rec.sprite.x = p.x;
+        rec.sprite.y = p.y;
       }
       rec.sprite.setDepth(rec.sprite.y);
     }
@@ -4994,8 +5036,13 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
       // feet, so this only holds for the length of that walk.
       const anchored = !!rec.babyAnchor;
       const travelling = !anchored && this._isWalking(stay);
+      // Issue #84: hatchlings swimming at the pond with their mother get the
+      // pond tether, not the yard's — see BABY_TETHER in data/wander.js — and
+      // the elliptical water clamp below instead of the rect one.
+      const inPond = !anchored && !travelling && rec.inPond;
       const tether = anchored ? BABY_TETHER.cage
-        : (stay.location === LOCATION.YARD ? BABY_TETHER.yard : BABY_TETHER.cage);
+        : (inPond ? BABY_TETHER.pond
+          : (stay.location === LOCATION.YARD ? BABY_TETHER.yard : BABY_TETHER.cage));
       const b = anchored ? rec.babyBounds : (travelling ? null : rec.wanderBounds);
       const mx = anchored ? rec.babyAnchor.x : rec.sprite.x;
       const my = anchored ? rec.babyAnchor.y : rec.sprite.y;
@@ -5025,7 +5072,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
             baby.t = pickWanderInterval(baby.species) * 0.8;
           }
         }
-        if (b) {
+        if (inPond) {
+          const p = clampToPondWater(baby.tx, baby.ty, baby.sprite.displayWidth, baby.sprite.displayHeight);
+          baby.tx = p.x;
+          baby.ty = p.y;
+        } else if (b) {
           baby.tx = Phaser.Math.Clamp(baby.tx, b.x + 4, b.x + b.w - 4);
           baby.ty = Phaser.Math.Clamp(baby.ty, b.y + 4, b.y + b.h - 4);
         }
@@ -5039,7 +5090,11 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
           baby.x += (dx / d) * moved;
           baby.y += (dy / d) * moved;
         }
-        if (b) {
+        if (inPond) {
+          const p = clampToPondWater(baby.x, baby.y, baby.sprite.displayWidth, baby.sprite.displayHeight);
+          baby.x = p.x;
+          baby.y = p.y;
+        } else if (b) {
           baby.x = Phaser.Math.Clamp(baby.x, b.x + 4, b.x + b.w - 4);
           baby.y = Phaser.Math.Clamp(baby.y, b.y + 4, b.y + b.h - 4);
         }
@@ -5088,6 +5143,17 @@ export default class KennelScene extends WithSecretDragon(WithDevDrag(Phaser.Sce
         a.setDepth(a.y);
         b.setDepth(b.y);
       }
+    }
+    // Issue #84: this pass runs AFTER _updateWander, so a bumped fish would
+    // otherwise be shoved straight out of the pond and stay there until her
+    // next wander frame. Two fish sharing the pond do exactly that. Put any
+    // swimmer back in the water as the last thing that touches her position.
+    for (const [, rec] of this._staySprites) {
+      if (!rec.inPond) continue;
+      const p = clampToPondWater(rec.sprite.x, rec.sprite.y, rec.sprite.displayWidth, rec.sprite.displayHeight);
+      rec.sprite.x = p.x;
+      rec.sprite.y = p.y;
+      rec.sprite.setDepth(rec.sprite.y);
     }
   }
 

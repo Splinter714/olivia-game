@@ -74,7 +74,17 @@ export function wanderSpeed(speciesKey) {
 // cage is 100px across, so the walls are the real limit); out in the yard
 // it's most of the play area, which is what "a lot further" buys — a litter
 // scattered across the grass playing, still recognisably mom's.
-export const BABY_TETHER = { cage: 30, yard: 300 };
+//
+// Issue #84 adds a third: a fish's hatchlings out at the shared pond. They
+// are "in the yard" as far as `stay.location` is concerned, but the yard
+// tether is several times the whole pond — every target it picked landed on
+// the grass and got clamped back to the water's edge, so the litter hugged
+// the rim instead of swimming about, which is exactly the "they look like
+// they're on the grass" the owner reported. This one is sized to the pond
+// (see data/props.js's pondSwimArea: roughly 100x65 of usable water for a
+// hatchling), so most targets land in open water and the clamp is a backstop
+// rather than the thing doing the steering.
+export const BABY_TETHER = { cage: 30, yard: 300, pond: 80 };
 
 // Hysteresis, so a baby sitting right on the tether doesn't flicker between
 // "off playing" and "heading back" every frame: she starts heading back at

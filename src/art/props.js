@@ -7,6 +7,7 @@
 import { gen } from './_gen.js';
 import {
   LITTER_BOX_SIZE, CAGE_W, CAGE_H, OVEN, BED, YARD_DOOR, YARD_DOOR_LEAF, POND_SIZE,
+  POND_WATER_FRAC,
 } from '../data/props.js';
 import { SPECIES_KEYS } from '../data/species.js';
 
@@ -735,10 +736,18 @@ function drawTravelTankRest(g, w, h) {
 // The shared yard pond (issue #77) — a simple round pool with a sandy-stone
 // rim, deep-blue water, and a couple of lily pads, same flat/legible style as
 // every other yard prop.
+// The pond. Issue #84 grew it (POND_SIZE) and made the water an exact,
+// enforced boundary rather than decoration — the deep-water ellipse below is
+// drawn at data/props.js's POND_WATER_FRAC, which is the SAME number the
+// wander clamp (pondSwimArea/clampToPondWater) uses, so what's painted as
+// water and what a fish is allowed to swim in can't drift apart.
 function drawPond(g, w, h) {
-  g.fillStyle(0xcbb888, 1).fillEllipse(w / 2, h / 2, w, h);              // stone/sand rim
-  g.fillStyle(0x2d6f8e, 1).fillEllipse(w / 2, h / 2, w * 0.86, h * 0.82); // deep water
+  const ww = w * POND_WATER_FRAC.w;
+  const wh = h * POND_WATER_FRAC.h;
+  g.fillStyle(0xcbb888, 1).fillEllipse(w / 2, h / 2, w, h);   // stone/sand rim
+  g.fillStyle(0x2d6f8e, 1).fillEllipse(w / 2, h / 2, ww, wh); // deep water
   g.fillStyle(0x4b9fc4, 0.7).fillEllipse(w * 0.44, h * 0.42, w * 0.5, h * 0.34); // sheen
+  // Lily pads, kept just inside the water's own edge.
   g.fillStyle(0x3f8a4a, 1);
   g.fillEllipse(w * 0.28, h * 0.62, w * 0.16, h * 0.1);
   g.fillEllipse(w * 0.68, h * 0.3, w * 0.14, h * 0.09);
