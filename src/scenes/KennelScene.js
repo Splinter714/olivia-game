@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import {
   WALL, ROOM, OUTSIDE, WORLD, FRONT_DOOR, RECEPTION,
+  wallRects, backWingWallRects, outsideFenceRects,
 } from '../data/sections.js';
 import {
   BOWL_SPOTS, WATER_BOWL_SPOTS, COMPUTER_SPOT,
