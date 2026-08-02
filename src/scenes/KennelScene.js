@@ -1491,10 +1491,15 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
   // re-opens the same menu showing her current toggles, so turning something
   // off is the same gesture as turning it on (owner: "to make her stop, you
   // interact and un-select stuff").
-  _openHelperMenu(helper) {
+  // Issue #85: the menu needs to know WHICH controller/keyboard navigates
+  // it — whichever actor actually walked up and pressed the button, not
+  // always Player 1. `actor.controls.gamepadIndex` is set on every Controls
+  // instance (Player 1 defaults to pad 0; a claimed helper's own actor reads
+  // her own claimed pad — see Controls.js's constructor comment).
+  _openHelperMenu(actor, helper) {
     this._saveGame(); // opening the menu is as good a checkpoint as any (same call as _openPauseMenu)
     this.scene.pause();
-    this.scene.launch('HelperMenu', { helper });
+    this.scene.launch('HelperMenu', { helper, gamepadIndex: actor.controls.gamepadIndex });
   }
 
   // ── Shared camera framing (issue #53) ────────────────────────────────────
@@ -3399,7 +3404,7 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
     if (this.helpers) {
       for (const helper of this.helpers) {
         if (helper.playerControlled) continue;
-        consider(helper.sprite.x, helper.sprite.y, `Open ${helper.name}'s tasks`, () => this._openHelperMenu(helper));
+        consider(helper.sprite.x, helper.sprite.y, `Open ${helper.name}'s tasks`, () => this._openHelperMenu(actor, helper));
       }
     }
 
