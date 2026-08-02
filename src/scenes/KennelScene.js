@@ -840,7 +840,7 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
       this.game.events.emit(EVENTS.NOTIFY, 'A mythical dragon wanted to visit, but the kennel is full right now!');
       return;
     }
-    this.game.events.emit(EVENTS.NOTIFY, '✨ A baby dragon appeared!');
+    this.game.events.emit(EVENTS.NOTIFY, '✨ A dragon appeared!');
     const stay = this.roster.spawnDragon({ day: this.clock.day, hour: this.clock.hour });
     if (!stay) return; // no cage to give her (already ruled out above)
     this._refreshCageArt(); // her castle-cage is hers from check-in (issue #54)

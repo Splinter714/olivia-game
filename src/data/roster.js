@@ -101,11 +101,13 @@ const OPEN_NEIGHBOR_WEIGHT = 1;   // only ever matters when no same-species term
 // Issue #88 (owner: "new arrivals of a given species should get a cage
 // assignment in the same cluster of 4 cages as others of the same species,
 // or as close as possible to as many of the same species as possible") — a
-// species-aware alternative to findOpenCage above, used ONLY for a fresh
-// arrival's own check-in assignment (spawnArrival). Every other caller
-// (the pre-#54-save fallback, the secret dragon's one-off check-in) keeps
-// plain findOpenCage's bottom-up order — dragon's population is always <=1,
-// so there's never anyone of her own kind to cluster near anyway.
+// species-aware alternative to findOpenCage above, used for a fresh arrival's
+// own check-in assignment (spawnArrival) and, since the clustering bug fix
+// folded into #91, for the secret dragon's one-off check-in (spawnDragon)
+// too — nothing stops the cheat code from being triggered more than once, so
+// her population isn't actually capped at 1 the way this used to assume. The
+// only remaining caller that keeps plain findOpenCage's bottom-up order is
+// the pre-#54-save fallback.
 //
 // Owner's answers to the two follow-up questions, both baked into one
 // scoring pass rather than two separate rules: "dynamic proximity, not a
@@ -293,6 +295,22 @@ export function createRoster(saved = null) {
       .map((key) => ({ key, count: stays.filter((s) => s.animal.species === key).length }))
       .filter(({ count }) => count < SPECIES_CAP)
       .map(({ key, count }) => ({ key, weight: 1 / (count + 1) }));
+
+    // Issue #90 (owner: "folded into the normal rotation"): a checked-out
+    // dragon becomes an eligible candidate too, exactly like every other
+    // species — same inverse-count weight, same #86 cap check — but ONLY
+    // when an available pool entry for her actually exists. SPECIES_KEYS
+    // itself still excludes 'dragon' (species.js's secret: true), so this is
+    // the one and only place she can enter the candidate list, and only ever
+    // as a RETURNING guest: pickSpecies never calls createAnimal, and the
+    // secret code (spawnDragon) remains the only thing that ever mints a
+    // brand-new dragon.
+    const dragonPoolEntry = pool.some((p) => p.animal.species === 'dragon' && p.available);
+    if (dragonPoolEntry) {
+      const dragonCount = stays.filter((s) => s.animal.species === 'dragon').length;
+      if (dragonCount < SPECIES_CAP) candidates.push({ key: 'dragon', weight: 1 / (dragonCount + 1) });
+    }
+
     if (!candidates.length) return null; // every species is at its cap
     const total = candidates.reduce((sum, c) => sum + c.weight, 0);
     let r = rng() * total;
@@ -342,6 +360,12 @@ export function createRoster(saved = null) {
   // (KennelScene) just skips that particular roll, quietly. Also null if
   // every species is at its #86 cap — same quiet skip, not a distinct case
   // the caller needs to tell apart from an ordinary full kennel.
+  //
+  // Issue #90: pickSpecies only ever returns 'dragon' when an available
+  // dragon pool entry actually exists (see its dragonPoolEntry check above),
+  // so a 'dragon' result here is a guarantee, not a maybe — she always skips
+  // the normal 40%-chance returning-guest gate below and goes straight to
+  // reusing that pool entry, same as any other returning guest.
   function spawnArrival({ day, hour, rng = Math.random } = {}) {
     const speciesKey = pickSpecies(rng);
     if (!speciesKey) return null;
@@ -355,8 +379,9 @@ export function createRoster(saved = null) {
     const cage = findOpenCageForSpecies(stays, speciesKey);
     if (cage == null || stays.length >= CAGE_COUNT) return null;
     let group = null;
+    const isReturningDragon = speciesKey === 'dragon';
 
-    if (rng() < 0.4) {
+    if (isReturningDragon || rng() < 0.4) {
       const candidates = pool.filter((p) => p.animal.species === speciesKey && p.available);
       if (candidates.length) {
         const entry = candidates[Math.floor(rng() * candidates.length)];
@@ -378,7 +403,19 @@ export function createRoster(saved = null) {
         }
       }
     }
-    if (!group) group = familyFor(speciesKey, rng);
+    if (!group) {
+      // Hard guard (issue #90's one invariant that matters most): the
+      // fresh-creation fallback below must be structurally unreachable for a
+      // dragon. pickSpecies only ever returns 'dragon' when her pool entry
+      // is available, so `candidates` above is guaranteed non-empty and
+      // `group` guaranteed set for her — this branch existing at all for a
+      // dragon would mean that guarantee somehow broke between pickSpecies
+      // and here. Rather than trust that can't happen, fail the arrival
+      // outright: a dragon must NEVER be minted here, only by the secret
+      // code's spawnDragon.
+      if (isReturningDragon) return null;
+      group = familyFor(speciesKey, rng);
+    }
 
     const primary = group[0];
     const { needs, timers } = createNeeds(speciesKey, day, hour);
@@ -522,7 +559,18 @@ export function createRoster(saved = null) {
     // already ruled out by KennelScene._triggerSecretDragon's
     // anyOpenCageAnywhere check before it ever calls this; guarded here anyway
     // so she can't end up with a bogus cage if that ever changes.
-    const cage = findOpenCage(stays);
+    //
+    // Bug fix (folded into #91 while already touching this function): this
+    // used to call plain findOpenCage, on the assumption that "dragon's
+    // population is always <=1, so there's never anyone of her own kind to
+    // cluster near anyway" (see findOpenCageForSpecies' own comment above).
+    // That assumption doesn't actually hold — nothing stops the secret code
+    // from being triggered more than once, and issue #90 lets a checked-out
+    // dragon resurface through the normal rotation while a fresh one is also
+    // summoned — so a second dragon really can arrive while the first is
+    // still here, and #88's same-species clustering should apply to her
+    // exactly like every other species' fresh arrival.
+    const cage = findOpenCageForSpecies(stays, 'dragon');
     if (cage == null) return null;
     // createAnimal('dragon') defaults to stage: 'adult' — issue #91 (owner:
     // "Change baby dragons to just dragons"): the secret code now summons a
