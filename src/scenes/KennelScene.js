@@ -3587,7 +3587,7 @@ export default class KennelScene extends WithWorld(WithBirths(WithNight(WithRacc
     this._updateBabies(delta);       // issue #62: babies wander on their own, loosely tethered to mom
     this._updateAnimalCollisions();  // issue #65: pets solid-bump each other instead of overlapping
     this._updateStayVisuals();       // issue #48: bubbles/labels/babies follow their animal
-    this._updateNightSettle();       // issue #45/#46: walk home, get under the blanket
+    this._updateNightSettle(delta);  // issue #45/#46/#87: walk home, get under the blanket
     this._updateNameTagVisibility();
     for (const actor of this.activePlayers) actor.sprite.setDepth(actor.sprite.y);
 

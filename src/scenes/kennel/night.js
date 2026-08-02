@@ -38,6 +38,18 @@ const WAKE_FADE_MS = 500;
 const RESOLVE_FADE_MS = 700;
 const BAD_DREAM_MS = 2600; // flavor-only wake-up: no fix needed, just settles back down
 
+// Issue #87 (owner: "we're getting a traffic jam when they all come in from
+// the playpen at night... maybe we need them to go single file"):
+// _updateNightSettle already started walk-home trips one at a time rather
+// than all at once, but "one at a time" meant one per ANIMATION FRAME — at
+// 60fps, ~16ms between departures, which at an animal's ~82px/s walk speed
+// is under 1.5px of real separation. #71 sized the aisles for exactly one
+// body's clearance and #65 made animals solid to each other, so a yard-full
+// converging on the same corridor within a fraction of a second jammed. This
+// is a real TIME gate instead: long enough for the previous departure to
+// clear the aisle mouth before the next one enters it.
+const NIGHT_WALK_STAGGER_MS = 500;
+
 export const WithNight = (Base) => class extends Base {
   // Called from create() at exactly the point these assignments used to sit —
   // BEFORE _refreshCageArt(), which needs this.night to already exist (see
@@ -102,6 +114,10 @@ export const WithNight = (Base) => class extends Base {
     this.night.sleeping = false;
     this.night.wakeUpsRemaining = 0;
     this.night.currentWake = null;
+    // Issue #87: lets the very first walk-home start immediately rather than
+    // waiting a full NIGHT_WALK_STAGGER_MS for no reason — see
+    // _updateNightSettle for what this actually gates.
+    this._nightWalkStagger = 0;
     // Issue #45: nobody gets teleported indoors anymore — anyone still out
     // in the yard walks herself back to her own cage, and issue #46's
     // blanket goes over her automatically once she's home. Both are driven
@@ -133,8 +149,15 @@ export const WithNight = (Base) => class extends Base {
   // Per-frame night housekeeping (issue #45 #6 + issue #46): walk stragglers
   // home, put everyone who's home under her blanket, and work out whether
   // the player can go to bed yet.
-  _updateNightSettle() {
+  _updateNightSettle(delta = 0) {
     if (!this.night.active) return;
+    // Issue #87: real-time gate, not a per-frame one — see
+    // NIGHT_WALK_STAGGER_MS's own comment for why the old "one per frame"
+    // version wasn't actually enough separation to keep the aisles clear.
+    // `_nightWalkStagger` is initialized to 0 by _startNight so the very
+    // first departure isn't held up waiting for nothing.
+    if (this._nightWalkStagger === undefined) this._nightWalkStagger = 0;
+    this._nightWalkStagger -= delta;
     // Deliberately runs even while the screen is black: a dog let out during
     // a wake-up still needs to walk herself home and get back under her
     // blanket before morning, and the player can't see her do it anyway.
@@ -155,11 +178,17 @@ export const WithNight = (Base) => class extends Base {
       // she does it right where she's playing after a short while); she
       // heads home on a later pass, once her need has cleared.
       if (stay.needs.bathroom) continue;
+      // Issue #87: only the FIRST eligible candidate is gated by the timer —
+      // once she's allowed to go, she goes, same as before. Everyone else in
+      // the list waits for a later pass regardless (the `break` below), so
+      // the timer only ever delays how soon the NEXT departure after her is
+      // allowed to start.
+      if (this._nightWalkStagger > 0) break;
       this._startWalkHome(stay);
-      // One per frame: routing a walk runs a grid A* (data/path.js), and
-      // kicking off a yard-full of them in the same frame would hitch. They
-      // trickle in over the next few frames instead, which also reads better
-      // than the whole yard turning for the door in lockstep.
+      this._nightWalkStagger = NIGHT_WALK_STAGGER_MS;
+      // Still only one per pass: routing a walk runs a grid A* (data/path.js),
+      // and kicking off a yard-full of them in the same frame would hitch —
+      // now doubly true since they're also spaced out in real time.
       break;
     }
     for (const stay of this._presentStays()) {
