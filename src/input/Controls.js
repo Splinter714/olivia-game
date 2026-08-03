@@ -106,9 +106,13 @@ export class Controls {
       rightArrow: Phaser.Input.Keyboard.KeyCodes.RIGHT,
       act: Phaser.Input.Keyboard.KeyCodes.SPACE,
       handle: Phaser.Input.Keyboard.KeyCodes.E,
+      // Issue #92: cancels carrying a cage's nameplate back to a sensible
+      // cage rather than requiring it be dropped on one — same B/Escape
+      // convention #85's helper menu already uses for "close from anywhere".
+      cancel: Phaser.Input.Keyboard.KeyCodes.ESC,
     });
     // Edge-detection state, one entry per action (see _justDown).
-    this._prevDown = { act: false, handle: false };
+    this._prevDown = { act: false, handle: false, cancel: false };
 
     // Issue #58: which device the player last actually used, so the on-screen
     // prompt can name the right button ("Space" vs "A" vs "✨"). Devices stay
@@ -400,6 +404,12 @@ export class Controls {
   // Each button resolves its OWN nearest target in the scene over only its own
   // class of actions, so the classes can never out-compete each other.
   actJustDown() { return this._justDown('act', 0); }
+
+  // Issue #92: B (gamepad button 1) or Escape — only meaningful while
+  // carrying a cage's nameplate (KennelScene checks this itself; it's not
+  // wired to any other action). Edge-triggered same as every other button
+  // here, so holding it doesn't repeat-fire.
+  cancelJustDown() { return this._justDown('cancel', 1); }
 
   // Issue #59: HANDLE is the one button with two meanings, so it reports a
   // TAP or a HOLD instead of a bare "just went down" —
